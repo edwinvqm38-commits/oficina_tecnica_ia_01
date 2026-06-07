@@ -1,0 +1,79 @@
+import type { IconName } from "./icons";
+
+export type RouteId =
+  | "dashboard"
+  | "office"
+  | "roundtable"
+  | "chat"
+  | "inbox"
+  | "approvals"
+  | "projects"
+  | "operaciones"
+  | "report"
+  | "costs"
+  | "engineering"
+  | "agents"
+  | "org"
+  | "skills"
+  | "memory"
+  | "timeline"
+  | "connections"
+  | "settings";
+
+export type RouteDef = {
+  id: RouteId;
+  label: string;
+  path: string;
+  icon: IconName;
+};
+
+export type SidebarGroup = {
+  label: string;
+  items: RouteDef[];
+};
+
+export const ROUTE_GROUPS: SidebarGroup[] = [
+  {
+    label: "Principal",
+    items: [
+      { id: "dashboard", label: "Dashboard", path: "/", icon: "dashboard" },
+      { id: "office", label: "Oficina IA", path: "/oficina", icon: "office" },
+      { id: "roundtable", label: "Mesa de trabajo", path: "/mesa-trabajo", icon: "agents" },
+      { id: "chat", label: "Chat privado", path: "/chat", icon: "user" },
+      { id: "inbox", label: "Bandeja Gerencial", path: "/bandeja", icon: "inbox" },
+      { id: "approvals", label: "Aprobaciones", path: "/aprobaciones", icon: "approvals" },
+    ],
+  },
+  {
+    label: "Gestión de Proyectos",
+    items: [
+      { id: "projects", label: "Proyectos", path: "/proyectos", icon: "projects" },
+      { id: "operaciones", label: "Operaciones SGP", path: "/operaciones", icon: "folder" },
+      { id: "report", label: "Reporte ejecutivo", path: "/reporte", icon: "layers" },
+      { id: "costs", label: "Costos", path: "/costos", icon: "costs" },
+      { id: "engineering", label: "Ingeniería", path: "/ingenieria", icon: "engineering" },
+    ],
+  },
+  {
+    label: "Inteligencia Operativa",
+    items: [
+      { id: "agents", label: "Agentes", path: "/agentes", icon: "agents" },
+      { id: "org", label: "Organigrama", path: "/organigrama", icon: "office" },
+      { id: "skills", label: "Skills", path: "/skills", icon: "skills" },
+      { id: "memory", label: "Conocimiento", path: "/conocimiento", icon: "memory" },
+      { id: "timeline", label: "Línea de tiempo", path: "/linea-tiempo", icon: "clock" },
+      { id: "connections", label: "Conexiones de modelos", path: "/conexiones", icon: "link" },
+    ],
+  },
+  {
+    label: "Sistema",
+    items: [{ id: "settings", label: "Estado / Respaldo", path: "/ajustes", icon: "settings" }],
+  },
+];
+
+export const ROUTES: RouteDef[] = ROUTE_GROUPS.flatMap((g) => g.items);
+
+export function routeForPath(pathname: string): RouteDef | undefined {
+  if (pathname === "/") return ROUTES.find((r) => r.path === "/");
+  return ROUTES.find((r) => r.path !== "/" && pathname.startsWith(r.path));
+}
