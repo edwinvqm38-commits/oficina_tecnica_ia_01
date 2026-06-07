@@ -1,0 +1,41 @@
+@import "tailwindcss";
+
+/* ── Design tokens ─────────────────────────────────────────────── */
+:root {
+  --background:     #f1f5f9;
+  --foreground:     #0f172a;
+  --sidebar-bg:     #0d1117;
+  --sidebar-border: #1e2a3a;
+  --topbar-h:       48px;
+  --sidebar-w:      240px;
+  --shadow-card:    0 1px 2px rgba(15,23,42,.06), 0 1px 3px rgba(15,23,42,.04);
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground:  var(--foreground);
+  --font-sans: var(--font-geist-sans);
+  --font-mono: var(--font-geist-mono);
+}
+
+/* ── Base ──────────────────────────────────────────────────────── */
+*, *::before, *::after { box-sizing: border-box; }
+
+body {
+  background: var(--background);
+  color: var(--foreground);
+  font-family: var(--font-geist-sans), Arial, Helvetica, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+/* ── Progress semantic colours ─────────────────────────────────── */
+.progress-on-track { background-color: #047857; }
+.progress-at-risk  { background-color: #c2410c; }
+.progress-delayed  { background-color: #b91c1c; }
+.progress-planning { background-color: #1d4ed8; }
+
+/* ── Scrollbar ─────────────────────────────────────────────────── */
+::-webkit-scrollbar       { width: 4px; height: 4px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 8px; }

@@ -1,0 +1,70 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>IA Gerencial — Diseño Mejorado</title>
+  <link rel="stylesheet" href="ig-design.css" />
+
+  <!-- pdf.js for PDF text extraction -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+
+  <!-- React + Babel -->
+  <script src="https://unpkg.com/react@18.3.1/umd/react.development.js" integrity="sha384-hD6/rw4ppMLGNu3tX5cjIb+uRZ7UkRJ6BPkLpg4hAu/6onKUg4lLsHAs9EBPT82L" crossorigin="anonymous"></script>
+  <script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js" integrity="sha384-u6aeetuaXnQ38mYT8rp6sbXaQe3NL9t+IBXmnYxwkUI2Hw4bsp2Wvmx4yRQF1uAm" crossorigin="anonymous"></script>
+  <script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js" integrity="sha384-m08KidiNqLdpJqLq95G/LEi8Qvjl/xUYll3QILypMoQ65QorJ9Lvtp2RXYGBFj1y" crossorigin="anonymous"></script>
+
+  <template id="__bundler_thumbnail">
+    <svg viewBox="0 0 120 84" xmlns="http://www.w3.org/2000/svg">
+      <rect width="120" height="84" fill="#141820"/>
+      <rect x="0" y="0" width="28" height="84" fill="#1c2130"/>
+      <rect x="32" y="8" width="50" height="6" rx="2" fill="#1a50d6" opacity=".8"/>
+      <rect x="32" y="18" width="76" height="4" rx="1" fill="#ffffff" opacity=".15"/>
+      <rect x="32" y="26" width="36" height="16" rx="3" fill="#ffffff" opacity=".08"/>
+      <rect x="72" y="26" width="36" height="16" rx="3" fill="#ffffff" opacity=".08"/>
+      <rect x="32" y="47" width="76" height="28" rx="3" fill="#ffffff" opacity=".06"/>
+      <circle cx="14" cy="20" r="3" fill="#1a50d6"/>
+      <circle cx="14" cy="34" r="3" fill="#ffffff" opacity=".3"/>
+      <circle cx="14" cy="48" r="3" fill="#ffffff" opacity=".3"/>
+      <circle cx="14" cy="62" r="3" fill="#ffffff" opacity=".3"/>
+    </svg>
+  </template>
+</head>
+<body>
+  <div id="root"></div>
+
+  <!-- 1. Plain JS — data + store + AI engine (no JSX) -->
+  <script src="ig-data.js"></script>
+  <script src="ig-store.js"></script>
+  <script src="ig-ai.js"></script>
+  <script src="ig-agents.js"></script>
+  <script src="ig-commands.js"></script>
+  <script src="ig-archivist.js"></script>
+  <script src="ig-ollama.js"></script>
+  <script src="ig-obsidian-sync.js"></script>
+  <script src="ig-models.js"></script>
+  <script src="ig-export.js"></script>
+  <script src="ig-ops-data.js"></script>
+
+  <!-- 2. JSX components — load order matters -->
+  <script type="text/babel" src="ig-icons.jsx"></script>
+  <script type="text/babel" src="tweaks-panel.jsx"></script>
+  <script type="text/babel" src="ig-extras.jsx"></script>
+  <script type="text/babel" src="ig-agent-builder.jsx"></script>
+  <script type="text/babel" src="ig-shell.jsx"></script>
+  <script type="text/babel" src="ig-views.jsx"></script>
+  <script type="text/babel" src="ig-chat.jsx"></script>
+  <script type="text/babel" src="ig-roundtable.jsx"></script>
+  <script type="text/babel" src="ig-bandeja.jsx"></script>
+  <script type="text/babel" src="ig-kb.jsx"></script>
+  <script type="text/babel" src="ig-org.jsx"></script>
+  <script type="text/babel" src="ig-vault.jsx"></script>
+  <script type="text/babel" src="ig-connections.jsx"></script>
+  <script type="text/babel" src="ig-models-ui.jsx"></script>
+  <script type="text/babel" src="ig-files.jsx"></script>
+  <script type="text/babel" src="ig-costos.jsx"></script>
+  <script type="text/babel" src="ig-ingenieria.jsx"></script>
+  <script type="text/babel" src="ig-operaciones.jsx"></script>
+  <script type="text/babel" src="ig-app.jsx"></script>
+</body>
+</html>

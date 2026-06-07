@@ -1,0 +1,41 @@
+{
+  "name": "sgp-lite",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "lint": "eslint .",
+    "lint:fix": "eslint . --fix",
+    "diagnose:rq-import": "node scripts/diagnostics/diagnose-rq-import.mjs",
+    "preview:rq-import": "node scripts/diagnostics/preview-rq-import.mjs",
+    "validate:rq-import-preview": "node scripts/diagnostics/validate-rq-import-preview.mjs",
+    "enrich:rq-import-preview": "node scripts/diagnostics/enrich-rq-import-preview.mjs",
+    "check:historical-import-compatibility": "node scripts/diagnostics/check-historical-import-compatibility.mjs",
+    "dry-run:historical-import": "node scripts/diagnostics/dry-run-historical-observed-import.mjs",
+    "review:historical-import-dry-run": "node scripts/diagnostics/review-historical-import-dry-run.mjs",
+    "import:historical-observed": "node scripts/diagnostics/import-historical-observed-data.mjs",
+    "final-review:historical-import": "node scripts/diagnostics/final-review-historical-import-execution.mjs"
+  },
+  "dependencies": {
+    "@supabase/supabase-js": "^2.56.1",
+    "next": "^15.5.18",
+    "react": "19.1.0",
+    "react-dom": "19.1.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.15.21",
+    "@types/react": "^19.1.5",
+    "@types/react-dom": "^19.1.5",
+    "@typescript-eslint/eslint-plugin": "^8.59.4",
+    "@typescript-eslint/parser": "^8.59.4",
+    "autoprefixer": "^10.4.21",
+    "eslint": "^9.39.4",
+    "eslint-config-next": "^15.3.2",
+    "postcss": "^8.5.3",
+    "tailwindcss": "^3.4.17",
+    "typescript": "^5.8.3",
+    "xlsx": "^0.18.5"
+  }
+}
