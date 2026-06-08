@@ -695,6 +695,51 @@ svg { display: block; flex-shrink: 0; }
   box-sizing: border-box;
 }
 
+/* SGP module styling — consistent with OT design tokens */
+.sgp-page {
+  width: 100%;
+  min-width: 0;
+  font-family: var(--font);
+  color: var(--t1);
+}
+
+.sgp-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 10px;
+  flex-wrap: wrap;
+}
+
+.sgp-table-wrapper {
+  width: 100%;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--r-lg);
+  box-shadow: var(--shadow-sm);
+  overflow: hidden;
+}
+
+/* SGP table internals using OT tokens */
+.sgp-table-wrapper table thead tr th {
+  background: var(--bg-subtle);
+  color: var(--t2);
+  border-color: var(--border);
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.sgp-table-wrapper table tbody tr {
+  background: var(--bg-card);
+  color: var(--t1);
+  border-color: var(--border);
+}
+
+.sgp-table-wrapper table tbody tr:hover {
+  background: var(--bg-muted);
+}
+
 /* Tailwind custom token aliases used by SGP */
 /* bg-panel → white card background */
 /* border-border → standard border color */

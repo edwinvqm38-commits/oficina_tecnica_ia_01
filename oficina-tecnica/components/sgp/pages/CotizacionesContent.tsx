@@ -1643,7 +1643,7 @@ export default function CotizacionesPage() {
   );
 
   return (
-    <section className="app-table-section min-w-0">
+    <section className="sgp-page app-table-section min-w-0">
       {!permissionsReady ? (
         <div className="rounded-xl border border-border bg-panel px-3 py-4 text-sm text-stone-600">
           Cargando permisos...

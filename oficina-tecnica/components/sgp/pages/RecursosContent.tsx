@@ -418,7 +418,7 @@ export default function RecursosPage() {
   }
 
   return (
-    <section className="app-table-section flex min-h-[calc(100vh-64px)] min-w-0 flex-col">
+    <section className="sgp-page app-table-section flex min-h-[calc(100vh-64px)] min-w-0 flex-col">
       {warning ? <p className="mb-2 text-xs text-amber-700">{warning}</p> : null}
       <p className="mb-2 text-xs text-muted">
         Origen de datos: {dataSource === "supabase" ? "Supabase public.recursos" : "demo local"}

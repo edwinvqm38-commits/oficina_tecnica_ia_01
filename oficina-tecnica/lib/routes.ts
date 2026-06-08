@@ -12,6 +12,8 @@ export type RouteId =
   | "cotizaciones"
   | "requerimientos"
   | "recursos"
+  | "datos"
+  | "administrador"
   | "report"
   | "costs"
   | "engineering"
@@ -28,6 +30,7 @@ export type RouteDef = {
   label: string;
   path: string;
   icon: IconName;
+  children?: RouteDef[];
 };
 
 export type SidebarGroup = {
@@ -51,10 +54,19 @@ export const ROUTE_GROUPS: SidebarGroup[] = [
     label: "Gestión de Proyectos",
     items: [
       { id: "projects", label: "Proyectos", path: "/proyectos", icon: "projects" },
-      { id: "operaciones", label: "Operaciones SGP", path: "/operaciones", icon: "folder" },
-      { id: "cotizaciones", label: "Cotizaciones", path: "/cotizaciones", icon: "costs" },
-      { id: "requerimientos", label: "Requerimientos", path: "/requerimientos", icon: "layers" },
-      { id: "recursos", label: "Recursos", path: "/recursos", icon: "folder" },
+      {
+        id: "operaciones",
+        label: "Operaciones SGP",
+        path: "/operaciones",
+        icon: "folder",
+        children: [
+          { id: "cotizaciones", label: "Cotizaciones", path: "/cotizaciones", icon: "costs" },
+          { id: "requerimientos", label: "Requerimientos", path: "/requerimientos", icon: "layers" },
+          { id: "recursos", label: "Recursos", path: "/recursos", icon: "folder" },
+          { id: "datos", label: "Datos", path: "/datos", icon: "memory" },
+          { id: "administrador", label: "Administrador", path: "/administrador", icon: "settings" },
+        ],
+      },
       { id: "report", label: "Reporte ejecutivo", path: "/reporte", icon: "layers" },
       { id: "costs", label: "Costos", path: "/costos", icon: "costs" },
       { id: "engineering", label: "Ingeniería", path: "/ingenieria", icon: "engineering" },
@@ -77,7 +89,13 @@ export const ROUTE_GROUPS: SidebarGroup[] = [
   },
 ];
 
-export const ROUTES: RouteDef[] = ROUTE_GROUPS.flatMap((g) => g.items);
+function flattenRoutes(items: RouteDef[]): RouteDef[] {
+  return items.flatMap((item) =>
+    item.children ? [item, ...flattenRoutes(item.children)] : [item],
+  );
+}
+
+export const ROUTES: RouteDef[] = flattenRoutes(ROUTE_GROUPS.flatMap((g) => g.items));
 
 export function routeForPath(pathname: string): RouteDef | undefined {
   if (pathname === "/") return ROUTES.find((r) => r.path === "/");

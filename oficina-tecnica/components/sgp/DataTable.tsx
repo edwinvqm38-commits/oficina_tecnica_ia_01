@@ -353,22 +353,24 @@ export function DataTable<T extends { id: string }>({
 
   return (
     <div
-      className={`app-table-card min-w-0 overflow-hidden rounded-xl border border-border bg-panel ${
+      className={`app-table-card min-w-0 overflow-hidden rounded-xl ${
         isWidthsReady ? "opacity-100" : "opacity-0"
       }`}
+      style={{ border: "1px solid var(--border)", background: "var(--bg-card)", boxShadow: "var(--shadow-sm)" }}
     >
-      <div className="flex items-center justify-between border-b border-border px-2 py-1.5">
+      <div className="flex items-center justify-between px-2 py-1.5" style={{ borderBottom: "1px solid var(--border)" }}>
         <FieldLabelIcon
           icon={tableIcon}
           label={tableTitle ?? "Tabla"}
-          className="text-xs font-medium text-stone-700"
+          className="text-xs font-medium text-stone-600"
         />
         <div className="flex items-center gap-1.5">
           {enableFilters ? (
             <button
               type="button"
               onClick={clearTableView}
-              className="inline-flex h-6 min-h-6 items-center gap-1 rounded-md border border-border px-2 text-xs leading-none text-stone-600 hover:bg-stone-100"
+              className="inline-flex h-6 min-h-6 items-center gap-1 rounded-md px-2 text-xs leading-none"
+              style={{ border: "1px solid var(--border)", color: "var(--t2)" }}
               title="Limpiar filtros y orden"
             >
               <FieldLabelIcon icon="sliders-horizontal" label="Limpiar filtros" className="text-xs text-stone-600" />
@@ -379,13 +381,15 @@ export function DataTable<T extends { id: string }>({
       </div>
 
       <div className={`app-table-scroll ${maxHeightClassName}`}>
-        <table className="w-max min-w-full table-fixed border-collapse text-[11px] [&_td]:border-r [&_td]:border-stone-200/60 [&_td:last-child]:border-r-0 [&_th]:border-r [&_th]:border-stone-200/70 [&_th:last-child]:border-r-0">
+        <table
+          className="w-max min-w-full table-fixed border-collapse text-[11px]"
+        >
           <colgroup>
             {columnWidths.map((width, index) => (
               <col key={`col-${index}`} style={{ width: `${width}px` }} />
             ))}
           </colgroup>
-          <thead className="sticky top-0 z-10 bg-stone-50 text-muted">
+          <thead className="sticky top-0 z-10" style={{ background: "var(--bg-subtle)", color: "var(--t2)" }}>
             <tr>
               {columns.map((column, index) => {
                 const key = String(column.key);
@@ -393,19 +397,21 @@ export function DataTable<T extends { id: string }>({
                 return (
                   <th
                     key={key}
-                    className={`relative h-8 border-b border-border px-2 py-1 font-semibold ${alignmentClass(column.align)}`}
+                    className={`relative h-8 px-2 py-1 font-semibold ${alignmentClass(column.align)}`}
+                    style={{ borderBottom: "1px solid var(--border)", borderRight: "1px solid var(--border)", color: "var(--t2)", background: "var(--bg-subtle)" }}
                   >
                     {enableSorting && sortable ? (
                       <button
                         type="button"
                         onClick={() => toggleSort(key, sortable)}
-                        className="flex w-full items-center justify-between gap-1 rounded px-0.5 text-left hover:bg-stone-100"
+                        className="flex w-full items-center justify-between gap-1 rounded px-0.5 text-left"
+                        style={{ color: "var(--t2)" }}
                       >
                         <TableColumnHeader
                           icon={column.icon ?? defaultIconForColumn(key, column.title)}
                           label={column.title}
                         />
-                        <span className="text-[9px] leading-none text-stone-400">{sortIndicator(key)}</span>
+                        <span style={{ fontSize: "9px", lineHeight: 1, color: "var(--t3)" }}>{sortIndicator(key)}</span>
                       </button>
                     ) : (
                       <TableColumnHeader
@@ -416,7 +422,7 @@ export function DataTable<T extends { id: string }>({
                     <button
                       type="button"
                       onMouseDown={(event) => startColumnResize(index, event)}
-                      className="absolute right-[-3px] top-0 z-20 h-full w-2.5 cursor-col-resize bg-transparent hover:bg-stone-300/70"
+                      className="absolute right-[-3px] top-0 z-20 h-full w-2.5 cursor-col-resize bg-transparent"
                       style={{ touchAction: "none" }}
                       aria-label={`Ajustar ancho de ${column.title}`}
                       title={`Ajustar ancho de ${column.title}`}
@@ -433,7 +439,8 @@ export function DataTable<T extends { id: string }>({
                   return (
                     <th
                       key={`filter-${key}`}
-                      className={`border-b border-border bg-stone-50 px-2 py-1 ${alignmentClass(column.align)}`}
+                      className={`px-2 py-1 ${alignmentClass(column.align)}`}
+                      style={{ borderBottom: "1px solid var(--border)", borderRight: "1px solid var(--border)", background: "var(--bg-subtle)" }}
                     >
                       {filterable ? (
                         <input
@@ -443,7 +450,8 @@ export function DataTable<T extends { id: string }>({
                             setColumnFilters(nextFilters);
                             emitTableViewChange({ columnFilters: nextFilters, sortKey, sortDirection });
                           }}
-                          className="h-6 w-full rounded border border-stone-200 bg-white px-1 text-[10px] leading-none outline-none focus:border-stone-400"
+                          className="h-6 w-full rounded px-1 text-[10px] leading-none outline-none"
+                          style={{ border: "1px solid var(--border)", background: "var(--bg-card)", color: "var(--t1)" }}
                           placeholder=""
                         />
                       ) : (
@@ -459,9 +467,12 @@ export function DataTable<T extends { id: string }>({
             {renderedRows.map(({ row }, index) => (
               <tr
                 key={row.id}
-                className={`h-8 border-t border-border text-[11px] align-middle transition hover:bg-stone-50 ${
+                className={`h-8 text-[11px] align-middle transition ${
                   onRowClick ? "cursor-pointer" : ""
                 }`}
+                style={{ borderTop: "1px solid var(--border)", background: "var(--bg-card)", color: "var(--t1)" }}
+                onMouseEnter={(e) => { (e.currentTarget as HTMLElement).style.background = "var(--bg-muted)"; }}
+                onMouseLeave={(e) => { (e.currentTarget as HTMLElement).style.background = "var(--bg-card)"; }}
                 onClick={() => onRowClick?.(row)}
                 role={onRowClick ? "button" : undefined}
               >
@@ -469,6 +480,7 @@ export function DataTable<T extends { id: string }>({
                   <td
                     key={String(column.key)}
                     className={`h-8 px-2 py-1 align-middle ${alignmentClass(column.align)}`}
+                    style={{ borderRight: "1px solid var(--border)", color: "var(--t1)" }}
                   >
                     {column.render
                       ? column.render(row, index)

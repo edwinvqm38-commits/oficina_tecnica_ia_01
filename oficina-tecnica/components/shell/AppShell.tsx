@@ -39,7 +39,7 @@ export function AppShell({ children }: { children: ReactNode }) {
       <div className="ig-body">
         <Sidebar activeRoute={activeRoute} />
         <main className="ig-main">
-          <div style={{ maxWidth: hasCtx ? 1100 : 1180 }}>{children}</div>
+          <div style={{ width: "100%", maxWidth: "100%" }}>{children}</div>
         </main>
         {hasCtx && <ContextPanel route={activeRoute} />}
       </div>
