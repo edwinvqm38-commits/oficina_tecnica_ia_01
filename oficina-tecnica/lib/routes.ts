@@ -9,6 +9,9 @@ export type RouteId =
   | "approvals"
   | "projects"
   | "operaciones"
+  | "cotizaciones"
+  | "requerimientos"
+  | "recursos"
   | "report"
   | "costs"
   | "engineering"
@@ -49,6 +52,9 @@ export const ROUTE_GROUPS: SidebarGroup[] = [
     items: [
       { id: "projects", label: "Proyectos", path: "/proyectos", icon: "projects" },
       { id: "operaciones", label: "Operaciones SGP", path: "/operaciones", icon: "folder" },
+      { id: "cotizaciones", label: "Cotizaciones", path: "/cotizaciones", icon: "costs" },
+      { id: "requerimientos", label: "Requerimientos", path: "/requerimientos", icon: "layers" },
+      { id: "recursos", label: "Recursos", path: "/recursos", icon: "folder" },
       { id: "report", label: "Reporte ejecutivo", path: "/reporte", icon: "layers" },
       { id: "costs", label: "Costos", path: "/costos", icon: "costs" },
       { id: "engineering", label: "Ingeniería", path: "/ingenieria", icon: "engineering" },

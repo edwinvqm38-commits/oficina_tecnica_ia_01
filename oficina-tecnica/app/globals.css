@@ -4,6 +4,10 @@
 
 @import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap');
 
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
 /* ── Tokens ─────────────────────────────────────────────────────── */
 :root {
   --sidebar-w: 220px;
@@ -664,6 +668,38 @@ svg { display: block; flex-shrink: 0; }
 /* empty state */
 .empty-state { padding: 40px 20px; text-align: center; color: var(--t3); }
 .empty-state-icon { width: 40px; height: 40px; margin: 0 auto 10px; color: var(--t4); }
+
+/* ── SGP Module CSS ─────────────────────────────────────────────── */
+/* Classes used by SGP (Cotizaciones, Requerimientos, Recursos) components */
+.app-table-section {
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
+}
+
+.app-table-card {
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
+  overflow: hidden;
+  box-sizing: border-box;
+}
+
+.app-table-scroll {
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
+  overflow-x: auto;
+  overflow-y: auto;
+  box-sizing: border-box;
+}
+
+/* Tailwind custom token aliases used by SGP */
+/* bg-panel → white card background */
+/* border-border → standard border color */
+/* text-muted → muted text color */
+/* These are handled by tailwind.config.ts in SGP; we add them as CSS vars here */
 
 /* ── Dark mode ──────────────────────────────────────────────────── */
 body.ig-dark {
