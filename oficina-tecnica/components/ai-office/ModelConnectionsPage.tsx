@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { aiAgentsMock } from "@/lib/ai-office/aiAgentsMock";
 import {
   checkOllamaConnectivity,
@@ -11,6 +11,11 @@ import {
   OLLAMA_SETUP_STEPS,
   RECOMMENDED_MODELS,
 } from "@/lib/llm/agentModels";
+import {
+  detectDeviceProfile,
+  getStoredDeviceProfile,
+  type DeviceProfile,
+} from "@/lib/llm/deviceDetection";
 
 type OllamaStatus = "checking" | "connected" | "disconnected";
 
@@ -19,14 +24,249 @@ type AgentModelAssignment = {
   model: string;
 };
 
+type CompatBadge = {
+  label: string;
+  color: "green" | "amber" | "red";
+};
+
 const LS_OLLAMA_URL = "ot:ollama:baseUrl";
 const LS_AGENT_MODELS = "ot:agent:models";
 const LS_APIKEY_OPENAI = "ot:apikey:openai";
 const LS_APIKEY_ANTHROPIC = "ot:apikey:anthropic";
+const LS_NEW_DEVICE_DISMISSED = "ot:newdevice:dismissed";
 
 function getLS(key: string, fallback: string): string {
   if (typeof window === "undefined") return fallback;
   return localStorage.getItem(key) ?? fallback;
+}
+
+// ── Compatibility logic ─────────────────────────────────────────────────────
+
+function getModelCompatibility(modelName: string, deviceProfile: DeviceProfile | null): CompatBadge {
+  const lower = modelName.toLowerCase();
+  const tier = deviceProfile?.tier ?? "mid";
+
+  if (lower.includes("70b") || lower.includes("65b")) {
+    return { label: "No recomendado", color: "red" };
+  }
+  if (lower.includes("30b") || lower.includes("32b")) {
+    return { label: "Muy lento", color: "amber" };
+  }
+  if (lower.includes("14b") || lower.includes("13b")) {
+    if (tier === "high") return { label: "Compatible", color: "green" };
+    if (tier === "mid") return { label: "Lento en esta PC", color: "amber" };
+    return { label: "No recomendado", color: "red" };
+  }
+  // 7b, 8b, 3b, 1b or no size suffix
+  return { label: "Compatible", color: "green" };
+}
+
+function compatEmoji(color: "green" | "amber" | "red"): string {
+  if (color === "green") return "✅";
+  if (color === "amber") return "⚠️";
+  return "❌";
+}
+
+function tierLabel(tier: DeviceProfile["tier"]): string {
+  if (tier === "high") return "alto";
+  if (tier === "mid") return "medio";
+  return "bajo";
+}
+
+// ── New Device Notice ───────────────────────────────────────────────────────
+
+function NewDeviceNotice({
+  ollamaStatus,
+}: {
+  ollamaStatus: OllamaStatus;
+}) {
+  const [dismissed, setDismissed] = useState(true); // start hidden, check on mount
+
+  useEffect(() => {
+    const wasDismissed = localStorage.getItem(LS_NEW_DEVICE_DISMISSED) === "1";
+    setDismissed(wasDismissed);
+  }, []);
+
+  function dismiss() {
+    localStorage.setItem(LS_NEW_DEVICE_DISMISSED, "1");
+    setDismissed(true);
+  }
+
+  if (dismissed || ollamaStatus !== "disconnected") return null;
+
+  return (
+    <div
+      style={{
+        background: "var(--blue-bg)",
+        border: "1px solid var(--blue-border)",
+        borderRadius: "var(--r)",
+        padding: "12px 16px",
+        display: "flex",
+        alignItems: "flex-start",
+        gap: 12,
+      }}
+    >
+      <span style={{ fontSize: 18, flexShrink: 0, lineHeight: 1.3 }}>💻</span>
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <p style={{ fontSize: 13, fontWeight: 600, color: "var(--blue-text)", marginBottom: 2 }}>
+          ¿Estás en una PC nueva?
+        </p>
+        <p style={{ fontSize: 12, color: "var(--blue-text)", lineHeight: 1.6, opacity: 0.85 }}>
+          Ollama no está corriendo en este dispositivo. Sigue los pasos de instalación abajo, o usa OpenAI/Anthropic mientras tanto.
+        </p>
+      </div>
+      <button
+        className="btn btn--ghost btn--sm"
+        onClick={dismiss}
+        style={{ flexShrink: 0, fontSize: 11 }}
+        aria-label="Cerrar aviso"
+      >
+        Cerrar
+      </button>
+    </div>
+  );
+}
+
+// ── No Compatible Models Warning ────────────────────────────────────────────
+
+function NoCompatibleModelsWarning({
+  ollamaStatus,
+  ollamaModels,
+  deviceProfile,
+  apiKeysSectionRef,
+}: {
+  ollamaStatus: OllamaStatus;
+  ollamaModels: string[];
+  deviceProfile: DeviceProfile | null;
+  apiKeysSectionRef: React.RefObject<HTMLDivElement | null>;
+}) {
+  const allBad =
+    ollamaStatus === "connected" &&
+    ollamaModels.length > 0 &&
+    ollamaModels.every((m) => {
+      const c = getModelCompatibility(m, deviceProfile);
+      return c.color !== "green";
+    });
+
+  const showWarning = ollamaStatus === "disconnected" || allBad;
+
+  if (!showWarning) return null;
+
+  function scrollToApiKeys() {
+    apiKeysSectionRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+  }
+
+  return (
+    <div
+      style={{
+        background: "var(--amber-bg)",
+        border: "1px solid var(--amber-border)",
+        borderRadius: "var(--r)",
+        padding: "14px 16px",
+      }}
+    >
+      <p style={{ fontSize: 13, fontWeight: 600, color: "var(--amber-text)", marginBottom: 6 }}>
+        ⚠️ No hay modelos locales disponibles compatibles con este dispositivo. Se recomienda usar OpenAI o Anthropic para obtener respuestas de calidad.
+      </p>
+      <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 8 }}>
+        <button
+          className="btn btn--ghost btn--sm"
+          onClick={scrollToApiKeys}
+          style={{ fontSize: 12, color: "var(--amber-text)", borderColor: "var(--amber-border)" }}
+        >
+          Configurar OpenAI API Key ↓
+        </button>
+        <button
+          className="btn btn--ghost btn--sm"
+          onClick={scrollToApiKeys}
+          style={{ fontSize: 12, color: "var(--amber-text)", borderColor: "var(--amber-border)" }}
+        >
+          Configurar Anthropic API Key ↓
+        </button>
+      </div>
+    </div>
+  );
+}
+
+// ── Model Compatibility Section ─────────────────────────────────────────────
+
+function ModelCompatibilitySection({
+  ollamaModels,
+  deviceProfile,
+}: {
+  ollamaModels: string[];
+  deviceProfile: DeviceProfile | null;
+}) {
+  if (ollamaModels.length === 0) return null;
+
+  return (
+    <div
+      style={{
+        marginTop: 14,
+        borderTop: "1px solid var(--border)",
+        paddingTop: 14,
+      }}
+    >
+      {/* Device summary */}
+      <p style={{ fontSize: 11, color: "var(--t3)", marginBottom: 10 }}>
+        {deviceProfile
+          ? `Este dispositivo: ${deviceProfile.threads} núcleos · ${deviceProfile.memoryGB} GB RAM · perfil ${tierLabel(deviceProfile.tier)}`
+          : "Este dispositivo: perfil desconocido (abre la app para detectar)"}
+      </p>
+
+      {/* Model list */}
+      <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+        {ollamaModels.map((m) => {
+          const badge = getModelCompatibility(m, deviceProfile);
+          const badgeColorMap: Record<"green" | "amber" | "red", string> = {
+            green: "var(--green-text)",
+            amber: "var(--amber-text)",
+            red: "var(--red-text, #dc2626)",
+          };
+          return (
+            <div
+              key={m}
+              style={{
+                display: "flex",
+                alignItems: "center",
+                gap: 10,
+                padding: "5px 8px",
+                borderRadius: "var(--r)",
+                background: "var(--bg-subtle)",
+              }}
+            >
+              <span style={{ color: "var(--t3)", fontSize: 10, flexShrink: 0 }}>●</span>
+              <span
+                style={{
+                  fontFamily: "var(--mono)",
+                  fontSize: 12,
+                  color: "var(--t1)",
+                  flex: 1,
+                  minWidth: 0,
+                  overflow: "hidden",
+                  textOverflow: "ellipsis",
+                  whiteSpace: "nowrap",
+                }}
+              >
+                {m}
+              </span>
+              <span
+                style={{
+                  fontSize: 12,
+                  color: badgeColorMap[badge.color],
+                  fontWeight: 500,
+                  flexShrink: 0,
+                  whiteSpace: "nowrap",
+                }}
+              >
+                {compatEmoji(badge.color)} {badge.label}
+              </span>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
 }
 
 // ── Ollama Status Banner ────────────────────────────────────────────────────
@@ -37,12 +277,14 @@ function OllamaStatusBanner({
   ollamaModels,
   setupOpen,
   onToggleSetup,
+  deviceProfile,
 }: {
   status: OllamaStatus;
   ollamaUrl: string;
   ollamaModels: string[];
   setupOpen: boolean;
   onToggleSetup: () => void;
+  deviceProfile: DeviceProfile | null;
 }) {
   if (status === "checking") {
     return (
@@ -73,14 +315,25 @@ function OllamaStatusBanner({
               : "sin modelos descargados"}
           </p>
         </div>
+
+        {/* Modelos disponibles with compatibility */}
         {ollamaModels.length > 0 && (
-          <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginTop: 8 }}>
-            {ollamaModels.map((m) => (
-              <span key={m} className="badge badge--slate" style={{ fontFamily: "var(--mono)", fontSize: 11 }}>
-                {m}
-              </span>
-            ))}
-          </div>
+          <>
+            <p
+              style={{
+                fontSize: 11,
+                fontWeight: 700,
+                color: "var(--t3)",
+                textTransform: "uppercase",
+                letterSpacing: "0.08em",
+                marginTop: 14,
+                marginBottom: 0,
+              }}
+            >
+              Modelos disponibles
+            </p>
+            <ModelCompatibilitySection ollamaModels={ollamaModels} deviceProfile={deviceProfile} />
+          </>
         )}
       </div>
     );
@@ -220,19 +473,86 @@ function OllamaUrlConfig({
   );
 }
 
+// ── Agent Assignments Summary ───────────────────────────────────────────────
+
+function AgentAssignmentsSummary({
+  assignments,
+  assignmentsSectionRef,
+}: {
+  assignments: Record<string, AgentModelAssignment>;
+  assignmentsSectionRef: React.RefObject<HTMLDivElement | null>;
+}) {
+  function scrollToFull() {
+    assignmentsSectionRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+  }
+
+  return (
+    <div className="card">
+      <div className="card-header">
+        <div>
+          <p className="page-eyebrow" style={{ marginBottom: 2 }}>Resumen</p>
+          <p style={{ fontSize: 13, fontWeight: 600, color: "var(--t1)" }}>Agentes configurados</p>
+        </div>
+      </div>
+      <div style={{ display: "flex", flexDirection: "column" }}>
+        {aiAgentsMock.map((agent, idx) => {
+          const asgn = assignments[agent.id] ?? DEFAULT_AGENT_MODELS[agent.id] ?? { provider: "ollama", model: "qwen2.5:7b" };
+          return (
+            <div
+              key={agent.id}
+              style={{
+                display: "flex",
+                alignItems: "center",
+                gap: 12,
+                padding: "9px 16px",
+                borderBottom: idx < aiAgentsMock.length - 1 ? "1px solid var(--border)" : "none",
+                flexWrap: "wrap",
+              }}
+            >
+              <span style={{ flex: "1 1 140px", fontSize: 13, color: "var(--t1)", fontWeight: 500, minWidth: 120 }}>
+                {agent.name}
+              </span>
+              <span
+                style={{
+                  flex: "2 1 180px",
+                  fontSize: 12,
+                  fontFamily: "var(--mono)",
+                  color: "var(--t2)",
+                  minWidth: 140,
+                }}
+              >
+                {asgn.provider} · {asgn.model}
+              </span>
+              <button
+                className="btn btn--ghost btn--sm"
+                onClick={scrollToFull}
+                style={{ fontSize: 11, flexShrink: 0 }}
+              >
+                Cambiar
+              </button>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
 // ── Agent Model Assignments ─────────────────────────────────────────────────
 
 function AgentModelAssignments({
   assignments,
   onChange,
   ollamaModels,
+  sectionRef,
 }: {
   assignments: Record<string, AgentModelAssignment>;
   onChange: (agentId: string, value: AgentModelAssignment) => void;
   ollamaModels: string[];
+  sectionRef: React.RefObject<HTMLDivElement | null>;
 }) {
   return (
-    <div className="card">
+    <div className="card" ref={sectionRef}>
       <div className="card-header">
         <div>
           <p className="page-eyebrow" style={{ marginBottom: 2 }}>Asignaciones</p>
@@ -376,9 +696,9 @@ function ApiKeyRow({
   );
 }
 
-function ApiKeysSection() {
+function ApiKeysSection({ sectionRef }: { sectionRef: React.RefObject<HTMLDivElement | null> }) {
   return (
-    <div className="card">
+    <div className="card" ref={sectionRef}>
       <div className="card-header">
         <div>
           <p className="page-eyebrow" style={{ marginBottom: 2 }}>Seguridad</p>
@@ -427,8 +747,12 @@ export function ModelConnectionsPage() {
   const [ollamaModels, setOllamaModels] = useState<string[]>([]);
   const [setupOpen, setSetupOpen] = useState(false);
   const [assignments, setAssignments] = useState<Record<string, AgentModelAssignment>>({});
+  const [deviceProfile, setDeviceProfile] = useState<DeviceProfile | null>(null);
 
-  // Load persisted values on mount
+  const apiKeysSectionRef = useRef<HTMLDivElement | null>(null);
+  const assignmentsSectionRef = useRef<HTMLDivElement | null>(null);
+
+  // Load persisted values on mount and detect device profile
   useEffect(() => {
     const savedUrl = getLS(LS_OLLAMA_URL, "http://localhost:11434");
     setOllamaUrl(savedUrl);
@@ -443,6 +767,11 @@ export function ModelConnectionsPage() {
     } else {
       setAssignments(DEFAULT_AGENT_MODELS as Record<string, AgentModelAssignment>);
     }
+
+    // Load stored profile immediately, then refresh in background
+    const stored = getStoredDeviceProfile();
+    if (stored) setDeviceProfile(stored);
+    detectDeviceProfile().then((p) => setDeviceProfile(p)).catch(() => {/* ignore */});
   }, []);
 
   const runConnectivityCheck = useCallback(async (url: string) => {
@@ -479,6 +808,9 @@ export function ModelConnectionsPage() {
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+      {/* New device dismissible notice */}
+      <NewDeviceNotice ollamaStatus={ollamaStatus} />
+
       {/* Page header */}
       <div className="page-header">
         <div className="page-header-left">
@@ -490,13 +822,22 @@ export function ModelConnectionsPage() {
         </div>
       </div>
 
-      {/* Section 1: Ollama status */}
+      {/* Section 1: Ollama status + model compatibility */}
       <OllamaStatusBanner
         status={ollamaStatus}
         ollamaUrl={ollamaUrl}
         ollamaModels={ollamaModels}
         setupOpen={setupOpen}
         onToggleSetup={() => setSetupOpen((v) => !v)}
+        deviceProfile={deviceProfile}
+      />
+
+      {/* No compatible models / disconnected warning */}
+      <NoCompatibleModelsWarning
+        ollamaStatus={ollamaStatus}
+        ollamaModels={ollamaModels}
+        deviceProfile={deviceProfile}
+        apiKeysSectionRef={apiKeysSectionRef}
       />
 
       {/* Section 2: Ollama URL */}
@@ -507,15 +848,22 @@ export function ModelConnectionsPage() {
         status={ollamaStatus}
       />
 
-      {/* Section 3: Agent model assignments */}
+      {/* Section 3: Agent assignments summary */}
+      <AgentAssignmentsSummary
+        assignments={assignments}
+        assignmentsSectionRef={assignmentsSectionRef}
+      />
+
+      {/* Section 4: Full agent model assignments */}
       <AgentModelAssignments
         assignments={assignments}
         onChange={handleAssignmentChange}
         ollamaModels={ollamaModels}
+        sectionRef={assignmentsSectionRef}
       />
 
-      {/* Section 4: API Keys */}
-      <ApiKeysSection />
+      {/* Section 5: API Keys */}
+      <ApiKeysSection sectionRef={apiKeysSectionRef} />
     </div>
   );
 }
