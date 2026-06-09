@@ -6,6 +6,11 @@ import { Icons } from "../../lib/icons";
 import { useStore } from "../../lib/store/StoreProvider";
 import { agentById } from "../../lib/data";
 import { agentAvatarClass } from "./shared";
+import { routeRequest } from "@/lib/llm/modelRouter";
+import { getStoredDeviceProfile } from "@/lib/llm/deviceDetection";
+import { getOllamaModels } from "@/lib/llm/providers";
+import { ModelBadge } from "@/components/ai-office/ModelBadge";
+import type { RoutingDecision } from "@/lib/llm/modelRouter";
 
 const CHAT_AGENTS = ["ic", "pm", "gg", "ie"];
 
@@ -29,7 +34,7 @@ function mockReply(agentId: string, text: string): string {
   return `(${name} · respuesta simulada)\n\nHe registrado tu consulta: "${text.slice(0, 140)}". Cuando se configure un proveedor de modelos en Conexiones, responderé aquí con análisis real basado en mis skills activas y la base de conocimiento del proyecto.`;
 }
 
-function MessageBubble({ role, text, time, agentId }: { role: "gg" | "agent"; text: string; time: string; agentId: string }) {
+function MessageBubble({ role, text, time, agentId, routing }: { role: "gg" | "agent"; text: string; time: string; agentId: string; routing?: RoutingDecision }) {
   const isUser = role === "gg";
   return (
     <div style={{ display: "flex", gap: 9, flexDirection: isUser ? "row-reverse" : "row", alignItems: "flex-start" }}>
@@ -53,7 +58,10 @@ function MessageBubble({ role, text, time, agentId }: { role: "gg" | "agent"; te
         >
           {text}
         </div>
-        <div style={{ fontSize: 10, color: "var(--t3)", marginTop: 3, textAlign: isUser ? "right" : "left" }}>{time}</div>
+        <div style={{ fontSize: 10, color: "var(--t3)", marginTop: 3, textAlign: isUser ? "right" : "left", display: "flex", alignItems: "center", gap: 6, flexDirection: isUser ? "row-reverse" : "row" }}>
+          <span>{time}</span>
+          {!isUser && routing && <ModelBadge decision={routing} />}
+        </div>
       </div>
     </div>
   );
@@ -79,10 +87,15 @@ export function ChatView() {
   const [agentId, setAgentId] = useState("ic");
   const [input, setInput] = useState("");
   const [busy, setBusy] = useState(false);
+  const [ollamaModels, setOllamaModels] = useState<string[]>([]);
   const scrollRef = useRef<HTMLDivElement>(null);
 
   const thread = chatFor(agentId);
   const agent = agentById(agentId);
+
+  useEffect(() => {
+    getOllamaModels().then(setOllamaModels);
+  }, []);
 
   useEffect(() => {
     if (scrollRef.current) scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
@@ -95,7 +108,9 @@ export function ChatView() {
     setInput("");
     setBusy(true);
     window.setTimeout(() => {
-      appendChat(agentId, { role: "agent", text: mockReply(agentId, value) });
+      const deviceProfile = getStoredDeviceProfile();
+      const routing = routeRequest(value, ollamaModels, deviceProfile);
+      appendChat(agentId, { role: "agent", text: mockReply(agentId, value), routing });
       setBusy(false);
     }, 900 + Math.random() * 700);
   }
@@ -206,7 +221,7 @@ export function ChatView() {
               </div>
             )}
             {thread.map((m) => (
-              <MessageBubble key={m.id} role={m.role} text={m.text} time={m.time} agentId={agentId} />
+              <MessageBubble key={m.id} role={m.role} text={m.text} time={m.time} agentId={agentId} routing={m.routing} />
             ))}
             {busy && <TypingDots agentId={agentId} />}
           </div>
