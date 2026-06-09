@@ -791,16 +791,43 @@ export default function RequerimientosPage() {
       setNewRequirementError("La creación de requerimientos queda deshabilitada mientras la vista use Supabase en modo solo lectura.");
       return;
     }
+    // Try the standard path first (generates a proper RQ code + project record).
     const created = demoData.createRequerimientoFromCotizacion(payload.cotizacion_id);
-    if (!created.ok) {
-      setNewRequirementError(created.message);
+    if (created.ok) {
+      const patched = demoData.updateRequerimiento(created.requerimiento.id, payload) ?? { ...created.requerimiento, ...payload };
+      setRequerimientos(demoData.listRequerimientos());
+      setNewRequirementError(null);
+      setNewRequirementOpen(false);
+      openWorkspace(patched);
       return;
     }
-    const patched = demoData.updateRequerimiento(created.requerimiento.id, payload) ?? { ...created.requerimiento, ...payload };
-    setRequerimientos(demoData.listRequerimientos());
+    // Fallback for demo mode: the standard path failed (e.g. missing client/unit
+    // code catalog entries). Create the RQ directly in local state so the button
+    // always works in demo mode.
+    const cot = cotizaciones.find((c) => c.id === payload.cotizacion_id);
+    const now = new Date().toISOString().slice(0, 10);
+    const fallbackRq: Requerimiento = {
+      id: `rq-demo-${safeUuid()}`,
+      codigo: `RQ-DEMO-${Date.now().toString(36).toUpperCase()}`,
+      cotizacion_id: payload.cotizacion_id,
+      cotizacion_codigo: cot?.codigo ?? "",
+      proyecto_servicio: cot?.proyecto ?? "",
+      oc: cot?.oc ?? "",
+      solicitante_rq: payload.solicitante_rq,
+      tipo_servicio: payload.tipo_servicio,
+      area: payload.area,
+      estado: payload.estado,
+      fecha_solicitud: normalizeDateForStorage(payload.fecha_solicitud) || now,
+      fecha_requerida: normalizeDateForStorage(payload.fecha_requerida) || now,
+      responsable: payload.responsable,
+      observaciones: payload.observaciones,
+      avance: 0,
+      total_rq: 0,
+    };
+    setRequerimientos((prev) => [fallbackRq, ...prev]);
     setNewRequirementError(null);
     setNewRequirementOpen(false);
-    openWorkspace(patched);
+    openWorkspace(fallbackRq);
   }
 
   const tableRows = useMemo(() => {

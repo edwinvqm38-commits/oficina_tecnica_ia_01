@@ -755,7 +755,9 @@ export default function CotizacionesPage() {
   const canViewQuotationMainTable = viewGroupPermissions.quotation_main_table;
   const canViewQuotationEconomicSummary = viewGroupPermissions.quotation_economic_summary;
   const canViewQuotationRelatedRequirements = viewGroupPermissions.quotation_related_requirements;
-  const canViewQuotationActions = viewGroupPermissions.quotation_actions;
+  // In demo mode there are no real permission restrictions — always allow actions so
+  // the "Nueva cotización" button renders for all users.
+  const canViewQuotationActions = dataSource === "demo" ? true : viewGroupPermissions.quotation_actions;
   const canOpenRequirementsFromQuotation = canViewQuotationRelatedRequirements;
   const canDeleteAssociatedRequirements =
     canViewQuotationActions &&
