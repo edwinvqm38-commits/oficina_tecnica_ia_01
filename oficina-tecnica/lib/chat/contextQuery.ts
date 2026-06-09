@@ -87,6 +87,7 @@ export function buildContextPrompt(ctx: ChatCtx): string {
   }
 
   prompt += "\n---";
+  prompt += "\n\nUsa estos datos reales (de Supabase) para responder la consulta de forma breve y directa, resaltando en **negrita** los datos clave (estado, avance, montos, fechas). Si la pregunta pide algo que NO está en estos datos (p. ej. materiales, detalle técnico no listado), dilo claramente — no inventes — y propón 2-3 preguntas de seguimiento que sí podrías responder con esta información.";
   return prompt;
 }
 

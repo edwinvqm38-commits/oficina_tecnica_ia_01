@@ -185,7 +185,9 @@ export function ChatView() {
     setTypingModel(routing.modelLabel);
 
     const ctxPrompt = inputCtx ? buildContextPrompt(inputCtx) : "";
-    const simple = isSimpleMessage(parsed.cleanText);
+    // A short message is only "simple" if there's no project/RQ context chip attached —
+    // otherwise the user wants that context used even for a brief question.
+    const simple = isSimpleMessage(parsed.cleanText) && !inputCtx?.project && !inputCtx?.requirement;
     const userId = session?.email ?? "anonymous";
 
     // Auto-detect COT-xxx / RQ-xxx / OC-xxx codes pasted in the message

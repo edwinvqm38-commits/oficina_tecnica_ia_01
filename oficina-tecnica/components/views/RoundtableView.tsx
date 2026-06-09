@@ -213,7 +213,10 @@ export function RoundtableView() {
     setHands(responders.map((id) => ({ agentId: id, modelLabel: routing.modelLabel })));
 
     const userId = session?.email ?? "anonymous";
-    const simple = isSimpleMessage(parsed.cleanText);
+    // A short message is only "simple" (greeting/no analysis) if the user
+    // hasn't attached project/RQ context via chips — otherwise they want
+    // that context used even if the question itself is short.
+    const simple = isSimpleMessage(parsed.cleanText) && !ctxProject && !ctxRequirement;
 
     // Auto-detect COT-xxx / RQ-xxx / OC-xxx codes pasted in the message
     let autoCodeCtx = "";
