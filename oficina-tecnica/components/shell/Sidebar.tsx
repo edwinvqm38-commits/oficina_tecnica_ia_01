@@ -135,6 +135,24 @@ export function Sidebar({ activeRoute }: { activeRoute: string }) {
               const Icon = Icons[item.icon];
               const badge = badges[item.id] ?? null;
               const cls = ["sb-item", active ? "sb-item--active" : ""].filter(Boolean).join(" ");
+
+              if (item.disabled) {
+                return (
+                  <span
+                    key={item.id}
+                    className="sb-item"
+                    title="Próximamente"
+                    style={{ opacity: 0.38, cursor: "not-allowed", pointerEvents: "none" }}
+                  >
+                    <span className="sb-item-left">
+                      <span className="sb-icon"><Icon /></span>
+                      <span className="sb-item-label">{item.label}</span>
+                    </span>
+                    <span style={{ fontSize: "9px", color: "var(--sb-muted)" }}>pronto</span>
+                  </span>
+                );
+              }
+
               return (
                 <Link key={item.id} href={item.path} className={cls}>
                   <span className="sb-item-left">

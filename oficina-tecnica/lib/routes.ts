@@ -31,6 +31,7 @@ export type RouteDef = {
   path: string;
   icon: IconName;
   children?: RouteDef[];
+  disabled?: boolean;
 };
 
 export type SidebarGroup = {
@@ -67,9 +68,9 @@ export const ROUTE_GROUPS: SidebarGroup[] = [
           { id: "administrador", label: "Administrador", path: "/administrador", icon: "settings" },
         ],
       },
-      { id: "report", label: "Reporte ejecutivo", path: "/reporte", icon: "layers" },
-      { id: "costs", label: "Costos", path: "/costos", icon: "costs" },
-      { id: "engineering", label: "Ingeniería", path: "/ingenieria", icon: "engineering" },
+      { id: "report", label: "Reporte ejecutivo", path: "/reporte", icon: "layers", disabled: true },
+      { id: "costs", label: "Costos", path: "/costos", icon: "costs", disabled: true },
+      { id: "engineering", label: "Ingeniería", path: "/ingenieria", icon: "engineering", disabled: true },
     ],
   },
   {
@@ -85,7 +86,7 @@ export const ROUTE_GROUPS: SidebarGroup[] = [
   },
   {
     label: "Sistema",
-    items: [{ id: "settings", label: "Estado / Respaldo", path: "/ajustes", icon: "settings" }],
+    items: [{ id: "settings", label: "Estado / Respaldo", path: "/ajustes", icon: "settings", disabled: true }],
   },
 ];
 
