@@ -7,7 +7,15 @@ import { useStore } from "../../lib/store/StoreProvider";
 import { NotificationPanel } from "./NotificationPanel";
 import { routeIdToPath } from "./GlobalSearch";
 
-export function Topbar({ onOpenSearch }: { onOpenSearch: () => void }) {
+export function Topbar({
+  onOpenSearch,
+  userEmail,
+  onLogout,
+}: {
+  onOpenSearch: () => void;
+  userEmail?: string;
+  onLogout?: () => void;
+}) {
   const router = useRouter();
   const { state, remoteConfigured } = useStore();
   const [showNotif, setShowNotif] = useState(false);
@@ -69,12 +77,49 @@ export function Topbar({ onOpenSearch }: { onOpenSearch: () => void }) {
           )}
         </div>
 
-        <div className="tb-user">
-          <div className="tb-avatar">GG</div>
-          <div>
-            <div className="tb-user-name">Gerente General</div>
-            <div className="tb-user-role">Aprobador</div>
+        <div className="tb-user" style={{ display: "flex", alignItems: "center", gap: 8 }}>
+          <div className="tb-avatar">
+            {userEmail ? userEmail[0].toUpperCase() : "G"}
           </div>
+          <div>
+            <div className="tb-user-name" title={userEmail}>
+              {userEmail
+                ? userEmail.length > 20
+                  ? userEmail.slice(0, 18) + "…"
+                  : userEmail
+                : "Gerente General"}
+            </div>
+            <div className="tb-user-role">Administrador</div>
+          </div>
+          {onLogout && (
+            <button
+              onClick={onLogout}
+              title="Cerrar sesión"
+              style={{
+                background: "none",
+                border: "1px solid var(--border)",
+                borderRadius: 6,
+                cursor: "pointer",
+                color: "var(--t3)",
+                fontSize: 13,
+                padding: "3px 7px",
+                lineHeight: 1,
+                marginLeft: 4,
+                transition: "color 0.15s, border-color 0.15s",
+              }}
+              onMouseEnter={(e) => {
+                e.currentTarget.style.color = "var(--red)";
+                e.currentTarget.style.borderColor = "var(--red-border)";
+              }}
+              onMouseLeave={(e) => {
+                e.currentTarget.style.color = "var(--t3)";
+                e.currentTarget.style.borderColor = "var(--border)";
+              }}
+              aria-label="Cerrar sesión"
+            >
+              →
+            </button>
+          )}
         </div>
       </div>
     </header>

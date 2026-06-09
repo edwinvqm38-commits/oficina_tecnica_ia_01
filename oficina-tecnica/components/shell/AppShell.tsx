@@ -8,11 +8,13 @@ import { ContextPanel, CONTEXT_ROUTES } from "./ContextPanel";
 import { GlobalSearch, routeIdToPath } from "./GlobalSearch";
 import { routeForPath } from "../../lib/routes";
 import type { RouteId } from "../../lib/routes";
+import { useSession } from "../../lib/auth/useSession";
 
 export function AppShell({ children }: { children: ReactNode }) {
   const pathname = usePathname();
   const router = useRouter();
   const [searchOpen, setSearchOpen] = useState(false);
+  const { session, loading, logout } = useSession(true);
 
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
@@ -25,6 +27,9 @@ export function AppShell({ children }: { children: ReactNode }) {
     return () => window.removeEventListener("keydown", onKey);
   }, []);
 
+  if (loading) return <div style={{ height: "100vh", background: "var(--bg)" }} />;
+  if (!session) return null;
+
   const route = routeForPath(pathname);
   const activeRoute: RouteId = route?.id || "dashboard";
   const hasCtx = CONTEXT_ROUTES.includes(activeRoute);
@@ -35,7 +40,7 @@ export function AppShell({ children }: { children: ReactNode }) {
 
   return (
     <div className="ig-layout">
-      <Topbar onOpenSearch={() => setSearchOpen(true)} />
+      <Topbar onOpenSearch={() => setSearchOpen(true)} userEmail={session.email} onLogout={logout} />
       <div className="ig-body">
         <Sidebar activeRoute={activeRoute} />
         <main className="ig-main">
