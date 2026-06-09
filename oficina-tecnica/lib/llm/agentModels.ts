@@ -1,32 +1,51 @@
 // Default model recommendations for each agent role
 export const RECOMMENDED_MODELS = {
   ollama: [
-    { model: "qwen2.5:7b", label: "Qwen 2.5 7B", description: "Mejor para español + análisis técnico", size: "4.4 GB", recommended: true },
-    { model: "deepseek-r1:7b", label: "DeepSeek R1 7B", description: "Razonamiento y análisis profundo", size: "4.7 GB", recommended: false },
-    { model: "llama3.1:8b", label: "Llama 3.1 8B", description: "Conversación general", size: "4.7 GB", recommended: false },
-    { model: "mistral:7b", label: "Mistral 7B", description: "Tareas de ingeniería, rápido", size: "4.1 GB", recommended: false },
+    { model: "qwen2.5:7b",      label: "Qwen 2.5 7B",      description: "Mejor para español + análisis técnico", size: "4.4 GB", recommended: true },
+    { model: "deepseek-r1:7b",  label: "DeepSeek R1 7B",   description: "Razonamiento y análisis profundo",       size: "4.7 GB", recommended: false },
+    { model: "llama3.1:8b",     label: "Llama 3.1 8B",     description: "Conversación general",                   size: "4.7 GB", recommended: false },
+    { model: "mistral:7b",      label: "Mistral 7B",        description: "Tareas de ingeniería, rápido",           size: "4.1 GB", recommended: false },
+  ],
+  gemini: [
+    { model: "gemini-1.5-flash", label: "Gemini 1.5 Flash", description: "Gratis · rápido · uso general y técnico",         recommended: true },
+    { model: "gemini-1.5-pro",   label: "Gemini 1.5 Pro",   description: "Gratis · análisis profundo · límite menor/día",    recommended: false },
+    { model: "gemini-2.0-flash", label: "Gemini 2.0 Flash", description: "Gratis · última versión · multimodal",              recommended: false },
+  ],
+  groq: [
+    { model: "llama-3.1-8b-instant",    label: "Llama 3.1 8B Instant",  description: "Gratis · ultrarrápido · respuestas simples", recommended: true },
+    { model: "llama-3.1-70b-versatile", label: "Llama 3.1 70B",         description: "Gratis · potente · análisis complejo",       recommended: false },
+    { model: "mixtral-8x7b-32768",      label: "Mixtral 8×7B",          description: "Gratis · contexto largo · buen español",      recommended: false },
+  ],
+  sambanova: [
+    { model: "DeepSeek-R1",                    label: "DeepSeek R1",         description: "Gratis · razonamiento avanzado · análisis técnico", recommended: true },
+    { model: "Meta-Llama-3.1-70B-Instruct",    label: "Llama 3.1 70B",       description: "Gratis · potente · conversación",                    recommended: false },
+  ],
+  openrouter: [
+    { model: "google/gemma-2-9b-it:free",                   label: "Gemma 2 9B (free)",      description: "Gratis · eficiente · buenas respuestas",   recommended: true },
+    { model: "meta-llama/llama-3.1-8b-instruct:free",       label: "Llama 3.1 8B (free)",    description: "Gratis · ligero · conversación general",   recommended: false },
+    { model: "mistralai/mistral-7b-instruct:free",          label: "Mistral 7B (free)",      description: "Gratis · buen español",                    recommended: false },
+    { model: "meta-llama/llama-3.1-70b-instruct:free",      label: "Llama 3.1 70B (free)",   description: "Gratis · análisis complejo",               recommended: false },
   ],
   openai: [
-    { model: "gpt-4o", label: "GPT-4o", description: "Análisis profundo y razonamiento complejo", recommended: true },
-    { model: "gpt-4o-mini", label: "GPT-4o Mini", description: "Rápido y económico", recommended: false },
-    { model: "o1-mini", label: "o1 Mini", description: "Razonamiento avanzado", recommended: false },
+    { model: "gpt-4o-mini", label: "GPT-4o Mini", description: "Pago · económico · rápido (~$0.01 / 50 msgs)",  recommended: true },
+    { model: "gpt-4o",      label: "GPT-4o",      description: "Pago · análisis profundo y razonamiento",       recommended: false },
+    { model: "o1-mini",     label: "o1 Mini",      description: "Pago · razonamiento avanzado",                 recommended: false },
   ],
   anthropic: [
-    { model: "claude-sonnet-4-6", label: "Claude Sonnet", description: "Análisis técnico detallado", recommended: true },
-    { model: "claude-haiku-4-5-20251001", label: "Claude Haiku", description: "Respuestas rápidas", recommended: false },
+    { model: "claude-haiku-4-5-20251001", label: "Claude Haiku", description: "Pago · rápido y económico",          recommended: true },
+    { model: "claude-sonnet-4-6",          label: "Claude Sonnet", description: "Pago · análisis técnico detallado", recommended: false },
   ],
 };
 
-// Default agent model assignments (stored in localStorage)
 export const DEFAULT_AGENT_MODELS: Record<string, { provider: string; model: string }> = {
-  "general-manager": { provider: "ollama", model: "qwen2.5:7b" },
-  "cost-engineer": { provider: "ollama", model: "deepseek-r1:7b" },
-  "project-management": { provider: "ollama", model: "qwen2.5:7b" },
+  "general-manager":   { provider: "gemini", model: "gemini-1.5-flash" },
+  "cost-engineer":     { provider: "gemini", model: "gemini-1.5-flash" },
+  "project-management":{ provider: "gemini", model: "gemini-1.5-flash" },
 };
 
 export const OLLAMA_SETUP_STEPS = [
   { step: 1, title: "Descargar Ollama", description: "Ve a ollama.com y descarga el instalador para tu sistema operativo (Windows/Mac/Linux).", link: "https://ollama.com/download" },
-  { step: 2, title: "Instalar Ollama", description: "Ejecuta el instalador. Ollama correrá automáticamente en segundo plano en el puerto 11434." },
+  { step: 2, title: "Instalar Ollama",  description: "Ejecuta el instalador. Ollama correrá automáticamente en segundo plano en el puerto 11434." },
   { step: 3, title: "Descargar un modelo", description: "Abre una terminal y ejecuta:", command: "ollama pull qwen2.5:7b" },
   { step: 4, title: "Verificar instalación", description: "Ejecuta el siguiente comando para probar que funciona:", command: "ollama run qwen2.5:7b \"Hola, ¿puedes presentarte?\"" },
   { step: 5, title: "Acceso remoto (opcional)", description: "Si quieres usar la app desde otra PC o desde Vercel, instala Cloudflare Tunnel:", command: "cloudflared tunnel --url http://localhost:11434", link: "https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/get-started/" },

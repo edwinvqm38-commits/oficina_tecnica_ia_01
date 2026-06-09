@@ -1,11 +1,11 @@
 // Supported LLM providers
-export type LLMProvider = "ollama" | "openai" | "anthropic";
+export type LLMProvider = "ollama" | "openai" | "anthropic" | "gemini" | "groq" | "sambanova" | "openrouter";
 
 export type ModelConfig = {
   provider: LLMProvider;
   model: string;
   baseUrl?: string; // for ollama: configurable URL
-  apiKey?: string;  // for openai/anthropic
+  apiKey?: string;  // for cloud providers
 };
 
 export type ChatMessage = {
@@ -20,7 +20,7 @@ export type LLMResponse = {
   tokensUsed?: number;
 };
 
-// Check if Ollama is reachable at the given URL
+// Check if Ollama is reachable
 export async function checkOllamaConnectivity(baseUrl: string = "http://localhost:11434"): Promise<boolean> {
   try {
     const res = await fetch(`${baseUrl}/api/tags`, { signal: AbortSignal.timeout(3000) });
@@ -43,17 +43,50 @@ export async function getOllamaModels(baseUrl: string = "http://localhost:11434"
 }
 
 // Send a chat message to the configured provider
-export async function sendChat(
-  messages: ChatMessage[],
-  config: ModelConfig
-): Promise<LLMResponse> {
-  if (config.provider === "ollama") {
-    return sendOllamaChat(messages, config);
-  } else if (config.provider === "openai") {
-    return sendOpenAIChat(messages, config);
-  } else {
-    return sendAnthropicChat(messages, config);
+export async function sendChat(messages: ChatMessage[], config: ModelConfig): Promise<LLMResponse> {
+  switch (config.provider) {
+    case "ollama":    return sendOllamaChat(messages, config);
+    case "openai":    return sendOpenAICompatChat(messages, config, "https://api.openai.com/v1");
+    case "anthropic": return sendAnthropicChat(messages, config);
+    case "gemini":    return sendOpenAICompatChat(messages, config, "https://generativelanguage.googleapis.com/v1beta/openai");
+    case "groq":      return sendOpenAICompatChat(messages, config, "https://api.groq.com/openai/v1");
+    case "sambanova": return sendOpenAICompatChat(messages, config, "https://api.sambanova.ai/v1");
+    case "openrouter":
+      return sendOpenAICompatChat(messages, config, "https://openrouter.ai/api/v1", {
+        "HTTP-Referer": "https://oficina-tecnica.vercel.app",
+        "X-Title": "Oficina Técnica IA",
+      });
+    default:          return sendOllamaChat(messages, config);
   }
+}
+
+// Shared OpenAI-compatible chat (Groq, Sambanova, OpenRouter, Gemini all use this)
+async function sendOpenAICompatChat(
+  messages: ChatMessage[],
+  config: ModelConfig,
+  baseUrl: string,
+  extraHeaders: Record<string, string> = {}
+): Promise<LLMResponse> {
+  const res = await fetch(`${baseUrl}/chat/completions`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "Authorization": `Bearer ${config.apiKey}`,
+      ...extraHeaders,
+    },
+    body: JSON.stringify({ model: config.model, messages }),
+  });
+  if (!res.ok) {
+    const errText = await res.text().catch(() => res.statusText);
+    throw new Error(`${config.provider} error ${res.status}: ${errText.slice(0, 200)}`);
+  }
+  const data = await res.json();
+  return {
+    content: data.choices[0].message.content,
+    model: config.model,
+    provider: config.provider,
+    tokensUsed: data.usage?.total_tokens,
+  };
 }
 
 async function sendOllamaChat(messages: ChatMessage[], config: ModelConfig): Promise<LLMResponse> {
@@ -66,17 +99,6 @@ async function sendOllamaChat(messages: ChatMessage[], config: ModelConfig): Pro
   if (!res.ok) throw new Error(`Ollama error: ${res.statusText}`);
   const data = await res.json();
   return { content: data.message?.content ?? "", model: config.model, provider: "ollama" };
-}
-
-async function sendOpenAIChat(messages: ChatMessage[], config: ModelConfig): Promise<LLMResponse> {
-  const res = await fetch("https://api.openai.com/v1/chat/completions", {
-    method: "POST",
-    headers: { "Content-Type": "application/json", Authorization: `Bearer ${config.apiKey}` },
-    body: JSON.stringify({ model: config.model, messages }),
-  });
-  if (!res.ok) throw new Error(`OpenAI error: ${res.statusText}`);
-  const data = await res.json();
-  return { content: data.choices[0].message.content, model: config.model, provider: "openai", tokensUsed: data.usage?.total_tokens };
 }
 
 async function sendAnthropicChat(messages: ChatMessage[], config: ModelConfig): Promise<LLMResponse> {
@@ -98,5 +120,10 @@ async function sendAnthropicChat(messages: ChatMessage[], config: ModelConfig): 
   });
   if (!res.ok) throw new Error(`Anthropic error: ${res.statusText}`);
   const data = await res.json();
-  return { content: data.content[0].text, model: config.model, provider: "anthropic", tokensUsed: data.usage?.input_tokens + data.usage?.output_tokens };
+  return {
+    content: data.content[0].text,
+    model: config.model,
+    provider: "anthropic",
+    tokensUsed: data.usage?.input_tokens + data.usage?.output_tokens,
+  };
 }

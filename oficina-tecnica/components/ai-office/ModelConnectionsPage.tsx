@@ -20,7 +20,7 @@ import {
 type OllamaStatus = "checking" | "connected" | "disconnected";
 
 type AgentModelAssignment = {
-  provider: "ollama" | "openai" | "anthropic";
+  provider: "ollama" | "gemini" | "groq" | "sambanova" | "openrouter" | "openai" | "anthropic";
   model: string;
 };
 
@@ -31,6 +31,10 @@ type CompatBadge = {
 
 const LS_OLLAMA_URL = "ot:ollama:baseUrl";
 const LS_AGENT_MODELS = "ot:agent:models";
+const LS_APIKEY_GEMINI = "ot:apikey:gemini";
+const LS_APIKEY_GROQ = "ot:apikey:groq";
+const LS_APIKEY_SAMBANOVA = "ot:apikey:sambanova";
+const LS_APIKEY_OPENROUTER = "ot:apikey:openrouter";
 const LS_APIKEY_OPENAI = "ot:apikey:openai";
 const LS_APIKEY_ANTHROPIC = "ot:apikey:anthropic";
 const LS_NEW_DEVICE_DISMISSED = "ot:newdevice:dismissed";
@@ -166,22 +170,14 @@ function NoCompatibleModelsWarning({
       }}
     >
       <p style={{ fontSize: 13, fontWeight: 600, color: "var(--amber-text)", marginBottom: 6 }}>
-        ⚠️ No hay modelos locales disponibles compatibles con este dispositivo. Se recomienda usar OpenAI o Anthropic para obtener respuestas de calidad.
+        ⚠️ Sin modelos locales compatibles. Configura Gemini o Groq (gratuitos y rápidos) para obtener respuestas en 1-2 segundos.
       </p>
       <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 8 }}>
-        <button
-          className="btn btn--ghost btn--sm"
-          onClick={scrollToApiKeys}
-          style={{ fontSize: 12, color: "var(--amber-text)", borderColor: "var(--amber-border)" }}
-        >
-          Configurar OpenAI API Key ↓
+        <button className="btn btn--ghost btn--sm" onClick={scrollToApiKeys} style={{ fontSize: 12, color: "var(--amber-text)", borderColor: "var(--amber-border)" }}>
+          Configurar Gemini (gratis) ↓
         </button>
-        <button
-          className="btn btn--ghost btn--sm"
-          onClick={scrollToApiKeys}
-          style={{ fontSize: 12, color: "var(--amber-text)", borderColor: "var(--amber-border)" }}
-        >
-          Configurar Anthropic API Key ↓
+        <button className="btn btn--ghost btn--sm" onClick={scrollToApiKeys} style={{ fontSize: 12, color: "var(--amber-text)", borderColor: "var(--amber-border)" }}>
+          Configurar Groq (gratis) ↓
         </button>
       </div>
     </div>
@@ -496,7 +492,7 @@ function AgentAssignmentsSummary({
       </div>
       <div style={{ display: "flex", flexDirection: "column" }}>
         {aiAgentsMock.map((agent, idx) => {
-          const asgn = assignments[agent.id] ?? DEFAULT_AGENT_MODELS[agent.id] ?? { provider: "ollama", model: "qwen2.5:7b" };
+          const asgn = assignments[agent.id] ?? DEFAULT_AGENT_MODELS[agent.id] ?? { provider: "gemini", model: "gemini-1.5-flash" };
           return (
             <div
               key={agent.id}
@@ -565,8 +561,9 @@ function AgentModelAssignments({
 
       <div style={{ display: "flex", flexDirection: "column" }}>
         {aiAgentsMock.map((agent, idx) => {
-          const asgn = assignments[agent.id] ?? DEFAULT_AGENT_MODELS[agent.id] ?? { provider: "ollama", model: "qwen2.5:7b" };
-          const providerKey = asgn.provider as "ollama" | "openai" | "anthropic";
+          const asgn = (assignments[agent.id] ?? DEFAULT_AGENT_MODELS[agent.id] ?? { provider: "gemini", model: "gemini-1.5-flash" }) as AgentModelAssignment;
+          const providerKey = asgn.provider;
+          const baseModels = RECOMMENDED_MODELS[providerKey] ?? RECOMMENDED_MODELS.gemini;
           const models =
             providerKey === "ollama"
               ? [
@@ -575,7 +572,7 @@ function AgentModelAssignments({
                     .filter((m) => !RECOMMENDED_MODELS.ollama.find((r) => r.model === m))
                     .map((m) => ({ model: m, label: m, description: "Instalado localmente", recommended: false, size: undefined })),
                 ]
-              : RECOMMENDED_MODELS[providerKey];
+              : baseModels;
 
           return (
             <div
@@ -602,14 +599,24 @@ function AgentModelAssignments({
                   className="select"
                   value={asgn.provider}
                   onChange={(e) => {
-                    const prov = e.target.value as "ollama" | "openai" | "anthropic";
-                    const firstModel = RECOMMENDED_MODELS[prov][0]?.model ?? "";
+                    const prov = e.target.value as AgentModelAssignment["provider"];
+                    const firstModel = RECOMMENDED_MODELS[prov]?.[0]?.model ?? "";
                     onChange(agent.id, { provider: prov, model: firstModel });
                   }}
                 >
-                  <option value="ollama">Ollama (local)</option>
-                  <option value="openai">OpenAI</option>
-                  <option value="anthropic">Anthropic</option>
+                  <optgroup label="— Gratuitos —">
+                    <option value="gemini">Gemini (Google · gratis)</option>
+                    <option value="groq">Groq (Llama · gratis)</option>
+                    <option value="sambanova">Sambanova (DeepSeek · gratis)</option>
+                    <option value="openrouter">OpenRouter (varios · gratis)</option>
+                  </optgroup>
+                  <optgroup label="— Local —">
+                    <option value="ollama">Ollama (local)</option>
+                  </optgroup>
+                  <optgroup label="— De pago —">
+                    <option value="openai">OpenAI</option>
+                    <option value="anthropic">Anthropic</option>
+                  </optgroup>
                 </select>
               </div>
 
@@ -705,34 +712,58 @@ function ApiKeysSection({ sectionRef }: { sectionRef: React.RefObject<HTMLDivEle
           <p style={{ fontSize: 13, fontWeight: 600, color: "var(--t1)" }}>Claves API</p>
         </div>
       </div>
-      <div className="card-body" style={{ display: "flex", flexDirection: "column", gap: 14 }}>
-        <ApiKeyRow
-          label="OpenAI API Key"
-          storageKey={LS_APIKEY_OPENAI}
-          placeholder="sk-…"
-        />
-        <ApiKeyRow
-          label="Anthropic API Key"
-          storageKey={LS_APIKEY_ANTHROPIC}
-          placeholder="sk-ant-…"
-        />
-        <div
-          style={{
-            background: "var(--blue-bg)",
-            border: "1px solid var(--blue-border)",
-            borderRadius: "var(--r)",
-            padding: "10px 12px",
-            fontSize: 12,
-            color: "var(--blue-text)",
-            lineHeight: 1.6,
-          }}
-        >
-          Las claves se guardan solo en este navegador. Para acceso desde múltiples
-          dispositivos, configúralas como variables de entorno en Vercel (
-          <code style={{ fontFamily: "var(--mono)", fontSize: 11 }}>OPENAI_API_KEY</code>
-          {" / "}
-          <code style={{ fontFamily: "var(--mono)", fontSize: 11 }}>ANTHROPIC_API_KEY</code>
-          ).
+      <div className="card-body" style={{ display: "flex", flexDirection: "column", gap: 18 }}>
+
+        {/* Free providers */}
+        <div>
+          <p style={{ fontSize: 11, fontWeight: 700, color: "var(--t3)", textTransform: "uppercase", letterSpacing: ".08em", marginBottom: 10 }}>
+            Gratuitos — recomendados
+          </p>
+          <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+            <ApiKeyRow
+              label="Gemini API Key (Google · gratis · ~1s)"
+              storageKey={LS_APIKEY_GEMINI}
+              placeholder="AQ.Ab8RN…"
+            />
+            <ApiKeyRow
+              label="Groq API Key (Llama · gratis · ultrarrápido)"
+              storageKey={LS_APIKEY_GROQ}
+              placeholder="gsk_…"
+            />
+            <ApiKeyRow
+              label="Sambanova API Key (DeepSeek R1 · gratis)"
+              storageKey={LS_APIKEY_SAMBANOVA}
+              placeholder="sn-…"
+            />
+            <ApiKeyRow
+              label="OpenRouter API Key (varios modelos gratuitos)"
+              storageKey={LS_APIKEY_OPENROUTER}
+              placeholder="sk-or-…"
+            />
+          </div>
+        </div>
+
+        {/* Paid providers */}
+        <div>
+          <p style={{ fontSize: 11, fontWeight: 700, color: "var(--t3)", textTransform: "uppercase", letterSpacing: ".08em", marginBottom: 10 }}>
+            De pago — opcionales
+          </p>
+          <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+            <ApiKeyRow
+              label="OpenAI API Key (GPT-4o · pago)"
+              storageKey={LS_APIKEY_OPENAI}
+              placeholder="sk-…"
+            />
+            <ApiKeyRow
+              label="Anthropic API Key (Claude · pago)"
+              storageKey={LS_APIKEY_ANTHROPIC}
+              placeholder="sk-ant-…"
+            />
+          </div>
+        </div>
+
+        <div style={{ background: "var(--blue-bg)", border: "1px solid var(--blue-border)", borderRadius: "var(--r)", padding: "10px 12px", fontSize: 12, color: "var(--blue-text)", lineHeight: 1.6 }}>
+          <strong>Prioridad automática:</strong> Gemini → Groq → Sambanova → OpenRouter → Ollama → OpenAI → Anthropic. Las claves se guardan solo en este navegador.
         </div>
       </div>
     </div>
