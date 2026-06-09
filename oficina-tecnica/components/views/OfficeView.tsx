@@ -4,8 +4,18 @@ import { useState } from "react";
 import { PageHeader } from "../shell/PageHeader";
 import { AGENTS, APPROVALS, CONNECTIONS } from "../../lib/data";
 import { RiskBadge, StatusBadge } from "./shared";
+import { useStore } from "../../lib/store/StoreProvider";
+
+function experienceLevel(msgs: number): { label: string; color: string; pct: number } {
+  if (msgs >= 40) return { label: "Experto", color: "var(--blue)", pct: 100 };
+  if (msgs >= 20) return { label: "Avanzado", color: "#7c3aed", pct: Math.round((msgs / 40) * 100) };
+  if (msgs >= 8)  return { label: "Intermedio", color: "#0891b2", pct: Math.round((msgs / 20) * 100) };
+  if (msgs >= 1)  return { label: "Aprendiendo", color: "#16a34a", pct: Math.round((msgs / 8) * 100) };
+  return { label: "Sin datos", color: "var(--t3)", pct: 0 };
+}
 
 export function OrgChart() {
+  const { chatFor } = useStore();
   const activeAgents = AGENTS.filter((a) => a.type === "agent");
   const futureAgents = AGENTS.filter((a) => a.type === "agent-future");
   return (
@@ -28,17 +38,30 @@ export function OrgChart() {
       </div>
 
       <div style={{ display: "flex", justifyContent: "center", gap: 20, marginBottom: 16 }}>
-        {activeAgents.map((agent) => (
-          <div key={agent.id} style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 4 }}>
-            <div style={{ width: 1, height: 16, background: "var(--border-strong)" }}></div>
-            <div className={`org-agent-node ${agent.status === "needs-approval" ? "org-agent-node--needs-approval" : ""}`}>
-              <div className={`agent-avatar agent-avatar--${agent.id}`}>{agent.initials}</div>
-              <div className="org-agent-name">{agent.name}</div>
-              <div className="org-agent-role">{agent.role}</div>
-              <StatusBadge status={agent.status} />
+        {activeAgents.map((agent) => {
+          const msgs = chatFor(agent.id).length + chatFor("roundtable").filter((m) => m.agentId === agent.id).length;
+          const exp = experienceLevel(msgs);
+          return (
+            <div key={agent.id} style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 4 }}>
+              <div style={{ width: 1, height: 16, background: "var(--border-strong)" }}></div>
+              <div className={`org-agent-node ${agent.status === "needs-approval" ? "org-agent-node--needs-approval" : ""}`}>
+                <div className={`agent-avatar agent-avatar--${agent.id}`}>{agent.initials}</div>
+                <div className="org-agent-name">{agent.name}</div>
+                <div className="org-agent-role">{agent.role}</div>
+                <StatusBadge status={agent.status} />
+                <div style={{ width: "100%", marginTop: 6 }}>
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 3 }}>
+                    <span style={{ fontSize: 9.5, color: exp.color, fontWeight: 700 }}>{exp.label}</span>
+                    <span style={{ fontSize: 9, color: "var(--t3)" }}>{msgs} consultas</span>
+                  </div>
+                  <div style={{ height: 4, borderRadius: 2, background: "var(--border)", overflow: "hidden" }}>
+                    <div style={{ height: "100%", width: `${exp.pct}%`, background: exp.color, borderRadius: 2, transition: "width .4s" }} />
+                  </div>
+                </div>
+              </div>
             </div>
-          </div>
-        ))}
+          );
+        })}
       </div>
 
       <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 12 }}>

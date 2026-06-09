@@ -9,6 +9,11 @@ import { agentAvatarClass } from "./shared";
 import { sendChatWithFallback, getOllamaModels } from "../../lib/llm/providers";
 import { routeRequest } from "../../lib/llm/modelRouter";
 import type { ChatMessage } from "../../lib/llm/providers";
+import { parseInput, isSimpleMessage } from "../../lib/chat/messageUtils";
+import { MdText } from "../chat/MdText";
+import { HelpPanel } from "../chat/HelpPanel";
+import { useSession } from "../../lib/auth/useSession";
+import { saveConversation } from "../../lib/memory/conversationMemory";
 
 const CHAT_AGENTS = ["ic", "pm", "gg", "ie"];
 
@@ -27,10 +32,37 @@ const INTRO: Record<string, string> = {
 };
 
 const AGENT_SYSTEM_PROMPTS: Record<string, string> = {
-  ic: "Eres el Ingeniero de Costos (IC) de una empresa peruana de ingeniería eléctrica. Especialista en presupuestos, metrados, valorizaciones, análisis de desviación de costo y contingencias. Responde en español, de forma técnica y concisa.",
-  pm: "Eres el Project Manager (PM) de una empresa peruana de ingeniería eléctrica. Especialista en cronogramas, ruta crítica, riesgos, restricciones y recuperación de atrasos. Responde en español, de forma técnica y orientada a decisiones.",
-  gg: "Eres el Gerente General (GG) de una empresa peruana de ingeniería eléctrica. Tu rol es dar síntesis ejecutivas, diagnósticos de situación y recomendaciones de alto nivel. Responde en español, de forma directa y ejecutiva.",
-  ie: "Eres el Ingeniero Especialista (IE) de una empresa peruana de ingeniería eléctrica. Especialista en normas eléctricas (CNE, IEC, IEEE), diseño de subestaciones y tendido de cables. Responde en español con referencias normativas.",
+  ic: `Eres el Ingeniero de Costos (IC) de una empresa peruana de ingeniería eléctrica.
+Especialista en: presupuestos, metrados, valorizaciones, análisis de desviación de costo, contingencias.
+Reglas:
+- Si el mensaje es un saludo o pregunta simple (< 25 palabras), responde brevemente y con calidez, sin análisis de proyecto.
+- En respuestas técnicas, usa **negritas** para cifras clave, porcentajes y conclusiones importantes.
+- Puedes mencionar @PM o @IE cuando el tema requiere su input.
+- Cuando necesites aprobación del Gerente, menciona @GG.
+- Responde en español. Sé conciso pero completo.`,
+  pm: `Eres el Project Manager (PM) de una empresa peruana de ingeniería eléctrica.
+Especialista en: cronogramas, ruta crítica, riesgos, restricciones, recuperación de atrasos, planificación.
+Reglas:
+- Si el mensaje es un saludo o pregunta simple (< 25 palabras), responde brevemente y con calidez, sin análisis de proyecto.
+- En respuestas técnicas, usa **negritas** para fechas críticas, hitos y riesgos principales.
+- Puedes mencionar @IC o @IE cuando el tema requiere su input.
+- Cuando necesites aprobación del Gerente, menciona @GG.
+- Responde en español. Sé conciso pero completo.`,
+  gg: `Eres el Gerente General (GG) de una empresa peruana de ingeniería eléctrica.
+Tu rol es dar síntesis ejecutivas, diagnósticos de situación y recomendaciones de alto nivel.
+Reglas:
+- Si el mensaje es un saludo o pregunta simple (< 25 palabras), responde brevemente y con calidez.
+- En respuestas técnicas, usa **negritas** para decisiones clave y métricas críticas.
+- Puedes escalar a @IC o @PM para análisis detallado.
+- Responde en español, de forma directa y ejecutiva.`,
+  ie: `Eres el Ingeniero Eléctrico Especialista (IE) de una empresa peruana de ingeniería eléctrica.
+Especialista en: normas eléctricas (CNE, IEC, IEEE), diseño de subestaciones, cálculo eléctrico, tendido de cables.
+Reglas:
+- Si el mensaje es un saludo o pregunta simple (< 25 palabras), responde brevemente y con calidez.
+- En respuestas técnicas, usa **negritas** para normas, valores técnicos y conclusiones.
+- Puedes mencionar @IC o @PM cuando el tema requiere su coordinación.
+- Cuando necesites aprobación del Gerente, menciona @GG.
+- Responde en español con referencias normativas cuando corresponda.`,
 };
 
 function MessageBubble({
@@ -54,12 +86,11 @@ function MessageBubble({
             border: isUser ? "none" : `1px solid ${isError ? "var(--red-border, #fca5a5)" : "var(--border)"}`,
             fontSize: 12.5,
             lineHeight: 1.55,
-            whiteSpace: "pre-wrap",
             borderTopRightRadius: isUser ? 3 : 10,
             borderTopLeftRadius: isUser ? 10 : 3,
           }}
         >
-          {text}
+          {isUser ? text : <MdText text={text} />}
         </div>
         <div style={{ fontSize: 10, color: "var(--t3)", marginTop: 3, textAlign: isUser ? "right" : "left", display: "flex", gap: 6, alignItems: "center", justifyContent: isUser ? "flex-end" : "flex-start" }}>
           <span>{time}</span>
@@ -92,10 +123,12 @@ function TypingDots({ agentId, modelLabel }: { agentId: string; modelLabel?: str
 
 export function ChatView() {
   const { state, appendChat, chatFor } = useStore();
+  const { session } = useSession(false);
   const [agentId, setAgentId] = useState("ic");
   const [input, setInput] = useState("");
   const [busy, setBusy] = useState(false);
   const [typingModel, setTypingModel] = useState<string | undefined>();
+  const [showHelp, setShowHelp] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
   const ollamaModelsRef = useRef<string[]>([]);
 
@@ -104,37 +137,48 @@ export function ChatView() {
 
   useEffect(() => {
     if (scrollRef.current) scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
-  }, [thread.length, busy]);
+  }, [thread.length, busy, showHelp]);
 
   useEffect(() => {
     getOllamaModels().then((models) => { ollamaModelsRef.current = models; });
   }, []);
 
   async function send(text?: string) {
-    const value = (text ?? input).trim();
-    if (!value || busy) return;
+    const raw = (text ?? input).trim();
+    if (!raw || busy) return;
 
-    appendChat(agentId, { role: "gg", text: value });
+    const parsed = parseInput(raw);
+
+    if (parsed.isHelp) {
+      setShowHelp(true);
+      setInput("");
+      return;
+    }
+
+    appendChat(agentId, { role: "gg", text: raw });
     setInput("");
     setBusy(true);
 
-    const routing = routeRequest(value, ollamaModelsRef.current);
+    const routing = routeRequest(parsed.cleanText, ollamaModelsRef.current);
     setTypingModel(routing.modelLabel);
 
     const systemPrompt = AGENT_SYSTEM_PROMPTS[agentId] ?? AGENT_SYSTEM_PROMPTS.ic;
     const history = chatFor(agentId);
+    const simple = isSimpleMessage(parsed.cleanText);
     const messages: ChatMessage[] = [
       { role: "system", content: systemPrompt },
-      ...history.slice(-10).map((m) => ({
+      ...(!simple ? history.slice(-10).map((m) => ({
         role: (m.role === "gg" ? "user" : "assistant") as "user" | "assistant",
         content: m.text,
-      })),
-      { role: "user", content: value },
+      })) : []),
+      { role: "user", content: parsed.cleanText },
     ];
 
     try {
       const { response, actualConfig } = await sendChatWithFallback(messages, routing.config, ollamaModelsRef.current);
-      appendChat(agentId, { role: "agent", text: response.content, agentId, modelLabel: `${actualConfig.provider}/${response.model}` });
+      const label = `${actualConfig.provider}/${response.model}`;
+      appendChat(agentId, { role: "agent", text: response.content, agentId, modelLabel: label });
+      saveConversation(session?.email ?? "anonymous", agentId, parsed.cleanText, response.content, label, routing.complexity).catch(() => {});
     } catch (err) {
       const msg = err instanceof Error ? err.message : "Error desconocido";
       appendChat(agentId, { role: "agent", text: `No pude conectar con ningún proveedor de IA. ${msg}\n\nVe a Conexiones para configurar una API key gratuita.`, agentId, isError: true });
@@ -201,11 +245,15 @@ export function ChatView() {
                 <div style={{ fontSize: 11, color: "var(--t3)" }}>{agent.role}</div>
               </div>
             </div>
-            <span className="badge badge--green">IA activa</span>
+            <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+              <span className="badge badge--green">IA activa</span>
+              <button className="btn btn--ghost btn--sm" style={{ fontSize: 11 }} onClick={() => setShowHelp((v) => !v)}>/ayuda</button>
+            </div>
           </div>
 
           <div ref={scrollRef} style={{ flex: 1, overflowY: "auto", padding: 14, display: "flex", flexDirection: "column", gap: 12, background: "var(--bg-muted)" }}>
-            {thread.length === 0 && (
+            {showHelp && <HelpPanel onClose={() => setShowHelp(false)} />}
+            {thread.length === 0 && !showHelp && (
               <div style={{ margin: "auto", textAlign: "center", maxWidth: 340 }}>
                 <div className={`agent-avatar ${agentAvatarClass(agentId)}`} style={{ width: 48, height: 48, fontSize: 16, margin: "0 auto 12px" }}>{agentId.toUpperCase()}</div>
                 <div style={{ fontSize: 14, fontWeight: 600, color: "var(--t1)", marginBottom: 4 }}>Hola, soy {agent.name}</div>
