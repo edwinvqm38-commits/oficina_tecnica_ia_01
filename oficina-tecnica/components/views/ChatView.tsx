@@ -8,9 +8,11 @@ import { agentById } from "../../lib/data";
 import { agentAvatarClass } from "./shared";
 import { routeRequest } from "@/lib/llm/modelRouter";
 import { getStoredDeviceProfile } from "@/lib/llm/deviceDetection";
-import { getOllamaModels } from "@/lib/llm/providers";
+import { getOllamaModels, sendChat } from "@/lib/llm/providers";
 import { ModelBadge } from "@/components/ai-office/ModelBadge";
 import type { RoutingDecision } from "@/lib/llm/modelRouter";
+import { saveConversation, loadConversationHistory } from "@/lib/memory/conversationMemory";
+import { useSession } from "@/lib/auth/useSession";
 
 const CHAT_AGENTS = ["ic", "pm", "gg", "ie"];
 
@@ -34,7 +36,7 @@ function mockReply(agentId: string, text: string): string {
   return `(${name} · respuesta simulada)\n\nHe registrado tu consulta: "${text.slice(0, 140)}". Cuando se configure un proveedor de modelos en Conexiones, responderé aquí con análisis real basado en mis skills activas y la base de conocimiento del proyecto.`;
 }
 
-function MessageBubble({ role, text, time, agentId, routing }: { role: "gg" | "agent"; text: string; time: string; agentId: string; routing?: RoutingDecision }) {
+function MessageBubble({ role, text, time, agentId, routing, isError }: { role: "gg" | "agent"; text: string; time: string; agentId: string; routing?: RoutingDecision; isError?: boolean }) {
   const isUser = role === "gg";
   return (
     <div style={{ display: "flex", gap: 9, flexDirection: isUser ? "row-reverse" : "row", alignItems: "flex-start" }}>
@@ -46,9 +48,9 @@ function MessageBubble({ role, text, time, agentId, routing }: { role: "gg" | "a
           style={{
             padding: "8px 11px",
             borderRadius: 10,
-            background: isUser ? "var(--blue)" : "var(--bg-card)",
-            color: isUser ? "#fff" : "var(--t1)",
-            border: isUser ? "none" : "1px solid var(--border)",
+            background: isUser ? "var(--blue)" : isError ? "var(--red-bg)" : "var(--bg-card)",
+            color: isUser ? "#fff" : isError ? "var(--red-text)" : "var(--t1)",
+            border: isUser ? "none" : isError ? "1px solid var(--red-border)" : "1px solid var(--border)",
             fontSize: 12.5,
             lineHeight: 1.55,
             whiteSpace: "pre-wrap",
@@ -82,8 +84,16 @@ function TypingDots({ agentId }: { agentId: string }) {
   );
 }
 
+const AGENT_SYSTEM_PROMPTS: Record<string, string> = {
+  ic: "Eres el Ingeniero de Costos y Presupuestos de una Oficina Técnica de ingeniería. Analizas presupuestos, metrados, desviaciones de costo y haces recomendaciones técnicas. Responde en español de forma clara y profesional.",
+  pm: "Eres el Project Manager de una Oficina Técnica de ingeniería. Gestionas cronogramas, riesgos, rutas críticas y bloqueos de proyectos. Responde en español de forma clara y profesional.",
+  gg: "Eres el Gerente General de una Oficina Técnica de ingeniería. Tomas decisiones estratégicas, apruebas propuestas y supervisas el portafolio de proyectos. Responde en español de forma ejecutiva y directa.",
+  ie: "Eres un Ingeniero Especialista en normas eléctricas (CNE, IEC, IEEE). Asesoras sobre diseño eléctrico y criterios normativos. Responde en español de forma técnica y precisa.",
+};
+
 export function ChatView() {
   const { state, appendChat, chatFor } = useStore();
+  const { session } = useSession(false);
   const [agentId, setAgentId] = useState("ic");
   const [input, setInput] = useState("");
   const [busy, setBusy] = useState(false);
@@ -101,18 +111,47 @@ export function ChatView() {
     if (scrollRef.current) scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
   }, [thread.length, busy]);
 
-  function send(text?: string) {
+  async function send(text?: string) {
     const value = (text ?? input).trim();
     if (!value || busy) return;
     appendChat(agentId, { role: "gg", text: value });
     setInput("");
     setBusy(true);
-    window.setTimeout(() => {
-      const deviceProfile = getStoredDeviceProfile();
-      const routing = routeRequest(value, ollamaModels, deviceProfile);
-      appendChat(agentId, { role: "agent", text: mockReply(agentId, value), routing });
-      setBusy(false);
-    }, 900 + Math.random() * 700);
+
+    const userId = session?.email ?? "anonymous";
+    const deviceProfile = getStoredDeviceProfile();
+    const agentModels = JSON.parse(localStorage.getItem("ot:agent:models") ?? "{}");
+    const routing = routeRequest(value, ollamaModels, deviceProfile, agentModels[agentId] ?? null);
+
+    // Load history from Supabase for context
+    const history = await loadConversationHistory(userId, agentId, undefined, 10);
+    const contextMessages = history.map((m) => ({
+      role: m.role as "user" | "assistant",
+      content: m.content,
+    }));
+
+    const messages = [
+      { role: "system" as const, content: AGENT_SYSTEM_PROMPTS[agentId] ?? AGENT_SYSTEM_PROMPTS.gg },
+      ...contextMessages,
+      { role: "user" as const, content: value },
+    ];
+
+    let responseText = "";
+    let isError = false;
+    try {
+      const response = await sendChat(messages, routing.config);
+      responseText = response.content;
+    } catch {
+      responseText = `No se pudo conectar con ${routing.modelLabel}. Ve a Conexiones de modelos para configurar un proveedor.`;
+      isError = true;
+    }
+
+    appendChat(agentId, { role: "agent", text: responseText, routing, isError });
+    setBusy(false);
+
+    if (!isError) {
+      saveConversation(userId, agentId, value, responseText, routing.modelLabel, routing.complexity).catch(() => {});
+    }
   }
 
   if (!agent) return null;
@@ -221,7 +260,7 @@ export function ChatView() {
               </div>
             )}
             {thread.map((m) => (
-              <MessageBubble key={m.id} role={m.role} text={m.text} time={m.time} agentId={agentId} routing={m.routing} />
+              <MessageBubble key={m.id} role={m.role} text={m.text} time={m.time} agentId={agentId} routing={m.routing} isError={m.isError} />
             ))}
             {busy && <TypingDots agentId={agentId} />}
           </div>

@@ -158,4 +158,5 @@ export type ChatMessage = {
   time: string;
   agentId?: string;
   routing?: import("./llm/modelRouter").RoutingDecision;
+  isError?: boolean;
 };
