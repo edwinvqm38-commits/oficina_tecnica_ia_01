@@ -12,6 +12,7 @@ import type { ChatMessage } from "../../lib/llm/providers";
 import { parseInput, isSimpleMessage } from "../../lib/chat/messageUtils";
 import { MdText } from "../chat/MdText";
 import { HelpPanel } from "../chat/HelpPanel";
+import { ChatAutoInput } from "../chat/ChatAutoInput";
 import { useSession } from "../../lib/auth/useSession";
 import { saveConversation } from "../../lib/memory/conversationMemory";
 
@@ -272,13 +273,12 @@ export function ChatView() {
           </div>
 
           <div style={{ flexShrink: 0, padding: 10, borderTop: "1px solid var(--border)", display: "flex", gap: 8, alignItems: "flex-end" }}>
-            <textarea
+            <ChatAutoInput
               value={input}
-              onChange={(e) => setInput(e.target.value)}
-              onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); } }}
-              placeholder={`Escribe a ${agent.name}… (Enter para enviar, Shift+Enter salto de línea)`}
-              rows={1}
-              style={{ flex: 1, resize: "none", border: "1px solid var(--border)", borderRadius: "var(--r)", padding: "9px 11px", fontSize: 12.5, fontFamily: "var(--font)", color: "var(--t1)", maxHeight: 120, lineHeight: 1.5, outline: "none" }}
+              onChange={setInput}
+              onSubmit={send}
+              placeholder={`Escribe a ${agent.name}… @IC @PM @GG /ayuda`}
+              disabled={busy}
             />
             <button className="btn btn--primary" style={{ padding: "9px 14px" }} onClick={() => send()} disabled={busy}>
               <Icons.arrowRight width={15} height={15} />

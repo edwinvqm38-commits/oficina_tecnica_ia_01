@@ -359,6 +359,11 @@ export function ModelConnectionsPage() {
   const [ollamaModels, setOllamaModels] = useState<string[]>([]);
   const [setupOpen, setSetupOpen] = useState(false);
   const [assignments, setAssignments] = useState<Record<string, AgentModelAssignment>>({});
+  const [ollamaEnabled, setOllamaEnabled] = useState(true);
+
+  useEffect(() => {
+    setOllamaEnabled(getLS("ot:ollama:disabled", "false") !== "true");
+  }, []);
 
   useEffect(() => {
     const savedUrl = getLS(LS_OLLAMA_URL, "http://localhost:11434");
@@ -410,6 +415,30 @@ export function ModelConnectionsPage() {
       </div>
 
       <ServerStatusSection />
+
+      {/* Ollama toggle */}
+      <div className="card" style={{ padding: "12px 16px", display: "flex", alignItems: "center", justifyContent: "space-between", gap: 16 }}>
+        <div>
+          <p style={{ fontSize: 13, fontWeight: 600, color: "var(--t1)" }}>Ollama (modelos locales)</p>
+          <p style={{ fontSize: 11.5, color: "var(--t2)", marginTop: 2 }}>
+            {ollamaEnabled
+              ? "Activo — se usará como respaldo si los proveedores cloud fallan. Puede ser lento."
+              : "Desactivado — solo se usan modelos cloud (Gemini, Groq, Sambanova…). Recomendado en producción."}
+          </p>
+        </div>
+        <button
+          onClick={() => {
+            const next = !ollamaEnabled;
+            setOllamaEnabled(next);
+            localStorage.setItem("ot:ollama:disabled", next ? "false" : "true");
+          }}
+          className={ollamaEnabled ? "btn btn--warning btn--sm" : "btn btn--success btn--sm"}
+          style={{ flexShrink: 0 }}
+        >
+          {ollamaEnabled ? "Desactivar Ollama" : "Activar Ollama"}
+        </button>
+      </div>
+
       <OllamaStatusBanner status={ollamaStatus} ollamaUrl={ollamaUrl} ollamaModels={ollamaModels} setupOpen={setupOpen} onToggleSetup={() => setSetupOpen((v) => !v)} />
       <OllamaUrlConfig ollamaUrl={ollamaUrl} onUrlChange={setOllamaUrl} onTest={() => runConnectivityCheck(ollamaUrl)} status={ollamaStatus} />
       <AgentModelAssignments assignments={assignments} onChange={handleAssignmentChange} ollamaModels={ollamaModels} />

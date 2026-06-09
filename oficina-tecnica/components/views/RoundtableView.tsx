@@ -12,6 +12,7 @@ import type { ChatMessage } from "../../lib/llm/providers";
 import { parseInput, isSimpleMessage } from "../../lib/chat/messageUtils";
 import { MdText } from "../chat/MdText";
 import { HelpPanel } from "../chat/HelpPanel";
+import { ChatAutoInput } from "../chat/ChatAutoInput";
 import { useSession } from "../../lib/auth/useSession";
 import { saveConversation, loadConversationHistory } from "../../lib/memory/conversationMemory";
 
@@ -342,13 +343,12 @@ export function RoundtableView() {
               </button>
             </div>
             <div style={{ display: "flex", gap: 8, alignItems: "flex-end" }}>
-              <textarea
+              <ChatAutoInput
                 value={input}
-                onChange={(e) => setInput(e.target.value)}
-                onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); } }}
-                placeholder="Escribe a la mesa… @IC @PM @IE @PRY-001 /ayuda (Enter = enviar)"
-                rows={1}
-                style={{ flex: 1, resize: "none", border: "1px solid var(--border)", borderRadius: "var(--r)", padding: "9px 11px", fontSize: 12.5, fontFamily: "var(--font)", color: "var(--t1)", maxHeight: 120, lineHeight: 1.5, outline: "none", background: "var(--bg-card)" }}
+                onChange={setInput}
+                onSubmit={send}
+                placeholder="Escribe a la mesa… @IC @PM @IE @PRY-001 /ayuda"
+                disabled={busy}
               />
               <button className="btn btn--primary" style={{ padding: "9px 14px" }} onClick={() => send()} disabled={busy}>
                 <Icons.arrowRight width={15} height={15} />

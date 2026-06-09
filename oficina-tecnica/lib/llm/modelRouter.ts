@@ -26,6 +26,14 @@ function getKey(key: string): string {
   return localStorage.getItem(key) ?? "";
 }
 
+// Cloud providers we always try via server proxy even without a local key
+const SERVER_PROXY_PROVIDERS: Array<{ provider: LLMProvider; modelSimple: string; modelDeep: string }> = [
+  { provider: "gemini",     modelSimple: "gemini-1.5-flash",                        modelDeep: "gemini-1.5-pro" },
+  { provider: "groq",       modelSimple: "llama-3.1-8b-instant",                    modelDeep: "llama-3.1-70b-versatile" },
+  { provider: "sambanova",  modelSimple: "Meta-Llama-3.1-70B-Instruct",             modelDeep: "DeepSeek-R1" },
+  { provider: "openrouter", modelSimple: "meta-llama/llama-3.1-8b-instruct:free",   modelDeep: "meta-llama/llama-3.1-70b-instruct:free" },
+];
+
 export function routeRequest(
   text: string,
   availableOllamaModels: string[],
@@ -33,6 +41,7 @@ export function routeRequest(
 ): RoutingDecision {
   const complexity = classifyRequest(text);
   const ollamaBase = getKey("ot:ollama:baseUrl") || "http://localhost:11434";
+  const ollamaDisabled = getKey("ot:ollama:disabled") === "true";
 
   const geminiKey     = getKey("ot:apikey:gemini");
   const groqKey       = getKey("ot:apikey:groq");
@@ -106,7 +115,7 @@ export function routeRequest(
     return { config: { provider: "huggingface", model: "meta-llama/Llama-3.1-8B-Instruct", apiKey: huggingfaceKey }, complexity, reason: "HuggingFace → gratuito, miles de modelos", modelLabel: "Llama-3.1-8B" };
   }
 
-  if (availableOllamaModels.length > 0) {
+  if (!ollamaDisabled && availableOllamaModels.length > 0) {
     function pickOllama(preferred: string[], fallback: string): string {
       for (const m of preferred) {
         const found = availableOllamaModels.find((am) => am.startsWith(m));
@@ -133,10 +142,13 @@ export function routeRequest(
     return { config: { provider: "anthropic", model: "claude-haiku-4-5-20251001", apiKey: anthropicKey }, complexity, reason: "Anthropic Claude Haiku (pago)", modelLabel: "claude-haiku" };
   }
 
+  // No local keys configured → use server proxy (Vercel env vars) with cloud providers
+  const sp = SERVER_PROXY_PROVIDERS[0];
+  const spModel = isDeep ? sp.modelDeep : sp.modelSimple;
   return {
-    config: { provider: "ollama", model: "qwen2.5:7b", baseUrl: ollamaBase },
+    config: { provider: sp.provider, model: spModel },
     complexity,
-    reason: "Sin proveedor configurado — ve a Conexiones",
-    modelLabel: "sin modelo",
+    reason: "Auto: servidor Vercel (Gemini)",
+    modelLabel: spModel,
   };
 }

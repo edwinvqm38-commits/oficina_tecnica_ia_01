@@ -138,6 +138,7 @@ async function sendOllamaChat(messages: ChatMessage[], config: ModelConfig): Pro
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ model: config.model, messages, stream: false }),
+    signal: AbortSignal.timeout(12000),
   });
   if (!res.ok) throw new Error(`Ollama error: ${res.statusText}`);
   const data = await res.json();
@@ -204,7 +205,8 @@ export async function sendChatWithFallback(
     return { response, actualConfig: primaryConfig, usedFallback: false };
   } catch { /* fall through */ }
 
-  const FALLBACK_CHAIN: Array<{ provider: LLMProvider; lsKey: string; model: string }> = [
+  // Cloud providers: try server proxy (Vercel env vars) first, then localStorage key as fallback
+  const CLOUD_FALLBACKS: Array<{ provider: LLMProvider; lsKey: string; model: string }> = [
     { provider: "gemini",      lsKey: "ot:apikey:gemini",      model: "gemini-1.5-flash" },
     { provider: "groq",        lsKey: "ot:apikey:groq",        model: "llama-3.1-8b-instant" },
     { provider: "sambanova",   lsKey: "ot:apikey:sambanova",   model: "Meta-Llama-3.1-70B-Instruct" },
@@ -216,18 +218,20 @@ export async function sendChatWithFallback(
   ];
 
   const ollamaBase = localStorage.getItem("ot:ollama:baseUrl") ?? "http://localhost:11434";
+  const ollamaDisabled = localStorage.getItem("ot:ollama:disabled") === "true";
 
-  for (const fb of FALLBACK_CHAIN) {
+  for (const fb of CLOUD_FALLBACKS) {
     if (fb.provider === primaryConfig.provider) continue;
-    const key = localStorage.getItem(fb.lsKey);
-    const config: ModelConfig = { provider: fb.provider, model: fb.model, apiKey: key ?? undefined };
+    // Always try server proxy (no key needed); also pass localStorage key if available
+    const key = localStorage.getItem(fb.lsKey) ?? undefined;
+    const config: ModelConfig = { provider: fb.provider, model: fb.model, apiKey: key };
     try {
       const response = await sendChat(messages, config);
       return { response, actualConfig: config, usedFallback: true };
     } catch { /* try next */ }
   }
 
-  if (primaryConfig.provider !== "ollama" && ollamaModels.length > 0) {
+  if (!ollamaDisabled && primaryConfig.provider !== "ollama" && ollamaModels.length > 0) {
     const config: ModelConfig = { provider: "ollama", model: ollamaModels[0], baseUrl: ollamaBase };
     try {
       const response = await sendChat(messages, config);
