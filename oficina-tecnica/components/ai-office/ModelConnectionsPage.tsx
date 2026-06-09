@@ -709,82 +709,157 @@ function ApiKeyRow({
   );
 }
 
+// ── Provider Reference Table ────────────────────────────────────────────────
+
+const PROVIDER_REF = [
+  { name: "Gemini",      tag: "Google",      free: true,  speed: "~1-2 s",   envVar: "GEMINI_API_KEY",     url: "https://aistudio.google.com/app/apikey",           placeholder: "AQ.Ab8RN…",   note: "1,500 req/día gratis" },
+  { name: "Groq",        tag: "Llama/Mixtral", free: true, speed: "<1 s",    envVar: "GROQ_API_KEY",       url: "https://console.groq.com/keys",                    placeholder: "gsk_…",       note: "14,400 req/día gratis" },
+  { name: "Sambanova",   tag: "DeepSeek R1", free: true,  speed: "~2 s",     envVar: "SAMBANOVA_API_KEY",  url: "https://cloud.sambanova.ai/apis",                  placeholder: "uuid…",       note: "DeepSeek R1 gratis" },
+  { name: "OpenRouter",  tag: "Multi-modelo", free: true, speed: "~2 s",     envVar: "OPENROUTER_API_KEY", url: "https://openrouter.ai/settings/keys",              placeholder: "sk-or-…",     note: "10+ modelos gratis" },
+  { name: "Cerebras",    tag: "Ultra-rápido", free: true, speed: "~0.5 s",   envVar: "CEREBRAS_API_KEY",   url: "https://inference.cerebras.ai",                    placeholder: "csk-…",       note: "~1000 tok/s gratis" },
+  { name: "Mistral",     tag: "Español",     free: true,  speed: "~1-2 s",   envVar: "MISTRAL_API_KEY",    url: "https://console.mistral.ai/api-keys",              placeholder: "…",           note: "1,000 req/día gratis" },
+  { name: "Together AI", tag: "Multi-modelo", free: true, speed: "~2 s",     envVar: "TOGETHER_API_KEY",   url: "https://api.together.ai/settings/api-keys",        placeholder: "…",           note: "Créditos gratis al crear cuenta" },
+  { name: "OpenAI",      tag: "GPT-4o",      free: false, speed: "~2-3 s",   envVar: "OPENAI_API_KEY",     url: "https://platform.openai.com/api-keys",             placeholder: "sk-…",        note: "Pago por uso (~$0.01/50 msgs)" },
+  { name: "Anthropic",   tag: "Claude",      free: false, speed: "~2-3 s",   envVar: "ANTHROPIC_API_KEY",  url: "https://console.anthropic.com/settings/api-keys",  placeholder: "sk-ant-…",    note: "Pago por uso" },
+];
+
+function ProviderReferenceSection() {
+  const [serverStatus, setServerStatus] = useState<Record<string, boolean>>({});
+
+  useEffect(() => {
+    fetch("/api/llm/status")
+      .then((r) => r.json())
+      .then(setServerStatus)
+      .catch(() => {/* ignore */});
+  }, []);
+
+  return (
+    <div className="card">
+      <div className="card-header">
+        <div>
+          <p className="page-eyebrow" style={{ marginBottom: 2 }}>Referencia</p>
+          <p style={{ fontSize: 13, fontWeight: 600, color: "var(--t1)" }}>Proveedores disponibles</p>
+        </div>
+      </div>
+
+      {/* How it works */}
+      <div style={{ padding: "12px 16px", borderBottom: "1px solid var(--border)", background: "var(--blue-bg)" }}>
+        <p style={{ fontSize: 12.5, fontWeight: 600, color: "var(--blue-text)", marginBottom: 6 }}>
+          ¿Cómo funcionan los modelos para todos los usuarios?
+        </p>
+        <div style={{ display: "flex", flexDirection: "column", gap: 5, fontSize: 12, color: "var(--blue-text)", lineHeight: 1.6 }}>
+          <p><strong>Opción A — Vercel (recomendada):</strong> Agrega las keys en Vercel → Settings → Environment Variables. Todos los usuarios las usan automáticamente sin configurar nada. Las keys nunca llegan al navegador.</p>
+          <p><strong>Opción B — Este navegador:</strong> Pega las keys en la sección de abajo. Solo tú las usas en este dispositivo. Sirve para pruebas o uso personal.</p>
+        </div>
+      </div>
+
+      {/* Steps */}
+      <div style={{ padding: "12px 16px", borderBottom: "1px solid var(--border)" }}>
+        <p style={{ fontSize: 11, fontWeight: 700, color: "var(--t3)", textTransform: "uppercase", letterSpacing: ".08em", marginBottom: 10 }}>
+          Pasos para activar un proveedor (todos los usuarios)
+        </p>
+        {[
+          { n: 1, text: "Ve a la URL del proveedor en la tabla abajo y crea una cuenta gratuita." },
+          { n: 2, text: "Crea una API Key en el panel del proveedor (sección Keys / API Keys)." },
+          { n: 3, text: "Ve a vercel.com → tu proyecto oficina-tecnica-ia-01 → Settings → Environment Variables." },
+          { n: 4, text: 'Agrega una variable con el nombre exacto de la columna "Env Var en Vercel" y pega la key como valor.' },
+          { n: 5, text: "Haz clic en Redeploy en Vercel (o espera el próximo push). Todos los usuarios tendrán acceso." },
+          { n: 6, text: "(Opcional) Para uso inmediato solo en tu navegador: pégala también en la sección de Claves API abajo." },
+        ].map((s) => (
+          <div key={s.n} style={{ display: "flex", gap: 10, marginBottom: 6, alignItems: "flex-start" }}>
+            <div style={{ width: 20, height: 20, borderRadius: "50%", background: "var(--blue)", color: "#fff", fontSize: 10, fontWeight: 700, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>{s.n}</div>
+            <p style={{ fontSize: 12, color: "var(--t2)", lineHeight: 1.55 }}>{s.text}</p>
+          </div>
+        ))}
+      </div>
+
+      {/* Provider table */}
+      <div style={{ overflowX: "auto" }}>
+        <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
+          <thead>
+            <tr style={{ background: "var(--bg-muted)" }}>
+              {["Proveedor", "Velocidad", "Costo", "Env Var en Vercel", "URL de registro", "Nota", "Estado servidor"].map((h) => (
+                <th key={h} style={{ padding: "7px 12px", textAlign: "left", fontWeight: 600, color: "var(--t3)", fontSize: 11, whiteSpace: "nowrap", borderBottom: "1px solid var(--border)" }}>{h}</th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {PROVIDER_REF.map((p, i) => {
+              const providerKey = p.name.toLowerCase().replace(/\s+/g, "");
+              const configured = serverStatus[providerKey] ??
+                serverStatus[p.envVar.replace("_API_KEY", "").toLowerCase()];
+              return (
+                <tr key={p.name} style={{ borderBottom: i < PROVIDER_REF.length - 1 ? "1px solid var(--border)" : "none" }}>
+                  <td style={{ padding: "8px 12px", fontWeight: 600, color: "var(--t1)", whiteSpace: "nowrap" }}>
+                    {p.name}
+                    <span style={{ marginLeft: 5, fontSize: 10, color: "var(--t3)", fontWeight: 400 }}>{p.tag}</span>
+                  </td>
+                  <td style={{ padding: "8px 12px", color: "var(--t2)", whiteSpace: "nowrap" }}>{p.speed}</td>
+                  <td style={{ padding: "8px 12px", whiteSpace: "nowrap" }}>
+                    <span className={p.free ? "badge badge--green" : "badge badge--slate"} style={{ fontSize: 10 }}>
+                      {p.free ? "Gratis" : "Pago"}
+                    </span>
+                  </td>
+                  <td style={{ padding: "8px 12px" }}>
+                    <code style={{ fontFamily: "var(--mono)", fontSize: 11, background: "var(--bg-muted)", padding: "2px 5px", borderRadius: 3, color: "var(--t1)" }}>{p.envVar}</code>
+                  </td>
+                  <td style={{ padding: "8px 12px" }}>
+                    <a href={p.url} target="_blank" rel="noopener noreferrer" style={{ color: "var(--blue)", fontSize: 11, wordBreak: "break-all" }}>{p.url}</a>
+                  </td>
+                  <td style={{ padding: "8px 12px", fontSize: 11, color: "var(--t3)" }}>{p.note}</td>
+                  <td style={{ padding: "8px 12px", whiteSpace: "nowrap" }}>
+                    {configured === true
+                      ? <span style={{ color: "var(--green-text)", fontWeight: 600 }}>✅ Activo</span>
+                      : configured === false
+                        ? <span style={{ color: "var(--t3)" }}>— No configurado</span>
+                        : <span style={{ color: "var(--t3)" }}>…</span>
+                    }
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
 function ApiKeysSection({ sectionRef }: { sectionRef: React.RefObject<HTMLDivElement | null> }) {
   return (
     <div className="card" ref={sectionRef}>
       <div className="card-header">
         <div>
-          <p className="page-eyebrow" style={{ marginBottom: 2 }}>Seguridad</p>
-          <p style={{ fontSize: 13, fontWeight: 600, color: "var(--t1)" }}>Claves API</p>
+          <p className="page-eyebrow" style={{ marginBottom: 2 }}>Solo este navegador</p>
+          <p style={{ fontSize: 13, fontWeight: 600, color: "var(--t1)" }}>Claves API — acceso inmediato</p>
         </div>
+        <span className="badge badge--slate" style={{ fontSize: 10 }}>Solo tu dispositivo</span>
       </div>
       <div className="card-body" style={{ display: "flex", flexDirection: "column", gap: 18 }}>
+        <div style={{ background: "var(--amber-bg)", border: "1px solid var(--amber-border)", borderRadius: "var(--r)", padding: "9px 12px", fontSize: 12, color: "var(--amber-text)", lineHeight: 1.5 }}>
+          Estas keys se guardan <strong>solo en tu navegador</strong>. Otros usuarios no las ven. Para activarlas para todos, usa las variables de entorno de Vercel (tabla arriba).
+        </div>
 
-        {/* Free providers */}
         <div>
-          <p style={{ fontSize: 11, fontWeight: 700, color: "var(--t3)", textTransform: "uppercase", letterSpacing: ".08em", marginBottom: 10 }}>
-            Gratuitos — recomendados
-          </p>
-          <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-            <ApiKeyRow
-              label="Gemini API Key (Google · gratis · ~1s)"
-              storageKey={LS_APIKEY_GEMINI}
-              placeholder="AQ.Ab8RN…"
-            />
-            <ApiKeyRow
-              label="Groq API Key (Llama · gratis · ultrarrápido)"
-              storageKey={LS_APIKEY_GROQ}
-              placeholder="gsk_…"
-            />
-            <ApiKeyRow
-              label="Sambanova API Key (DeepSeek R1 · gratis)"
-              storageKey={LS_APIKEY_SAMBANOVA}
-              placeholder="sn-…"
-            />
-            <ApiKeyRow
-              label="OpenRouter API Key (varios modelos gratuitos)"
-              storageKey={LS_APIKEY_OPENROUTER}
-              placeholder="sk-or-…"
-            />
-            <ApiKeyRow
-              label="Cerebras API Key (ultrarrápido ~1000 tok/s · gratis)"
-              storageKey={LS_APIKEY_CEREBRAS}
-              placeholder="csk-…"
-            />
-            <ApiKeyRow
-              label="Mistral AI API Key (buen español · gratis)"
-              storageKey={LS_APIKEY_MISTRAL}
-              placeholder="…"
-            />
-            <ApiKeyRow
-              label="Together AI API Key (20+ modelos · gratis con créditos)"
-              storageKey={LS_APIKEY_TOGETHER}
-              placeholder="…"
-            />
+          <p style={{ fontSize: 11, fontWeight: 700, color: "var(--t3)", textTransform: "uppercase", letterSpacing: ".08em", marginBottom: 10 }}>Gratuitos</p>
+          <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+            {PROVIDER_REF.filter((p) => p.free).map((p) => {
+              const lsKey = `ot:apikey:${p.name.toLowerCase().replace(/\s+/g, "")}`;
+              return <ApiKeyRow key={p.envVar} label={`${p.name} — ${p.note}`} storageKey={lsKey} placeholder={p.placeholder} />;
+            })}
           </div>
         </div>
 
-        {/* Paid providers */}
         <div>
-          <p style={{ fontSize: 11, fontWeight: 700, color: "var(--t3)", textTransform: "uppercase", letterSpacing: ".08em", marginBottom: 10 }}>
-            De pago — opcionales
-          </p>
-          <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-            <ApiKeyRow
-              label="OpenAI API Key (GPT-4o · pago)"
-              storageKey={LS_APIKEY_OPENAI}
-              placeholder="sk-…"
-            />
-            <ApiKeyRow
-              label="Anthropic API Key (Claude · pago)"
-              storageKey={LS_APIKEY_ANTHROPIC}
-              placeholder="sk-ant-…"
-            />
+          <p style={{ fontSize: 11, fontWeight: 700, color: "var(--t3)", textTransform: "uppercase", letterSpacing: ".08em", marginBottom: 10 }}>De pago</p>
+          <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+            <ApiKeyRow label="OpenAI API Key (GPT-4o)" storageKey={LS_APIKEY_OPENAI} placeholder="sk-…" />
+            <ApiKeyRow label="Anthropic API Key (Claude)" storageKey={LS_APIKEY_ANTHROPIC} placeholder="sk-ant-…" />
           </div>
         </div>
 
-        <div style={{ background: "var(--blue-bg)", border: "1px solid var(--blue-border)", borderRadius: "var(--r)", padding: "10px 12px", fontSize: 12, color: "var(--blue-text)", lineHeight: 1.6 }}>
-          <strong>Prioridad automática:</strong> Gemini → Groq → Sambanova → OpenRouter → Ollama → OpenAI → Anthropic. Las claves se guardan solo en este navegador.
+        <div style={{ fontSize: 11, color: "var(--t3)", lineHeight: 1.6 }}>
+          <strong>Prioridad automática:</strong> Gemini → Groq → Sambanova → OpenRouter → Cerebras → Mistral → Together → Ollama → OpenAI → Anthropic
         </div>
       </div>
     </div>
@@ -914,7 +989,10 @@ export function ModelConnectionsPage() {
         sectionRef={assignmentsSectionRef}
       />
 
-      {/* Section 5: API Keys */}
+      {/* Section 5: Provider Reference + Steps */}
+      <ProviderReferenceSection />
+
+      {/* Section 6: API Keys (browser-only) */}
       <ApiKeysSection sectionRef={apiKeysSectionRef} />
     </div>
   );

@@ -42,25 +42,58 @@ export async function getOllamaModels(baseUrl: string = "http://localhost:11434"
   }
 }
 
-// Send a chat message to the configured provider
+// Send a chat message to the configured provider.
+// For cloud providers, tries the server-side proxy first (Vercel env vars → all users benefit).
+// Falls back to direct call with the localStorage API key if proxy returns 503.
 export async function sendChat(messages: ChatMessage[], config: ModelConfig): Promise<LLMResponse> {
-  switch (config.provider) {
-    case "ollama":    return sendOllamaChat(messages, config);
-    case "openai":    return sendOpenAICompatChat(messages, config, "https://api.openai.com/v1");
-    case "anthropic": return sendAnthropicChat(messages, config);
-    case "gemini":    return sendOpenAICompatChat(messages, config, "https://generativelanguage.googleapis.com/v1beta/openai");
-    case "groq":      return sendOpenAICompatChat(messages, config, "https://api.groq.com/openai/v1");
-    case "sambanova": return sendOpenAICompatChat(messages, config, "https://api.sambanova.ai/v1");
-    case "openrouter":
-      return sendOpenAICompatChat(messages, config, "https://openrouter.ai/api/v1", {
-        "HTTP-Referer": "https://oficina-tecnica.vercel.app",
-        "X-Title": "Oficina Técnica IA",
-      });
-    case "mistral":   return sendOpenAICompatChat(messages, config, "https://api.mistral.ai/v1");
-    case "cerebras":  return sendOpenAICompatChat(messages, config, "https://api.cerebras.ai/v1");
-    case "together":  return sendOpenAICompatChat(messages, config, "https://api.together.xyz/v1");
-    default:          return sendOllamaChat(messages, config);
+  if (config.provider === "ollama") return sendOllamaChat(messages, config);
+  if (config.provider === "anthropic") return sendAnthropicChat(messages, config);
+
+  // Try server proxy (Vercel env vars)
+  try {
+    const res = await fetch("/api/llm/chat", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ messages, provider: config.provider, model: config.model }),
+    });
+    if (res.ok) {
+      const data = await res.json();
+      return { content: data.content, model: data.model, provider: config.provider, tokensUsed: data.tokensUsed };
+    }
+    // 503 = env var not set → fall through to direct call
+    if (res.status !== 503) {
+      const err = await res.json().catch(() => ({ error: res.statusText }));
+      throw new Error(err.error || res.statusText);
+    }
+  } catch (e) {
+    // Network error calling our own proxy (e.g. running locally without Next.js) → fall through
+    if (!(e instanceof Error && e.message.includes("fetch"))) throw e;
   }
+
+  // Fallback: direct call with localStorage key (per-browser config)
+  if (!config.apiKey) throw new Error(`No API key configured for ${config.provider}. Ve a Conexiones para configurarlo.`);
+  return sendOpenAICompatChat(messages, config, getProviderBaseUrl(config.provider), getProviderExtraHeaders(config.provider));
+}
+
+function getProviderBaseUrl(provider: LLMProvider): string {
+  const map: Partial<Record<LLMProvider, string>> = {
+    gemini:     "https://generativelanguage.googleapis.com/v1beta/openai",
+    groq:       "https://api.groq.com/openai/v1",
+    sambanova:  "https://api.sambanova.ai/v1",
+    openrouter: "https://openrouter.ai/api/v1",
+    cerebras:   "https://api.cerebras.ai/v1",
+    mistral:    "https://api.mistral.ai/v1",
+    together:   "https://api.together.xyz/v1",
+    openai:     "https://api.openai.com/v1",
+  };
+  return map[provider] ?? "https://api.openai.com/v1";
+}
+
+function getProviderExtraHeaders(provider: LLMProvider): Record<string, string> {
+  if (provider === "openrouter") {
+    return { "HTTP-Referer": "https://oficina-tecnica.vercel.app", "X-Title": "Oficina Técnica IA" };
+  }
+  return {};
 }
 
 // Shared OpenAI-compatible chat (Groq, Sambanova, OpenRouter, Gemini all use this)
