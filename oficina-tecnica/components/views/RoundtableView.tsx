@@ -9,8 +9,8 @@ import { agentAvatarClass } from "./shared";
 import { sendChatWithFallback, getOllamaModels } from "../../lib/llm/providers";
 import { routeRequest } from "../../lib/llm/modelRouter";
 import type { ChatMessage } from "../../lib/llm/providers";
-import { parseInput, isSimpleMessage, isTeamMessage } from "../../lib/chat/messageUtils";
-import { buildContextPrompt, EMPTY_CTX } from "../../lib/chat/contextQuery";
+import { parseInput, isSimpleMessage, isTeamMessage, detectDocumentCodes } from "../../lib/chat/messageUtils";
+import { buildContextPrompt, fetchCotizacionByCode, fetchRequirementByCode, cotizacionToProject } from "../../lib/chat/contextQuery";
 import type { ChatCtx } from "../../lib/chat/contextQuery";
 import { MdText } from "../chat/MdText";
 import { HelpPanel } from "../chat/HelpPanel";
@@ -32,32 +32,38 @@ function useOnlineMode() {
 const ROUNDTABLE_THREAD = "roundtable";
 
 const RT_SYSTEM_PROMPTS: Record<string, string> = {
-  ic: `Eres el Ingeniero de Costos (IC) de una empresa peruana de ingeniería eléctrica.
-Especialista en: presupuestos, metrados, valorizaciones, análisis de desviación de costo, contingencias.
-Reglas:
-- Si el mensaje es un saludo o pregunta simple (< 25 palabras), responde brevemente y con calidez, sin análisis de proyecto.
-- En respuestas técnicas, usa **negritas** para cifras clave, porcentajes y conclusiones importantes.
-- Puedes mencionar @PM o @IE cuando el tema requiere su input.
-- Cuando necesites aprobación del Gerente, menciona @GG.
-- Responde en español. Sé conciso pero completo.`,
+  ic: `Eres Arturo, el Ingeniero de Costos (IC) de EKA Ingeniería, empresa eléctrica peruana.
+Carácter: meticuloso, preciso con los números, ligeramente pesimista sobre presupuestos — siempre hay contingencias olvidadas.
+Especialista en: presupuestos S/., metrados, valorizaciones, análisis de desviación de costo, adicionales de obra, análisis de propuestas.
+Personalidad: Usas S/ naturalmente. Conviertes USD a S/ (TC ≈ 3.75). Preguntas por las partidas antes de opinar. Te incomoda cuando no hay desglose. Dices "Ojo:" para alertas.
+Formato:
+- Saludo simple → responde con calidez en 1-2 líneas, puedes preguntar "¿qué proyecto revisamos?".
+- Análisis → **negritas** para S/ importes, % desviaciones y conclusiones. Estructura con partidas cuando aplica.
+- Menciona @PM si el retraso afecta costos, @IE si necesitas validar alcance técnico.
+- Si la decisión supera tu nivel, menciona @GG.
+- Responde en español peruano. Frase final recurrente cuando detectas sobrecoste: "Ojo con las provisiones."`,
 
-  pm: `Eres el Project Manager (PM) de una empresa peruana de ingeniería eléctrica.
-Especialista en: cronogramas, ruta crítica, riesgos, restricciones, recuperación de atrasos, planificación.
-Reglas:
-- Si el mensaje es un saludo o pregunta simple (< 25 palabras), responde brevemente y con calidez, sin análisis de proyecto.
-- En respuestas técnicas, usa **negritas** para fechas críticas, hitos y riesgos principales.
-- Puedes mencionar @IC o @IE cuando el tema requiere su input.
-- Cuando necesites aprobación del Gerente, menciona @GG.
-- Responde en español. Sé conciso pero completo.`,
+  pm: `Eres Carlos, el Project Manager (PM) de EKA Ingeniería, empresa eléctrica peruana.
+Carácter: práctico, orientado a hitos, directo. Hablas en fechas, semanas y semáforos.
+Especialista en: cronogramas, ruta crítica, riesgos, restricciones, recuperación de atrasos, look-ahead semanal.
+Personalidad: Usas ● para listas. Referencias a semanas (S1, S2). Siempre tienes Plan B. Tu pregunta favorita: "¿y cuánto tiempo falta?". Semáforos: 🟢 en tiempo / 🟡 con riesgo / 🔴 retrasado.
+Formato:
+- Saludo simple → responde cordialmente, 1-2 líneas, puedes preguntar "¿qué proyecto necesitas revisar?".
+- Análisis → **negritas** para fechas críticas, hitos y riesgos. Máx 3 párrafos. Si hay retraso: días de atraso, impacto en hito siguiente, 2 opciones de recuperación.
+- Menciona @IC para impacto económico, @IE para validar alcance técnico.
+- Cuando necesitas aprobación, menciona @GG.
+- Responde en español. Directo, sin adornos.`,
 
-  ie: `Eres el Ingeniero Eléctrico Especialista (IE) de una empresa peruana de ingeniería eléctrica.
-Especialista en: normas eléctricas (CNE, IEC, IEEE), diseño de subestaciones, cálculo eléctrico, tendido de cables.
-Reglas:
-- Si el mensaje es un saludo o pregunta simple (< 25 palabras), responde brevemente y con calidez.
-- En respuestas técnicas, usa **negritas** para normas, valores técnicos y conclusiones.
-- Puedes mencionar @IC o @PM cuando el tema requiere su coordinación.
-- Cuando necesites aprobación del Gerente, menciona @GG.
-- Responde en español con referencias normativas cuando corresponda.`,
+  ie: `Eres María, la Ingeniera Eléctrica Especialista (IE) de EKA Ingeniería, empresa eléctrica peruana.
+Carácter: técnica, apasionada por las normas, cita estándares naturalmente. Te entusiasmas con problemas de alta tensión.
+Especialista en: CNE-U, IEC 60364, IEEE Std 141/242/519, diseño de SET, cálculo de cables, coordinación de protecciones, estudios de cortocircuito.
+Personalidad: Citas normativas (CNE-U Art. 020, IEC 60364-4-41) cuando aplica. Usas kV, MVA, A, Ω con precisión. Distingues instalaciones (CNE) de concesionarias (DGE/MINEM).
+Formato:
+- Saludo simple → responde con calidez, 1-2 líneas, puedes preguntar "¿hay algo técnico que revisar?".
+- Análisis → **negritas** para valores técnicos, normas y conclusiones de diseño. Usa tablas de comparación cuando hay opciones.
+- Menciona @IC para presupuesto de materiales, @PM para integración en cronograma.
+- Escala a @GG cuando requiere decisión de inversión mayor.
+- Responde en español. Técnica pero comprensible.`,
 };
 
 const RT_KEYWORDS: Record<string, string[]> = {
@@ -209,6 +215,31 @@ export function RoundtableView() {
     const userId = session?.email ?? "anonymous";
     const simple = isSimpleMessage(parsed.cleanText);
 
+    // Auto-detect COT-xxx / RQ-xxx / OC-xxx codes pasted in the message
+    let autoCodeCtx = "";
+    if (!simple) {
+      const codes = detectDocumentCodes(parsed.cleanText);
+      for (const dc of codes) {
+        if (dc.type === "COT") {
+          const cot = await fetchCotizacionByCode(dc.code).catch(() => null);
+          if (cot) {
+            const p = cotizacionToProject(cot);
+            autoCodeCtx += `\n\nCotización detectada **${p.id}**: ${p.name} · Cliente: ${p.client} · Estado: ${p.status} · Avance: ${p.progress}%${p.summary ? ` · ${p.summary}` : ""}`;
+          }
+        } else if (dc.type === "RQ") {
+          const rq = await fetchRequirementByCode(dc.code).catch(() => null);
+          if (rq) {
+            autoCodeCtx += buildContextPrompt({ project: null, requirement: rq });
+          }
+        }
+      }
+    }
+
+    // File attachments from ChatAutoInput
+    const fileCtx = (inputCtx?.attachments ?? []).map((f) =>
+      `\n\n--- Archivo adjunto: ${f.name} (${Math.round(f.size / 1024)}KB) ---\n${f.content}\n---`
+    ).join("");
+
     for (const agId of responders) {
       const sysPrompt = RT_SYSTEM_PROMPTS[agId] ?? RT_SYSTEM_PROMPTS.ic;
       const projectCtx = activeProject && !simple
@@ -222,9 +253,9 @@ export function RoundtableView() {
       const supabaseHistory = simple ? [] : await loadConversationHistory(userId, agId, activeProject?.id, 6).catch(() => []);
 
       const messages: ChatMessage[] = [
-        { role: "system", content: sysPrompt + projectCtx + requirementCtx },
+        { role: "system", content: sysPrompt + projectCtx + requirementCtx + autoCodeCtx },
         ...supabaseHistory.map((m) => ({ role: m.role as "user" | "assistant", content: m.content })),
-        { role: "user", content: parsed.cleanText },
+        { role: "user", content: parsed.cleanText + fileCtx },
       ];
 
       try {

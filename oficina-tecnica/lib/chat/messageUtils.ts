@@ -125,3 +125,35 @@ export function parseMd(text: string): MdSegment[] {
 }
 
 export { AGENT_LABELS };
+
+// ── Document code detection ──────────────────────────────────────────────────
+// Detects codes like COT-EKA-2026-001, RQ-001, OC-123 pasted in chat
+
+export interface DocumentCode {
+  type: "COT" | "RQ" | "OC";
+  code: string;
+}
+
+export function detectDocumentCodes(text: string): DocumentCode[] {
+  const results: DocumentCode[] = [];
+  const seen = new Set<string>();
+
+  const cotRe = /\bCOT-[A-Z]{2,8}-\d{4}-\d{3,}\b/gi;
+  const rqRe  = /\bRQ-[\d-]+\b/gi;
+  const ocRe  = /\bOC-[\d-]+\b/gi;
+
+  for (const m of text.matchAll(cotRe)) {
+    const c = m[0].toUpperCase();
+    if (!seen.has(c)) { results.push({ type: "COT", code: c }); seen.add(c); }
+  }
+  for (const m of text.matchAll(rqRe)) {
+    const c = m[0].toUpperCase();
+    if (!seen.has(c)) { results.push({ type: "RQ", code: c }); seen.add(c); }
+  }
+  for (const m of text.matchAll(ocRe)) {
+    const c = m[0].toUpperCase();
+    if (!seen.has(c)) { results.push({ type: "OC", code: c }); seen.add(c); }
+  }
+
+  return results;
+}
