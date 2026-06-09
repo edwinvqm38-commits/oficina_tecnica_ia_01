@@ -1,5 +1,5 @@
 // Supported LLM providers
-export type LLMProvider = "ollama" | "openai" | "anthropic" | "gemini" | "groq" | "sambanova" | "openrouter";
+export type LLMProvider = "ollama" | "openai" | "anthropic" | "gemini" | "groq" | "sambanova" | "openrouter" | "mistral" | "cerebras" | "together";
 
 export type ModelConfig = {
   provider: LLMProvider;
@@ -56,6 +56,9 @@ export async function sendChat(messages: ChatMessage[], config: ModelConfig): Pr
         "HTTP-Referer": "https://oficina-tecnica.vercel.app",
         "X-Title": "Oficina Técnica IA",
       });
+    case "mistral":   return sendOpenAICompatChat(messages, config, "https://api.mistral.ai/v1");
+    case "cerebras":  return sendOpenAICompatChat(messages, config, "https://api.cerebras.ai/v1");
+    case "together":  return sendOpenAICompatChat(messages, config, "https://api.together.xyz/v1");
     default:          return sendOllamaChat(messages, config);
   }
 }

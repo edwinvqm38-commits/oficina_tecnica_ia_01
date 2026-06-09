@@ -6,6 +6,10 @@ import { Icons } from "../../lib/icons";
 import { ROUTE_GROUPS, type RouteDef } from "../../lib/routes";
 import { useStore, useSkillsWithOverrides, usePendingApprovalsCount } from "../../lib/store/StoreProvider";
 import { KNOWLEDGE, PROJECTS } from "../../lib/data";
+import { useSession } from "../../lib/auth/useSession";
+
+const ADMIN_EMAIL = "edwin.qm@outlook.com";
+const ADMIN_ROUTES = new Set(["connections"]);
 
 function hasActiveChild(item: RouteDef, activeRoute: string): boolean {
   return item.children?.some((child) => child.id === activeRoute) ?? false;
@@ -93,6 +97,8 @@ function ParentItem({
 
 export function Sidebar({ activeRoute }: { activeRoute: string }) {
   const { state } = useStore();
+  const { session } = useSession(false);
+  const isAdmin = session?.email === ADMIN_EMAIL;
   const pendingApprovals = usePendingApprovalsCount();
   const skills = useSkillsWithOverrides();
   const proposedKB = [...KNOWLEDGE, ...state.knowledge].filter((k) => k.status === "proposed").length;
@@ -119,7 +125,7 @@ export function Sidebar({ activeRoute }: { activeRoute: string }) {
         {ROUTE_GROUPS.map((group) => (
           <div key={group.label} className="sb-group">
             <span className="sb-group-label">{group.label}</span>
-            {group.items.map((item) => {
+            {group.items.filter((item) => !ADMIN_ROUTES.has(item.id) || isAdmin).map((item) => {
               if (item.children && item.children.length > 0) {
                 return (
                   <ParentItem

@@ -26,6 +26,18 @@ export const RECOMMENDED_MODELS = {
     { model: "mistralai/mistral-7b-instruct:free",          label: "Mistral 7B (free)",      description: "Gratis · buen español",                    recommended: false },
     { model: "meta-llama/llama-3.1-70b-instruct:free",      label: "Llama 3.1 70B (free)",   description: "Gratis · análisis complejo",               recommended: false },
   ],
+  cerebras: [
+    { model: "llama3.1-8b",  label: "Llama 3.1 8B",  description: "Gratis · el más rápido del mundo (~1000 tok/s)", recommended: true },
+    { model: "llama3.1-70b", label: "Llama 3.1 70B", description: "Gratis · potente · análisis complejo",            recommended: false },
+  ],
+  mistral: [
+    { model: "mistral-small-latest", label: "Mistral Small", description: "Gratis · rápido · excelente español",  recommended: true },
+    { model: "mistral-large-latest", label: "Mistral Large", description: "Gratis · análisis avanzado",           recommended: false },
+  ],
+  together: [
+    { model: "meta-llama/Meta-Llama-3.1-8B-Instruct-Turbo",  label: "Llama 3.1 8B Turbo",  description: "Gratis (créditos) · rápido",   recommended: true },
+    { model: "meta-llama/Meta-Llama-3.1-70B-Instruct-Turbo", label: "Llama 3.1 70B Turbo", description: "Gratis (créditos) · potente",   recommended: false },
+  ],
   openai: [
     { model: "gpt-4o-mini", label: "GPT-4o Mini", description: "Pago · económico · rápido (~$0.01 / 50 msgs)",  recommended: true },
     { model: "gpt-4o",      label: "GPT-4o",      description: "Pago · análisis profundo y razonamiento",       recommended: false },

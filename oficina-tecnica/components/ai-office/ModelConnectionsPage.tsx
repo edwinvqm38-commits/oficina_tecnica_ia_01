@@ -20,7 +20,7 @@ import {
 type OllamaStatus = "checking" | "connected" | "disconnected";
 
 type AgentModelAssignment = {
-  provider: "ollama" | "gemini" | "groq" | "sambanova" | "openrouter" | "openai" | "anthropic";
+  provider: "ollama" | "gemini" | "groq" | "sambanova" | "openrouter" | "cerebras" | "mistral" | "together" | "openai" | "anthropic";
   model: string;
 };
 
@@ -31,12 +31,15 @@ type CompatBadge = {
 
 const LS_OLLAMA_URL = "ot:ollama:baseUrl";
 const LS_AGENT_MODELS = "ot:agent:models";
-const LS_APIKEY_GEMINI = "ot:apikey:gemini";
-const LS_APIKEY_GROQ = "ot:apikey:groq";
-const LS_APIKEY_SAMBANOVA = "ot:apikey:sambanova";
-const LS_APIKEY_OPENROUTER = "ot:apikey:openrouter";
-const LS_APIKEY_OPENAI = "ot:apikey:openai";
-const LS_APIKEY_ANTHROPIC = "ot:apikey:anthropic";
+const LS_APIKEY_GEMINI      = "ot:apikey:gemini";
+const LS_APIKEY_GROQ        = "ot:apikey:groq";
+const LS_APIKEY_SAMBANOVA   = "ot:apikey:sambanova";
+const LS_APIKEY_OPENROUTER  = "ot:apikey:openrouter";
+const LS_APIKEY_CEREBRAS    = "ot:apikey:cerebras";
+const LS_APIKEY_MISTRAL     = "ot:apikey:mistral";
+const LS_APIKEY_TOGETHER    = "ot:apikey:together";
+const LS_APIKEY_OPENAI      = "ot:apikey:openai";
+const LS_APIKEY_ANTHROPIC   = "ot:apikey:anthropic";
 const LS_NEW_DEVICE_DISMISSED = "ot:newdevice:dismissed";
 
 function getLS(key: string, fallback: string): string {
@@ -609,6 +612,9 @@ function AgentModelAssignments({
                     <option value="groq">Groq (Llama · gratis)</option>
                     <option value="sambanova">Sambanova (DeepSeek · gratis)</option>
                     <option value="openrouter">OpenRouter (varios · gratis)</option>
+                    <option value="cerebras">Cerebras (ultra-rápido · gratis)</option>
+                    <option value="mistral">Mistral AI (español · gratis)</option>
+                    <option value="together">Together AI (gratis con créditos)</option>
                   </optgroup>
                   <optgroup label="— Local —">
                     <option value="ollama">Ollama (local)</option>
@@ -739,6 +745,21 @@ function ApiKeysSection({ sectionRef }: { sectionRef: React.RefObject<HTMLDivEle
               label="OpenRouter API Key (varios modelos gratuitos)"
               storageKey={LS_APIKEY_OPENROUTER}
               placeholder="sk-or-…"
+            />
+            <ApiKeyRow
+              label="Cerebras API Key (ultrarrápido ~1000 tok/s · gratis)"
+              storageKey={LS_APIKEY_CEREBRAS}
+              placeholder="csk-…"
+            />
+            <ApiKeyRow
+              label="Mistral AI API Key (buen español · gratis)"
+              storageKey={LS_APIKEY_MISTRAL}
+              placeholder="…"
+            />
+            <ApiKeyRow
+              label="Together AI API Key (20+ modelos · gratis con créditos)"
+              storageKey={LS_APIKEY_TOGETHER}
+              placeholder="…"
             />
           </div>
         </div>

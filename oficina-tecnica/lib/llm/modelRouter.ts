@@ -40,6 +40,9 @@ export function routeRequest(
   const groqKey       = getKey("ot:apikey:groq");
   const sambanovaKey  = getKey("ot:apikey:sambanova");
   const openrouterKey = getKey("ot:apikey:openrouter");
+  const mistralKey    = getKey("ot:apikey:mistral");
+  const cerebrasKey   = getKey("ot:apikey:cerebras");
+  const togetherKey   = getKey("ot:apikey:together");
   const openaiKey     = getKey("ot:apikey:openai");
   const anthropicKey  = getKey("ot:apikey:anthropic");
 
@@ -50,6 +53,7 @@ export function routeRequest(
       openai: openaiKey, anthropic: anthropicKey,
       gemini: geminiKey, groq: groqKey,
       sambanova: sambanovaKey, openrouter: openrouterKey,
+      mistral: mistralKey, cerebras: cerebrasKey, together: togetherKey,
     };
     const key = keyMap[prov];
     if (key || prov === "ollama") {
@@ -115,7 +119,40 @@ export function routeRequest(
     };
   }
 
-  // ── Priority 5: Ollama local ───────────────────────────────────────────────
+  // ── Priority 5: Cerebras (ultrarrápido, gratis) ────────────────────────────
+  if (cerebrasKey) {
+    const model = isDeep ? "llama3.1-70b" : "llama3.1-8b";
+    return {
+      config: { provider: "cerebras", model, apiKey: cerebrasKey },
+      complexity,
+      reason: "Cerebras → ultrarrápido (gratis)",
+      modelLabel: model,
+    };
+  }
+
+  // ── Priority 6: Mistral (gratis, buen español) ─────────────────────────────
+  if (mistralKey) {
+    const model = isDeep ? "mistral-large-latest" : "mistral-small-latest";
+    return {
+      config: { provider: "mistral", model, apiKey: mistralKey },
+      complexity,
+      reason: isDeep ? "Mistral Large → análisis (gratis)" : "Mistral Small → rápido (gratis)",
+      modelLabel: model,
+    };
+  }
+
+  // ── Priority 7: Together AI (gratis con créditos) ──────────────────────────
+  if (togetherKey) {
+    const model = isDeep ? "meta-llama/Meta-Llama-3.1-70B-Instruct-Turbo" : "meta-llama/Meta-Llama-3.1-8B-Instruct-Turbo";
+    return {
+      config: { provider: "together", model, apiKey: togetherKey },
+      complexity,
+      reason: "Together AI (gratis)",
+      modelLabel: model.split("/").pop() ?? model,
+    };
+  }
+
+  // ── Priority 8: Ollama local ───────────────────────────────────────────────
   if (availableOllamaModels.length > 0) {
     const canRun14b = deviceProfile?.tier === "high";
 
