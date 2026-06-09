@@ -157,4 +157,6 @@ export type ChatMessage = {
   text: string;
   time: string;
   agentId?: string;
+  modelLabel?: string;
+  isError?: boolean;
 };

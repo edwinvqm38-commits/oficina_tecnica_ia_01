@@ -2,54 +2,49 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { aiAgentsMock } from "@/lib/ai-office/aiAgentsMock";
-import {
-  checkOllamaConnectivity,
-  getOllamaModels,
-} from "@/lib/llm/providers";
-import {
-  DEFAULT_AGENT_MODELS,
-  OLLAMA_SETUP_STEPS,
-  RECOMMENDED_MODELS,
-} from "@/lib/llm/agentModels";
+import { checkOllamaConnectivity, getOllamaModels } from "@/lib/llm/providers";
+import { DEFAULT_AGENT_MODELS, OLLAMA_SETUP_STEPS, RECOMMENDED_MODELS } from "@/lib/llm/agentModels";
 
 type OllamaStatus = "checking" | "connected" | "disconnected";
 
-type AgentModelAssignment = {
-  provider: "ollama" | "openai" | "anthropic";
-  model: string;
-};
+type ProviderKey =
+  | "ollama" | "gemini" | "groq" | "sambanova" | "openrouter"
+  | "cerebras" | "mistral" | "together" | "huggingface"
+  | "openai" | "anthropic";
 
-const LS_OLLAMA_URL = "ot:ollama:baseUrl";
+type AgentModelAssignment = { provider: ProviderKey; model: string };
+
+const LS_OLLAMA_URL   = "ot:ollama:baseUrl";
 const LS_AGENT_MODELS = "ot:agent:models";
-const LS_APIKEY_OPENAI = "ot:apikey:openai";
-const LS_APIKEY_ANTHROPIC = "ot:apikey:anthropic";
+
+const API_KEY_FIELDS: { label: string; key: string; placeholder: string; envVar: string }[] = [
+  { label: "Gemini (Google)",   key: "ot:apikey:gemini",      placeholder: "AIza…",                    envVar: "NEXT_PUBLIC_GEMINI_API_KEY" },
+  { label: "Groq",              key: "ot:apikey:groq",        placeholder: "gsk_…",                    envVar: "GROQ_API_KEY" },
+  { label: "Sambanova",         key: "ot:apikey:sambanova",   placeholder: "xxxxxxxx-xxxx-xxxx-…",     envVar: "SAMBANOVA_API_KEY" },
+  { label: "OpenRouter",        key: "ot:apikey:openrouter",  placeholder: "sk-or-v1-…",              envVar: "OPENROUTER_API_KEY" },
+  { label: "Cerebras",          key: "ot:apikey:cerebras",    placeholder: "csk-…",                    envVar: "CEREBRAS_API_KEY" },
+  { label: "Mistral AI",        key: "ot:apikey:mistral",     placeholder: "…",                        envVar: "MISTRAL_API_KEY" },
+  { label: "Together AI",       key: "ot:apikey:together",    placeholder: "…",                        envVar: "TOGETHER_API_KEY" },
+  { label: "Hugging Face",      key: "ot:apikey:huggingface", placeholder: "hf_…",                     envVar: "HUGGINGFACE_API_KEY" },
+  { label: "OpenAI",            key: "ot:apikey:openai",      placeholder: "sk-…",                     envVar: "OPENAI_API_KEY" },
+  { label: "Anthropic",         key: "ot:apikey:anthropic",   placeholder: "sk-ant-…",                 envVar: "ANTHROPIC_API_KEY" },
+];
 
 function getLS(key: string, fallback: string): string {
   if (typeof window === "undefined") return fallback;
   return localStorage.getItem(key) ?? fallback;
 }
 
-// ── Ollama Status Banner ────────────────────────────────────────────────────
+// ── Ollama Status Banner ──────────────────────────────────────────────────────
 
 function OllamaStatusBanner({
-  status,
-  ollamaUrl,
-  ollamaModels,
-  setupOpen,
-  onToggleSetup,
+  status, ollamaUrl, ollamaModels, setupOpen, onToggleSetup,
 }: {
-  status: OllamaStatus;
-  ollamaUrl: string;
-  ollamaModels: string[];
-  setupOpen: boolean;
-  onToggleSetup: () => void;
+  status: OllamaStatus; ollamaUrl: string; ollamaModels: string[]; setupOpen: boolean; onToggleSetup: () => void;
 }) {
   if (status === "checking") {
     return (
-      <div
-        className="card"
-        style={{ borderLeft: "3px solid var(--blue)", padding: "12px 16px", display: "flex", alignItems: "center", gap: 10 }}
-      >
+      <div className="card" style={{ borderLeft: "3px solid var(--blue)", padding: "12px 16px", display: "flex", alignItems: "center", gap: 10 }}>
         <span className="spinner" />
         <p style={{ fontSize: 13, color: "var(--t2)" }}>Verificando conexión con Ollama…</p>
       </div>
@@ -58,27 +53,19 @@ function OllamaStatusBanner({
 
   if (status === "connected") {
     return (
-      <div
-        className="card"
-        style={{ borderLeft: "3px solid var(--green)", padding: "12px 16px" }}
-      >
+      <div className="card" style={{ borderLeft: "3px solid var(--green)", padding: "12px 16px" }}>
         <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
           <span style={{ width: 8, height: 8, borderRadius: "50%", background: "var(--green)", flexShrink: 0 }} />
           <p style={{ fontSize: 13, fontWeight: 600, color: "var(--green-text)" }}>
-            Ollama conectado en{" "}
-            <span style={{ fontFamily: "var(--mono)", fontWeight: 500 }}>{ollamaUrl}</span>
+            Ollama conectado en <span style={{ fontFamily: "var(--mono)" }}>{ollamaUrl}</span>
             {" — "}
-            {ollamaModels.length > 0
-              ? `${ollamaModels.length} modelo${ollamaModels.length !== 1 ? "s" : ""} disponible${ollamaModels.length !== 1 ? "s" : ""}`
-              : "sin modelos descargados"}
+            {ollamaModels.length > 0 ? `${ollamaModels.length} modelo${ollamaModels.length !== 1 ? "s" : ""} disponible${ollamaModels.length !== 1 ? "s" : ""}` : "sin modelos descargados"}
           </p>
         </div>
         {ollamaModels.length > 0 && (
           <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginTop: 8 }}>
             {ollamaModels.map((m) => (
-              <span key={m} className="badge badge--slate" style={{ fontFamily: "var(--mono)", fontSize: 11 }}>
-                {m}
-              </span>
+              <span key={m} className="badge badge--slate" style={{ fontFamily: "var(--mono)", fontSize: 11 }}>{m}</span>
             ))}
           </div>
         )}
@@ -86,72 +73,39 @@ function OllamaStatusBanner({
     );
   }
 
-  // disconnected
   return (
-    <div
-      className="card"
-      style={{ borderLeft: "3px solid var(--amber)" }}
-    >
-      <div
-        style={{ padding: "12px 16px", display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10 }}
-      >
+    <div className="card" style={{ borderLeft: "3px solid var(--amber)" }}>
+      <div style={{ padding: "12px 16px", display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10 }}>
         <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
           <span style={{ width: 8, height: 8, borderRadius: "50%", background: "var(--amber)", flexShrink: 0 }} />
           <p style={{ fontSize: 13, fontWeight: 600, color: "var(--amber-text)" }}>
-            Ollama no detectado en{" "}
-            <span style={{ fontFamily: "var(--mono)", fontWeight: 500 }}>{ollamaUrl}</span>
+            Ollama no detectado en <span style={{ fontFamily: "var(--mono)" }}>{ollamaUrl}</span>
           </p>
         </div>
-        <button
-          className="btn btn--ghost btn--sm"
-          onClick={onToggleSetup}
-        >
+        <button className="btn btn--ghost btn--sm" onClick={onToggleSetup}>
           {setupOpen ? "Ocultar guía" : "Guía de instalación"}
         </button>
       </div>
 
       {setupOpen && (
         <div style={{ borderTop: "1px solid var(--amber-border)", padding: "16px", background: "var(--amber-bg)" }}>
-          <p style={{ fontSize: 12, fontWeight: 700, color: "var(--amber-text)", marginBottom: 14, textTransform: "uppercase", letterSpacing: "0.08em" }}>
-            Cómo instalar Ollama
-          </p>
+          <p style={{ fontSize: 12, fontWeight: 700, color: "var(--amber-text)", marginBottom: 14, textTransform: "uppercase", letterSpacing: "0.08em" }}>Cómo instalar Ollama</p>
           <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
             {OLLAMA_SETUP_STEPS.map((s) => (
               <div key={s.step} style={{ display: "flex", gap: 14, alignItems: "flex-start" }}>
-                <div
-                  style={{
-                    width: 24, height: 24, borderRadius: "50%",
-                    background: "var(--amber)", color: "#fff",
-                    display: "flex", alignItems: "center", justifyContent: "center",
-                    fontSize: 11, fontWeight: 700, flexShrink: 0,
-                  }}
-                >
+                <div style={{ width: 24, height: 24, borderRadius: "50%", background: "var(--amber)", color: "#fff", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 11, fontWeight: 700, flexShrink: 0 }}>
                   {s.step}
                 </div>
-                <div style={{ flex: 1, minWidth: 0 }}>
+                <div style={{ flex: 1 }}>
                   <p style={{ fontSize: 13, fontWeight: 600, color: "var(--t1)", marginBottom: 3 }}>{s.title}</p>
                   <p style={{ fontSize: 12, color: "var(--t2)", lineHeight: 1.5, marginBottom: s.command ? 6 : 0 }}>{s.description}</p>
                   {s.command && (
-                    <pre
-                      style={{
-                        fontFamily: "var(--mono)", fontSize: 12,
-                        background: "var(--bg-subtle)", border: "1px solid var(--border)",
-                        borderRadius: "var(--r)", padding: "6px 10px",
-                        color: "var(--t1)", overflowX: "auto",
-                      }}
-                    >
+                    <pre style={{ fontFamily: "var(--mono)", fontSize: 12, background: "var(--bg-subtle)", border: "1px solid var(--border)", borderRadius: "var(--r)", padding: "6px 10px", color: "var(--t1)", overflowX: "auto" }}>
                       {s.command}
                     </pre>
                   )}
                   {s.link && (
-                    <a
-                      href={s.link}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      style={{ fontSize: 11, color: "var(--blue)", marginTop: 4, display: "inline-block" }}
-                    >
-                      {s.link}
-                    </a>
+                    <a href={s.link} target="_blank" rel="noopener noreferrer" style={{ fontSize: 11, color: "var(--blue)", marginTop: 4, display: "inline-block" }}>{s.link}</a>
                   )}
                 </div>
               </div>
@@ -163,18 +117,10 @@ function OllamaStatusBanner({
   );
 }
 
-// ── Ollama URL Config ───────────────────────────────────────────────────────
+// ── Ollama URL Config ─────────────────────────────────────────────────────────
 
-function OllamaUrlConfig({
-  ollamaUrl,
-  onUrlChange,
-  onTest,
-  status,
-}: {
-  ollamaUrl: string;
-  onUrlChange: (url: string) => void;
-  onTest: () => void;
-  status: OllamaStatus;
+function OllamaUrlConfig({ ollamaUrl, onUrlChange, onTest, status }: {
+  ollamaUrl: string; onUrlChange: (url: string) => void; onTest: () => void; status: OllamaStatus;
 }) {
   const [draft, setDraft] = useState(ollamaUrl);
 
@@ -196,23 +142,10 @@ function OllamaUrlConfig({
       <div className="card-body" style={{ display: "flex", gap: 8, alignItems: "flex-end", flexWrap: "wrap" }}>
         <div className="field" style={{ flex: 1, minWidth: 220, marginBottom: 0 }}>
           <label className="field-label">Base URL</label>
-          <input
-            className="input"
-            type="url"
-            value={draft}
-            onChange={(e) => setDraft(e.target.value)}
-            placeholder="http://localhost:11434"
-          />
-          <span className="field-hint">
-            Por defecto: http://localhost:11434. Cambia si usas Cloudflare Tunnel u otro proxy.
-          </span>
+          <input className="input" type="url" value={draft} onChange={(e) => setDraft(e.target.value)} placeholder="http://localhost:11434" />
+          <span className="field-hint">Por defecto: http://localhost:11434. Cambia si usas Cloudflare Tunnel u otro proxy.</span>
         </div>
-        <button
-          className="btn btn--primary btn--sm"
-          onClick={handleSave}
-          disabled={status === "checking"}
-          style={{ flexShrink: 0, marginBottom: 18 }}
-        >
+        <button className="btn btn--primary btn--sm" onClick={handleSave} disabled={status === "checking"} style={{ flexShrink: 0, marginBottom: 18 }}>
           {status === "checking" ? "Probando…" : "Probar conexión"}
         </button>
       </div>
@@ -220,17 +153,15 @@ function OllamaUrlConfig({
   );
 }
 
-// ── Agent Model Assignments ─────────────────────────────────────────────────
+// ── Agent Model Assignments ───────────────────────────────────────────────────
 
-function AgentModelAssignments({
-  assignments,
-  onChange,
-  ollamaModels,
-}: {
+function AgentModelAssignments({ assignments, onChange, ollamaModels }: {
   assignments: Record<string, AgentModelAssignment>;
   onChange: (agentId: string, value: AgentModelAssignment) => void;
   ollamaModels: string[];
 }) {
+  const allProviders: ProviderKey[] = ["gemini", "groq", "sambanova", "openrouter", "cerebras", "mistral", "together", "huggingface", "ollama", "openai", "anthropic"];
+
   return (
     <div className="card">
       <div className="card-header">
@@ -238,86 +169,75 @@ function AgentModelAssignments({
           <p className="page-eyebrow" style={{ marginBottom: 2 }}>Asignaciones</p>
           <p style={{ fontSize: 13, fontWeight: 600, color: "var(--t1)" }}>Modelos por agente</p>
         </div>
-        <span className="badge badge--slate">
-          {aiAgentsMock.length} agentes
-        </span>
+        <span className="badge badge--slate">{aiAgentsMock.length} agentes</span>
       </div>
 
       <div style={{ display: "flex", flexDirection: "column" }}>
         {aiAgentsMock.map((agent, idx) => {
-          const asgn = assignments[agent.id] ?? DEFAULT_AGENT_MODELS[agent.id] ?? { provider: "ollama", model: "qwen2.5:7b" };
-          const providerKey = asgn.provider as "ollama" | "openai" | "anthropic";
+          const asgn: AgentModelAssignment = (assignments[agent.id] as AgentModelAssignment | undefined) ?? (DEFAULT_AGENT_MODELS[agent.id] as AgentModelAssignment | undefined) ?? { provider: "gemini", model: "gemini-1.5-flash" };
           const models =
-            providerKey === "ollama"
+            asgn.provider === "ollama"
               ? [
                   ...RECOMMENDED_MODELS.ollama,
                   ...ollamaModels
                     .filter((m) => !RECOMMENDED_MODELS.ollama.find((r) => r.model === m))
                     .map((m) => ({ model: m, label: m, description: "Instalado localmente", recommended: false, size: undefined })),
                 ]
-              : RECOMMENDED_MODELS[providerKey];
+              : RECOMMENDED_MODELS[asgn.provider] ?? RECOMMENDED_MODELS.gemini;
 
           return (
-            <div
-              key={agent.id}
-              style={{
-                padding: "12px 16px",
-                borderBottom: idx < aiAgentsMock.length - 1 ? "1px solid var(--border)" : "none",
-                display: "flex",
-                gap: 16,
-                alignItems: "flex-start",
-                flexWrap: "wrap",
-              }}
-            >
-              {/* Agent info */}
+            <div key={agent.id} style={{ padding: "12px 16px", borderBottom: idx < aiAgentsMock.length - 1 ? "1px solid var(--border)" : "none", display: "flex", gap: 16, alignItems: "flex-start", flexWrap: "wrap" }}>
               <div style={{ flex: "0 0 auto", minWidth: 160 }}>
                 <p style={{ fontSize: 13, fontWeight: 600, color: "var(--t1)" }}>{agent.name}</p>
                 <p style={{ fontSize: 11, color: "var(--t3)", marginTop: 2 }}>{agent.role}</p>
               </div>
 
-              {/* Provider selector */}
               <div className="field" style={{ flex: "1 1 140px", minWidth: 140, marginBottom: 0 }}>
                 <label className="field-label">Proveedor</label>
                 <select
                   className="select"
                   value={asgn.provider}
                   onChange={(e) => {
-                    const prov = e.target.value as "ollama" | "openai" | "anthropic";
-                    const firstModel = RECOMMENDED_MODELS[prov][0]?.model ?? "";
+                    const prov = e.target.value as ProviderKey;
+                    const firstModel = (RECOMMENDED_MODELS[prov] ?? RECOMMENDED_MODELS.gemini)[0]?.model ?? "";
                     onChange(agent.id, { provider: prov, model: firstModel });
                   }}
                 >
-                  <option value="ollama">Ollama (local)</option>
-                  <option value="openai">OpenAI</option>
-                  <option value="anthropic">Anthropic</option>
+                  <optgroup label="Gratuitos (recomendados)">
+                    <option value="gemini">Gemini (Google)</option>
+                    <option value="groq">Groq</option>
+                    <option value="sambanova">Sambanova</option>
+                    <option value="openrouter">OpenRouter</option>
+                    <option value="cerebras">Cerebras</option>
+                    <option value="mistral">Mistral AI</option>
+                    <option value="together">Together AI</option>
+                    <option value="huggingface">Hugging Face</option>
+                  </optgroup>
+                  <optgroup label="Local">
+                    <option value="ollama">Ollama (local)</option>
+                  </optgroup>
+                  <optgroup label="De pago">
+                    <option value="openai">OpenAI</option>
+                    <option value="anthropic">Anthropic</option>
+                  </optgroup>
                 </select>
               </div>
 
-              {/* Model selector */}
               <div className="field" style={{ flex: "2 1 200px", minWidth: 200, marginBottom: 0 }}>
                 <label className="field-label">Modelo</label>
-                <select
-                  className="select"
-                  value={asgn.model}
-                  onChange={(e) => onChange(agent.id, { ...asgn, model: e.target.value })}
-                >
+                <select className="select" value={asgn.model} onChange={(e) => onChange(agent.id, { ...asgn, model: e.target.value })}>
                   {models.map((m) => (
                     <option key={m.model} value={m.model}>
                       {m.label}{m.recommended ? " ★" : ""}{"size" in m && m.size ? ` (${m.size})` : ""}
                     </option>
                   ))}
                 </select>
-                {/* Recommended badge + description */}
                 {(() => {
                   const selected = models.find((m) => m.model === asgn.model);
                   if (!selected) return null;
                   return (
                     <p className="field-hint" style={{ marginTop: 4 }}>
-                      {selected.recommended && (
-                        <span className="badge badge--green" style={{ marginRight: 6, fontSize: 10 }}>
-                          Recomendado
-                        </span>
-                      )}
+                      {selected.recommended && <span className="badge badge--green" style={{ marginRight: 6, fontSize: 10 }}>Recomendado</span>}
                       {selected.description}
                     </p>
                   );
@@ -331,16 +251,31 @@ function AgentModelAssignments({
   );
 }
 
-// ── API Keys ────────────────────────────────────────────────────────────────
+// ── API Keys (solo este navegador) ────────────────────────────────────────────
 
-function ApiKeyRow({
-  label,
-  storageKey,
-  placeholder,
-}: {
-  label: string;
-  storageKey: string;
-  placeholder: string;
+function ServerStatusSection() {
+  const [status, setStatus] = useState<Record<string, boolean> | null>(null);
+
+  useEffect(() => {
+    fetch("/api/llm/status").then((r) => r.json()).then(setStatus).catch(() => null);
+  }, []);
+
+  if (!status) return null;
+
+  const configured = Object.entries(status).filter(([, v]) => v).map(([k]) => k);
+
+  if (configured.length === 0) return null;
+
+  return (
+    <div style={{ background: "var(--green-bg)", border: "1px solid var(--green-border)", borderRadius: "var(--r)", padding: "10px 14px", fontSize: 12, color: "var(--green-text)" }}>
+      <strong>Proveedores activos en Vercel (disponibles para todos los usuarios):</strong>{" "}
+      {configured.join(", ")}
+    </div>
+  );
+}
+
+function ApiKeyRow({ label, storageKey, placeholder, envVar }: {
+  label: string; storageKey: string; placeholder: string; envVar: string;
 }) {
   const [value, setValue] = useState(() => getLS(storageKey, ""));
   const [saved, setSaved] = useState(false);
@@ -353,22 +288,17 @@ function ApiKeyRow({
 
   return (
     <div className="field" style={{ marginBottom: 0 }}>
-      <label className="field-label">{label}</label>
+      <label className="field-label">
+        {label}
+        <span style={{ fontFamily: "var(--mono)", fontSize: 10, color: "var(--t3)", marginLeft: 6 }}>{envVar}</span>
+      </label>
       <div style={{ display: "flex", gap: 8 }}>
         <input
-          className="input"
-          type="password"
-          value={value}
+          className="input" type="password" value={value}
           onChange={(e) => setValue(e.target.value)}
-          placeholder={placeholder}
-          autoComplete="off"
-          style={{ flex: 1 }}
+          placeholder={placeholder} autoComplete="off" style={{ flex: 1 }}
         />
-        <button
-          className={saved ? "btn btn--success btn--sm" : "btn btn--ghost btn--sm"}
-          onClick={handleSave}
-          style={{ flexShrink: 0 }}
-        >
+        <button className={saved ? "btn btn--success btn--sm" : "btn btn--ghost btn--sm"} onClick={handleSave} style={{ flexShrink: 0 }}>
           {saved ? "Guardado" : "Guardar"}
         </button>
       </div>
@@ -381,45 +311,23 @@ function ApiKeysSection() {
     <div className="card">
       <div className="card-header">
         <div>
-          <p className="page-eyebrow" style={{ marginBottom: 2 }}>Seguridad</p>
-          <p style={{ fontSize: 13, fontWeight: 600, color: "var(--t1)" }}>Claves API</p>
+          <p className="page-eyebrow" style={{ marginBottom: 2 }}>Solo este navegador</p>
+          <p style={{ fontSize: 13, fontWeight: 600, color: "var(--t1)" }}>API keys locales</p>
         </div>
       </div>
       <div className="card-body" style={{ display: "flex", flexDirection: "column", gap: 14 }}>
-        <ApiKeyRow
-          label="OpenAI API Key"
-          storageKey={LS_APIKEY_OPENAI}
-          placeholder="sk-…"
-        />
-        <ApiKeyRow
-          label="Anthropic API Key"
-          storageKey={LS_APIKEY_ANTHROPIC}
-          placeholder="sk-ant-…"
-        />
-        <div
-          style={{
-            background: "var(--blue-bg)",
-            border: "1px solid var(--blue-border)",
-            borderRadius: "var(--r)",
-            padding: "10px 12px",
-            fontSize: 12,
-            color: "var(--blue-text)",
-            lineHeight: 1.6,
-          }}
-        >
-          Las claves se guardan solo en este navegador. Para acceso desde múltiples
-          dispositivos, configúralas como variables de entorno en Vercel (
-          <code style={{ fontFamily: "var(--mono)", fontSize: 11 }}>OPENAI_API_KEY</code>
-          {" / "}
-          <code style={{ fontFamily: "var(--mono)", fontSize: 11 }}>ANTHROPIC_API_KEY</code>
-          ).
+        <div style={{ background: "var(--amber-bg)", border: "1px solid var(--amber-border)", borderRadius: "var(--r)", padding: "10px 12px", fontSize: 12, color: "var(--amber-text)", lineHeight: 1.6 }}>
+          Estas claves solo funcionan en este dispositivo. Para que todos los usuarios las usen, agrégalas en Vercel → Settings → Environment Variables y luego <strong>Redeploy</strong>. Ver Wiki IA para instrucciones.
         </div>
+        {API_KEY_FIELDS.map((f) => (
+          <ApiKeyRow key={f.key} label={f.label} storageKey={f.key} placeholder={f.placeholder} envVar={f.envVar} />
+        ))}
       </div>
     </div>
   );
 }
 
-// ── Main Page ───────────────────────────────────────────────────────────────
+// ── Main Page ─────────────────────────────────────────────────────────────────
 
 export function ModelConnectionsPage() {
   const [ollamaUrl, setOllamaUrl] = useState("http://localhost:11434");
@@ -428,18 +336,12 @@ export function ModelConnectionsPage() {
   const [setupOpen, setSetupOpen] = useState(false);
   const [assignments, setAssignments] = useState<Record<string, AgentModelAssignment>>({});
 
-  // Load persisted values on mount
   useEffect(() => {
     const savedUrl = getLS(LS_OLLAMA_URL, "http://localhost:11434");
     setOllamaUrl(savedUrl);
-
     const savedModels = getLS(LS_AGENT_MODELS, "");
     if (savedModels) {
-      try {
-        setAssignments(JSON.parse(savedModels));
-      } catch {
-        setAssignments(DEFAULT_AGENT_MODELS as Record<string, AgentModelAssignment>);
-      }
+      try { setAssignments(JSON.parse(savedModels)); } catch { setAssignments(DEFAULT_AGENT_MODELS as Record<string, AgentModelAssignment>); }
     } else {
       setAssignments(DEFAULT_AGENT_MODELS as Record<string, AgentModelAssignment>);
     }
@@ -449,8 +351,7 @@ export function ModelConnectionsPage() {
     setOllamaStatus("checking");
     const ok = await checkOllamaConnectivity(url);
     if (ok) {
-      const models = await getOllamaModels(url);
-      setOllamaModels(models);
+      setOllamaModels(await getOllamaModels(url));
       setOllamaStatus("connected");
       setSetupOpen(false);
     } else {
@@ -459,15 +360,9 @@ export function ModelConnectionsPage() {
     }
   }, []);
 
-  // Check on mount
   useEffect(() => {
-    const savedUrl = getLS(LS_OLLAMA_URL, "http://localhost:11434");
-    runConnectivityCheck(savedUrl);
+    runConnectivityCheck(getLS(LS_OLLAMA_URL, "http://localhost:11434"));
   }, [runConnectivityCheck]);
-
-  function handleUrlChange(url: string) {
-    setOllamaUrl(url);
-  }
 
   function handleAssignmentChange(agentId: string, value: AgentModelAssignment) {
     setAssignments((prev) => {
@@ -479,42 +374,21 @@ export function ModelConnectionsPage() {
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
-      {/* Page header */}
       <div className="page-header">
         <div className="page-header-left">
-          <p className="page-eyebrow">Configuración</p>
+          <p className="page-eyebrow">Configuración · Admin</p>
           <h1 className="page-title">Conexiones y modelos LLM</h1>
           <p className="page-desc">
-            Configura el proveedor de modelos para cada agente: Ollama local, OpenAI o Anthropic.
+            Configura proveedores de modelos: Gemini, Groq, Sambanova, Mistral, Cerebras, Together, HuggingFace, Ollama, OpenAI y Anthropic.
+            Los proveedores gratuitos se usan primero; la app rota automáticamente si uno falla.
           </p>
         </div>
       </div>
 
-      {/* Section 1: Ollama status */}
-      <OllamaStatusBanner
-        status={ollamaStatus}
-        ollamaUrl={ollamaUrl}
-        ollamaModels={ollamaModels}
-        setupOpen={setupOpen}
-        onToggleSetup={() => setSetupOpen((v) => !v)}
-      />
-
-      {/* Section 2: Ollama URL */}
-      <OllamaUrlConfig
-        ollamaUrl={ollamaUrl}
-        onUrlChange={handleUrlChange}
-        onTest={() => runConnectivityCheck(ollamaUrl)}
-        status={ollamaStatus}
-      />
-
-      {/* Section 3: Agent model assignments */}
-      <AgentModelAssignments
-        assignments={assignments}
-        onChange={handleAssignmentChange}
-        ollamaModels={ollamaModels}
-      />
-
-      {/* Section 4: API Keys */}
+      <ServerStatusSection />
+      <OllamaStatusBanner status={ollamaStatus} ollamaUrl={ollamaUrl} ollamaModels={ollamaModels} setupOpen={setupOpen} onToggleSetup={() => setSetupOpen((v) => !v)} />
+      <OllamaUrlConfig ollamaUrl={ollamaUrl} onUrlChange={setOllamaUrl} onTest={() => runConnectivityCheck(ollamaUrl)} status={ollamaStatus} />
+      <AgentModelAssignments assignments={assignments} onChange={handleAssignmentChange} ollamaModels={ollamaModels} />
       <ApiKeysSection />
     </div>
   );

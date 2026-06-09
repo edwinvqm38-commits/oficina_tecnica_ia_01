@@ -1,7 +1,7 @@
 "use client";
 
 import { useSession } from "../../../lib/auth/useSession";
-import { ModelConnectionsPage } from "../../../components/ai-office/ModelConnectionsPage";
+import { WikiIAPage } from "../../../components/admin/WikiIAPage";
 
 const ADMIN_EMAIL = "edwin.qm@outlook.com";
 
@@ -21,5 +21,5 @@ export default function Page() {
   const { session, loading } = useSession(true);
   if (loading) return null;
   if (!session || session.email !== ADMIN_EMAIL) return <AccessDenied />;
-  return <ModelConnectionsPage />;
+  return <WikiIAPage />;
 }
