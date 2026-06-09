@@ -6,10 +6,13 @@ import { supabase } from "@/lib/supabaseClient";
 
 export default function LoginPage() {
   const router = useRouter();
+  const [tab, setTab] = useState<"login" | "register">("login");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  const [fullName, setFullName] = useState("");
   const [showPassword, setShowPassword] = useState(false);
   const [error, setError] = useState("");
+  const [success, setSuccess] = useState("");
   const [loading, setLoading] = useState(false);
 
   // Redirect to "/" if already logged in
@@ -21,14 +24,33 @@ export default function LoginPage() {
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
-    setError("");
+    setError(""); setSuccess("");
     setLoading(true);
 
-    const { error: authError } = await supabase.auth.signInWithPassword({
-      email: email.trim(),
-      password,
-    });
+    if (tab === "register") {
+      // Sign up + create pending profile
+      const { data, error: authError } = await supabase.auth.signUp({ email: email.trim(), password });
+      if (authError) {
+        setError(authError.message);
+      } else if (data.user) {
+        // Insert pending profile
+        await supabase.from("user_profiles").upsert({
+          id: data.user.id,
+          email: email.trim(),
+          full_name: fullName.trim() || null,
+          status: "pending",
+          role: "consulta",
+        });
+        // Sign out immediately (can't use app until approved)
+        await supabase.auth.signOut();
+        setSuccess("Solicitud enviada. El administrador validará tu acceso y te notificará.");
+        setEmail(""); setPassword(""); setFullName("");
+      }
+      setLoading(false);
+      return;
+    }
 
+    const { error: authError } = await supabase.auth.signInWithPassword({ email: email.trim(), password });
     if (authError) {
       setError("Credenciales incorrectas. Verifica tu correo y contraseña.");
       setLoading(false);
@@ -238,28 +260,50 @@ export default function LoginPage() {
             boxShadow: "0 4px 24px rgba(0,0,0,0.06)",
           }}
         >
+          {/* Tabs */}
+          <div style={{ display: "flex", gap: 0, marginBottom: 28, border: "1px solid var(--border)", borderRadius: 8, overflow: "hidden" }}>
+            {(["login", "register"] as const).map((t) => (
+              <button
+                key={t}
+                type="button"
+                onClick={() => { setTab(t); setError(""); setSuccess(""); }}
+                style={{
+                  flex: 1, padding: "10px 16px", fontSize: 13, fontWeight: 600, border: "none", cursor: "pointer",
+                  background: tab === t ? "var(--blue)" : "var(--bg-card)",
+                  color: tab === t ? "#fff" : "var(--t2)",
+                  fontFamily: "var(--font)",
+                }}
+              >
+                {t === "login" ? "Iniciar sesión" : "Solicitar acceso"}
+              </button>
+            ))}
+          </div>
+
           {/* Title */}
-          <div style={{ marginBottom: 32 }}>
-            <h1
-              style={{
-                color: "var(--t1)",
-                fontSize: 24,
-                fontWeight: 600,
-                fontFamily: "var(--font)",
-                margin: 0,
-                marginBottom: 6,
-                letterSpacing: "-0.02em",
-              }}
-            >
-              Iniciar sesión
+          <div style={{ marginBottom: 24 }}>
+            <h1 style={{ color: "var(--t1)", fontSize: 22, fontWeight: 600, fontFamily: "var(--font)", margin: 0, marginBottom: 6, letterSpacing: "-0.02em" }}>
+              {tab === "login" ? "Bienvenido" : "Solicitar acceso"}
             </h1>
             <p style={{ color: "var(--t3)", fontSize: 13, margin: 0 }}>
-              Ingresa tus credenciales para acceder
+              {tab === "login" ? "Ingresa tus credenciales para acceder" : "El administrador validará tu solicitud"}
             </p>
           </div>
 
           {/* Form */}
           <form onSubmit={handleSubmit} style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+            {/* Full name (register only) */}
+            {tab === "register" && (
+              <div>
+                <label style={{ display: "block", color: "var(--t2)", fontSize: 12, fontWeight: 500, marginBottom: 6, letterSpacing: "0.02em", textTransform: "uppercase" }}>
+                  Nombre completo
+                </label>
+                <input
+                  type="text" value={fullName} onChange={(e) => setFullName(e.target.value)}
+                  placeholder="Juan Pérez"
+                  style={{ width: "100%", boxSizing: "border-box", border: "1px solid var(--border)", background: "var(--bg-card)", color: "var(--t1)", borderRadius: 8, padding: "10px 12px", fontSize: 14, fontFamily: "var(--font)", outline: "none" }}
+                />
+              </div>
+            )}
             {/* Email */}
             <div>
               <label
@@ -380,7 +424,12 @@ export default function LoginPage() {
               </div>
             </div>
 
-            {/* Error message */}
+            {/* Success / Error */}
+            {success && (
+              <div role="alert" style={{ background: "#f0fdf4", border: "1px solid #bbf7d0", borderRadius: 8, padding: "10px 12px", color: "#166534", fontSize: 13, lineHeight: 1.4 }}>
+                {success}
+              </div>
+            )}
             {error && (
               <div
                 role="alert"
@@ -426,21 +475,16 @@ export default function LoginPage() {
                   e.currentTarget.style.background = "var(--blue)";
               }}
             >
-              {loading ? "Ingresando..." : "Ingresar"}
+              {loading ? (tab === "register" ? "Enviando…" : "Ingresando...") : (tab === "register" ? "Enviar solicitud" : "Ingresar")}
             </button>
           </form>
 
           {/* Footer */}
-          <p
-            style={{
-              marginTop: 28,
-              textAlign: "center",
-              color: "var(--t4)",
-              fontSize: 11,
-              lineHeight: 1.5,
-            }}
-          >
-            Acceso restringido · Solicita acceso a tu administrador
+          <p style={{ marginTop: 24, textAlign: "center", color: "var(--t4)", fontSize: 11, lineHeight: 1.5 }}>
+            {tab === "login" ? "¿No tienes cuenta? " : "¿Ya tienes cuenta? "}
+            <button type="button" onClick={() => { setTab(tab === "login" ? "register" : "login"); setError(""); setSuccess(""); }} style={{ background: "none", border: "none", color: "var(--blue)", fontSize: 11, cursor: "pointer", padding: 0 }}>
+              {tab === "login" ? "Solicitar acceso" : "Iniciar sesión"}
+            </button>
           </p>
         </div>
       </div>

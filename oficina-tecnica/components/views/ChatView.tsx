@@ -13,6 +13,8 @@ import { parseInput, isSimpleMessage } from "../../lib/chat/messageUtils";
 import { MdText } from "../chat/MdText";
 import { HelpPanel } from "../chat/HelpPanel";
 import { ChatAutoInput } from "../chat/ChatAutoInput";
+import { buildContextPrompt, EMPTY_CTX } from "../../lib/chat/contextQuery";
+import type { ChatCtx } from "../../lib/chat/contextQuery";
 import { useSession } from "../../lib/auth/useSession";
 import { saveConversation, loadConversationHistory } from "../../lib/memory/conversationMemory";
 
@@ -156,7 +158,7 @@ export function ChatView() {
     getOllamaModels().then((models) => { ollamaModelsRef.current = models; });
   }, []);
 
-  async function send(text?: string) {
+  async function send(text?: string, inputCtx?: ChatCtx) {
     const raw = (text ?? input).trim();
     if (!raw || busy) return;
 
@@ -175,7 +177,8 @@ export function ChatView() {
     const routing = routeRequest(parsed.cleanText, ollamaModelsRef.current);
     setTypingModel(routing.modelLabel);
 
-    const systemPrompt = AGENT_SYSTEM_PROMPTS[agentId] ?? AGENT_SYSTEM_PROMPTS.ic;
+    const ctxPrompt = inputCtx ? buildContextPrompt(inputCtx) : "";
+    const systemPrompt = (AGENT_SYSTEM_PROMPTS[agentId] ?? AGENT_SYSTEM_PROMPTS.ic) + ctxPrompt;
     const simple = isSimpleMessage(parsed.cleanText);
     const userId = session?.email ?? "anonymous";
 
@@ -313,8 +316,8 @@ export function ChatView() {
             <ChatAutoInput
               value={input}
               onChange={setInput}
-              onSubmit={send}
-              placeholder={`Escribe a ${agent.name}… @IC @PM @GG /ayuda`}
+              onSubmit={(text, ctx) => send(text, ctx)}
+              placeholder={`Escribe a ${agent.name}… /proyecto /rq /ayuda`}
               disabled={busy}
             />
             <button className="btn btn--primary" style={{ padding: "9px 14px" }} onClick={() => send()} disabled={busy}>

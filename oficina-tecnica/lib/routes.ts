@@ -24,6 +24,7 @@ export type RouteId =
   | "timeline"
   | "connections"
   | "wiki-ia"
+  | "admin-users"
   | "settings";
 
 export type RouteDef = {
@@ -84,6 +85,7 @@ export const ROUTE_GROUPS: SidebarGroup[] = [
       { id: "timeline", label: "Línea de tiempo", path: "/linea-tiempo", icon: "clock" },
       { id: "connections", label: "Conexiones de modelos", path: "/conexiones", icon: "link" },
       { id: "wiki-ia", label: "Wiki IA · Proveedores", path: "/wiki-ia", icon: "memory" },
+      { id: "admin-users", label: "Usuarios · Acceso", path: "/admin-usuarios", icon: "user" },
     ],
   },
   {

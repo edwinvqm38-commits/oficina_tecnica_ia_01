@@ -9,7 +9,7 @@ import { KNOWLEDGE, PROJECTS } from "../../lib/data";
 import { useSession } from "../../lib/auth/useSession";
 
 const ADMIN_EMAIL = "edwin.qm@outlook.com";
-const ADMIN_ROUTES = new Set(["connections", "wiki-ia"]);
+const ADMIN_ROUTES = new Set(["connections", "wiki-ia", "admin-users"]);
 
 function hasActiveChild(item: RouteDef, activeRoute: string): boolean {
   return item.children?.some((child) => child.id === activeRoute) ?? false;

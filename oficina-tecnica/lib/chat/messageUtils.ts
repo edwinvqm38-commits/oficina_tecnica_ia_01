@@ -11,10 +11,16 @@ const AGENT_LABELS: Record<string, { label: string; color: string }> = {
 };
 
 const GREETING_RE = /^(hola|buenos|buenas|buen\s?d[íi]a|hi\b|hey\b|saludos|cómo estás|como estas|gracias|de nada|ok\b|okay\b|perfecto|entendido|claro|sí\b|no\b|genial|bien\b)/i;
+const TEAM_RE = /\b(todos|equipo|chicos|team|a todos|buenas a todos|saludos a todos)\b/i;
 
 export function isSimpleMessage(text: string): boolean {
   const t = text.trim();
   return t.length < 35 || GREETING_RE.test(t);
+}
+
+/** True when message is addressed to the whole team (all agents should respond) */
+export function isTeamMessage(text: string): boolean {
+  return TEAM_RE.test(text);
 }
 
 export type ParsedInput = {

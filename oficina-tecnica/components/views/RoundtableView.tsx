@@ -9,7 +9,9 @@ import { agentAvatarClass } from "./shared";
 import { sendChatWithFallback, getOllamaModels } from "../../lib/llm/providers";
 import { routeRequest } from "../../lib/llm/modelRouter";
 import type { ChatMessage } from "../../lib/llm/providers";
-import { parseInput, isSimpleMessage } from "../../lib/chat/messageUtils";
+import { parseInput, isSimpleMessage, isTeamMessage } from "../../lib/chat/messageUtils";
+import { buildContextPrompt, EMPTY_CTX } from "../../lib/chat/contextQuery";
+import type { ChatCtx } from "../../lib/chat/contextQuery";
 import { MdText } from "../chat/MdText";
 import { HelpPanel } from "../chat/HelpPanel";
 import { ChatAutoInput } from "../chat/ChatAutoInput";
@@ -65,24 +67,26 @@ const RT_KEYWORDS: Record<string, string[]> = {
 };
 
 function agentsForMessage(text: string, targetId: string | null): string[] {
+  const allActive = AGENTS.filter((a) => a.type === "agent" && a.status === "active").map((a) => a.id);
+
   // If user directed to specific agent
-  if (targetId && ["ic", "pm", "ie"].includes(targetId)) return [targetId];
+  if (targetId && allActive.includes(targetId)) return [targetId];
+
+  // "buenos días a todos" / team messages → all active agents respond
+  if (isTeamMessage(text)) return allActive;
 
   const t = text.toLowerCase();
-  const scored = AGENTS
-    .filter((a) => a.type === "agent" && a.status === "active")
-    .map((a) => {
-      const hits = (RT_KEYWORDS[a.id] || []).filter((k) => t.includes(k)).length;
-      return { id: a.id, hits };
-    });
+  const scored = allActive.map((id) => ({
+    id, hits: (RT_KEYWORDS[id] || []).filter((k) => t.includes(k)).length,
+  }));
 
-  // Simple message → only most relevant agent (or IC as default)
+  // Simple one-to-one greeting → only most relevant agent (or IC)
   if (isSimpleMessage(text)) {
     const best = scored.sort((a, b) => b.hits - a.hits)[0];
     return [best?.hits > 0 ? best.id : "ic"];
   }
 
-  // Technical message → all agents with keyword hits; if none, IC+PM respond
+  // Technical message → all agents with keyword hits; if none, IC+PM
   const relevant = scored.filter((s) => s.hits > 0).sort((a, b) => b.hits - a.hits);
   if (relevant.length > 0) return relevant.map((s) => s.id);
   return ["ic", "pm"];
@@ -165,8 +169,8 @@ export function RoundtableView() {
     getOllamaModels().then((m) => { ollamaModelsRef.current = m; });
   }, []);
 
-  async function send(text?: string) {
-    const raw = (text ?? input).trim();
+  async function send(rawText?: string, inputCtx?: ChatCtx) {
+    const raw = (rawText ?? input).trim();
     if (!raw || busy) return;
 
     const parsed = parseInput(raw);
@@ -177,16 +181,21 @@ export function RoundtableView() {
       return;
     }
 
-    // If @PRY-xxx detected, switch project
+    // Context from ChatAutoInput chip overrides sidebar selector
+    const ctxProject = inputCtx?.project ?? null;
+    const ctxRequirement = inputCtx?.requirement ?? null;
+
+    // If @PRY-xxx detected in text OR chip context → switch project
+    const effectiveProjectId = ctxProject?.id ?? parsed.targetProjectId ?? projectId;
     if (parsed.targetProjectId) {
       const found = allProjects.find((p) => p.id === parsed.targetProjectId);
       if (found) setProjectId(found.id);
+    } else if (ctxProject) {
+      setProjectId(ctxProject.id);
     }
 
-    const activeProject = allProjects.find((p) => p.id === (parsed.targetProjectId ?? projectId));
-    const userDisplay = parsed.targetProjectId
-      ? `${raw}`
-      : raw;
+    const activeProject = ctxProject ?? allProjects.find((p) => p.id === effectiveProjectId) ?? null;
+    const userDisplay = raw;
 
     appendChat(ROUNDTABLE_THREAD, { role: "gg", text: userDisplay });
     setInput("");
@@ -205,12 +214,15 @@ export function RoundtableView() {
       const projectCtx = activeProject && !simple
         ? `\n\nProyecto activo: **${activeProject.name}** (${activeProject.id}). Cliente: ${activeProject.client}. Estado: ${activeProject.status}. Avance: ${activeProject.progress}%. ${activeProject.summary}`
         : "";
+      const requirementCtx = ctxRequirement && !simple
+        ? buildContextPrompt({ project: null, requirement: ctxRequirement })
+        : "";
 
       // Load long-term memory from Supabase for this agent
       const supabaseHistory = simple ? [] : await loadConversationHistory(userId, agId, activeProject?.id, 6).catch(() => []);
 
       const messages: ChatMessage[] = [
-        { role: "system", content: sysPrompt + projectCtx },
+        { role: "system", content: sysPrompt + projectCtx + requirementCtx },
         ...supabaseHistory.map((m) => ({ role: m.role as "user" | "assistant", content: m.content })),
         { role: "user", content: parsed.cleanText },
       ];
@@ -370,9 +382,10 @@ export function RoundtableView() {
               <ChatAutoInput
                 value={input}
                 onChange={setInput}
-                onSubmit={send}
-                placeholder="Escribe a la mesa… @IC @PM @IE @PRY-001 /ayuda"
+                onSubmit={(text, ctx) => send(text, ctx)}
+                placeholder="Escribe… @IC /proyecto /rq /ayuda"
                 disabled={busy}
+                defaultProjectId={projectId}
               />
               <button className="btn btn--primary" style={{ padding: "9px 14px" }} onClick={() => send()} disabled={busy}>
                 <Icons.arrowRight width={15} height={15} />
