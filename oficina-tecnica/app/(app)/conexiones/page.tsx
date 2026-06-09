@@ -2,9 +2,6 @@
 
 import { useSession } from "../../../lib/auth/useSession";
 import { ModelConnectionsPage } from "../../../components/ai-office/ModelConnectionsPage";
-import { useSession } from "../../../lib/auth/useSession";
-
-const ADMIN_EMAIL = "edwin.qm@outlook.com";
 
 const ADMIN_EMAIL = "edwin.qm@outlook.com";
 

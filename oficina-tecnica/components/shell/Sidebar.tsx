@@ -101,8 +101,6 @@ export function Sidebar({ activeRoute }: { activeRoute: string }) {
   const isAdmin = session?.email === ADMIN_EMAIL;
   const pendingApprovals = usePendingApprovalsCount();
   const skills = useSkillsWithOverrides();
-  const { session } = useSession(false);
-  const isAdmin = session?.email === ADMIN_EMAIL;
   const proposedKB = [...KNOWLEDGE, ...state.knowledge].filter((k) => k.status === "proposed").length;
   const totalProjects = PROJECTS.length + state.customProjects.length;
 

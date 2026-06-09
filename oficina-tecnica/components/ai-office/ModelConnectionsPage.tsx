@@ -161,12 +161,10 @@ function AgentModelAssignments({ assignments, onChange, ollamaModels }: {
   assignments: Record<string, AgentModelAssignment>;
   onChange: (agentId: string, value: AgentModelAssignment) => void;
   ollamaModels: string[];
-  sectionRef: React.RefObject<HTMLDivElement | null>;
 }) {
-  const allProviders: ProviderKey[] = ["gemini", "groq", "sambanova", "openrouter", "cerebras", "mistral", "together", "huggingface", "ollama", "openai", "anthropic"];
 
   return (
-    <div className="card" ref={sectionRef}>
+    <div className="card">
       <div className="card-header">
         <div>
           <p className="page-eyebrow" style={{ marginBottom: 2 }}>Asignaciones</p>
@@ -361,7 +359,6 @@ export function ModelConnectionsPage() {
   const [ollamaModels, setOllamaModels] = useState<string[]>([]);
   const [setupOpen, setSetupOpen] = useState(false);
   const [assignments, setAssignments] = useState<Record<string, AgentModelAssignment>>({});
-  const [deviceProfile, setDeviceProfile] = useState<DeviceProfile | null>(null);
 
   useEffect(() => {
     const savedUrl = getLS(LS_OLLAMA_URL, "http://localhost:11434");
@@ -372,11 +369,6 @@ export function ModelConnectionsPage() {
     } else {
       setAssignments(DEFAULT_AGENT_MODELS as Record<string, AgentModelAssignment>);
     }
-
-    // Load stored profile immediately, then refresh in background
-    const stored = getStoredDeviceProfile();
-    if (stored) setDeviceProfile(stored);
-    detectDeviceProfile().then((p) => setDeviceProfile(p)).catch(() => {/* ignore */});
   }, []);
 
   const runConnectivityCheck = useCallback(async (url: string) => {
@@ -421,7 +413,7 @@ export function ModelConnectionsPage() {
       <OllamaStatusBanner status={ollamaStatus} ollamaUrl={ollamaUrl} ollamaModels={ollamaModels} setupOpen={setupOpen} onToggleSetup={() => setSetupOpen((v) => !v)} />
       <OllamaUrlConfig ollamaUrl={ollamaUrl} onUrlChange={setOllamaUrl} onTest={() => runConnectivityCheck(ollamaUrl)} status={ollamaStatus} />
       <AgentModelAssignments assignments={assignments} onChange={handleAssignmentChange} ollamaModels={ollamaModels} />
-      <ApiKeysSection />
+      <ProviderReferenceSection />
     </div>
   );
 }

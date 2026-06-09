@@ -11,7 +11,6 @@ import { routeRequest } from "../../lib/llm/modelRouter";
 import type { ChatMessage } from "../../lib/llm/providers";
 
 const ROUNDTABLE_THREAD = "roundtable";
-const LONG_TEXT_THRESHOLD = 700;
 
 const RT_KEYWORDS: Record<string, string[]> = {
   ic: ["costo", "costos", "presupuesto", "precio", "valoriz", "adicional", "desviaci", "metrado", "contingencia", "soles", "s/", "económic", "rentab", "partida", "gasto"],
@@ -45,16 +44,11 @@ function RTMessage({
   const agent = agentId ? agentById(agentId) : null;
   return (
     <div style={{ display: "flex", gap: 9, flexDirection: isUser ? "row-reverse" : "row", alignItems: "flex-start" }}>
-      <div
-        className={`agent-avatar ${isUser ? "agent-avatar--gg" : agentAvatarClass(agentId || "")}`}
-        style={{ width: 28, height: 28, fontSize: 10, flexShrink: 0 }}
-      >
+      <div className={`agent-avatar ${isUser ? "agent-avatar--gg" : agentAvatarClass(agentId || "")}`} style={{ width: 28, height: 28, fontSize: 10, flexShrink: 0 }}>
         {isUser ? "GG" : (agentId || "").toUpperCase()}
       </div>
       <div style={{ maxWidth: "78%" }}>
-        {!isUser && agent && (
-          <div style={{ fontSize: 11.5, fontWeight: 600, color: "var(--t1)", marginBottom: 3 }}>{agent.name}</div>
-        )}
+        {!isUser && agent && <div style={{ fontSize: 11.5, fontWeight: 600, color: "var(--t1)", marginBottom: 3 }}>{agent.name}</div>}
         <div
           style={{
             padding: "8px 11px",
@@ -70,14 +64,6 @@ function RTMessage({
           }}
         >
           {text}
-          {attachment && (
-            <FileChip
-              name={attachment.name}
-              mimeType={attachment.mimeType}
-              isImage={attachment.isImage}
-              imageDataUrl={attachment.imageDataUrl}
-            />
-          )}
         </div>
         <div style={{ fontSize: 10, color: "var(--t3)", marginTop: 3, textAlign: isUser ? "right" : "left", display: "flex", gap: 6, alignItems: "center", justifyContent: isUser ? "flex-end" : "flex-start" }}>
           <span>{time}</span>
@@ -108,7 +94,6 @@ function HandRaise({ agentId, reason, modelLabel }: { agentId: string; reason: s
 
 export function RoundtableView() {
   const { state, appendChat, chatFor } = useStore();
-  const { session } = useSession(false);
   const [input, setInput] = useState("");
   const [projectId, setProjectId] = useState("PRY-001");
   const [busy, setBusy] = useState(false);
@@ -121,70 +106,8 @@ export function RoundtableView() {
   const project = allProjects.find((p) => p.id === projectId);
 
   useEffect(() => {
-    getOllamaModels().then((models) => {
-      setOllamaModels(models);
-      const apiKeys = [
-        localStorage.getItem("ot:apikey:openai"),
-        localStorage.getItem("ot:apikey:anthropic"),
-        localStorage.getItem("ot:apikey:gemini"),
-      ].filter(Boolean);
-      setHasModels(models.length > 0 || apiKeys.length > 0);
-    });
-  }, []);
-
-  useEffect(() => {
     if (scrollRef.current) scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
-  }, [thread.length, busy, hands.length, typingAgentId]);
-
-  function readAsText(file: File): Promise<string> {
-    return new Promise((resolve, reject) => {
-      const reader = new FileReader();
-      reader.onload = () => resolve(reader.result as string);
-      reader.onerror = reject;
-      reader.readAsText(file, "utf-8");
-    });
-  }
-
-  function readAsDataURL(file: File): Promise<string> {
-    return new Promise((resolve, reject) => {
-      const reader = new FileReader();
-      reader.onload = () => resolve(reader.result as string);
-      reader.onerror = reject;
-      reader.readAsDataURL(file);
-    });
-  }
-
-  async function handleFileUpload(e: React.ChangeEvent<HTMLInputElement>) {
-    const file = e.target.files?.[0];
-    if (!file) return;
-    e.target.value = "";
-
-    if (file.type.startsWith("image/")) {
-      const dataUrl = await readAsDataURL(file);
-      setAttachment({ name: file.name, mimeType: file.type, isImage: true, imageDataUrl: dataUrl });
-    } else if (
-      file.type.startsWith("text/") ||
-      file.name.endsWith(".txt") ||
-      file.name.endsWith(".md") ||
-      file.name.endsWith(".csv") ||
-      file.name.endsWith(".json")
-    ) {
-      const text = await readAsText(file);
-      setAttachment({ name: file.name, mimeType: file.type || "text/plain", textContent: text });
-    } else {
-      // PDF, Word, Excel — attach as metadata; content not extractable without extra libraries
-      setAttachment({ name: file.name, mimeType: file.type || "application/octet-stream" });
-    }
-  }
-
-  function handlePaste(e: React.ClipboardEvent<HTMLTextAreaElement>) {
-    const pasted = e.clipboardData.getData("text");
-    if (pasted.length > LONG_TEXT_THRESHOLD && !attachment) {
-      e.preventDefault();
-      setAttachment({ name: "Contexto_pegado.txt", mimeType: "text/plain", textContent: pasted });
-      if (!input.trim()) setInput("Analiza el siguiente documento:");
-    }
-  }
+  }, [thread.length, busy, hands.length]);
 
   useEffect(() => {
     getOllamaModels().then((models) => { ollamaModelsRef.current = models; });
@@ -194,37 +117,11 @@ export function RoundtableView() {
     const value = (text ?? input).trim();
     if (!value || busy) return;
 
-    const userId = session?.email ?? "anonymous";
-    const deviceProfile = getStoredDeviceProfile();
-    const agentModels = JSON.parse(localStorage.getItem("ot:agent:models") ?? "{}");
-
-    let contextText = value;
-    if (attachment?.textContent) {
-      contextText = `${value}\n\n[Documento adjunto: ${attachment.name}]\n---\n${attachment.textContent.slice(0, 8000)}\n---`;
-    } else if (attachment) {
-      contextText = `${value}\n\n[Archivo adjunto: ${attachment.name} (${attachment.mimeType})]`;
-    }
-
-    appendChat(ROUNDTABLE_THREAD, {
-      role: "gg",
-      text: value,
-      ...(attachment
-        ? {
-            attachment: {
-              name: attachment.name,
-              mimeType: attachment.mimeType,
-              isImage: attachment.isImage,
-              imageDataUrl: attachment.imageDataUrl,
-            },
-          }
-        : {}),
-    });
+    appendChat(ROUNDTABLE_THREAD, { role: "gg", text: value });
     setInput("");
-    setAttachment(null);
     setBusy(true);
 
     const responders = relevantAgents(value);
-
     const routing = routeRequest(value, ollamaModelsRef.current);
 
     const handCards = responders.map((id) => ({
@@ -235,7 +132,6 @@ export function RoundtableView() {
       modelLabel: routing.modelLabel,
     }));
     setHands(handCards);
-    await new Promise((r) => setTimeout(r, 350));
 
     await new Promise((r) => setTimeout(r, 400));
 
@@ -272,8 +168,6 @@ export function RoundtableView() {
       await new Promise((r) => setTimeout(r, 300));
     }
 
-    setTypingAgentId(null);
-    setTypingModelLabel(null);
     setBusy(false);
     setHands([]);
   }
@@ -314,9 +208,7 @@ export function RoundtableView() {
                   <div className={`agent-avatar ${agentAvatarClass(a.id)}`} style={{ width: 24, height: 24, fontSize: 9 }}>{a.id.toUpperCase()}</div>
                   <div style={{ minWidth: 0, flex: 1 }}>
                     <div style={{ fontSize: 11.5, fontWeight: 600, color: "var(--t1)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{a.name}</div>
-                    <div style={{ fontSize: 10, color: "var(--t3)" }}>
-                      {a.status === "active" ? "Activo" : a.status === "needs-approval" ? "Pendiente" : "Futuro"}
-                    </div>
+                    <div style={{ fontSize: 10, color: "var(--t3)" }}>{a.status === "active" ? "Activo" : a.status === "needs-approval" ? "Pendiente" : "Futuro"}</div>
                   </div>
                 </div>
               ))}
@@ -333,24 +225,19 @@ export function RoundtableView() {
               <div className="agent-avatar agent-avatar--gg">GG</div>
               <div>
                 <div style={{ fontSize: 13, fontWeight: 600, color: "var(--t1)" }}>Mesa de trabajo</div>
-                <div style={{ fontSize: 11, color: "var(--t3)" }}>
-                  {project ? `Discutiendo: ${project.name}` : "Selecciona un proyecto"}
-                </div>
+                <div style={{ fontSize: 11, color: "var(--t3)" }}>{project ? `Discutiendo: ${project.name}` : "Selecciona un proyecto"}</div>
               </div>
             </div>
             <span className="badge badge--green">IA activa</span>
           </div>
 
-          <div
-            ref={scrollRef}
-            style={{ flex: 1, overflowY: "auto", padding: 14, display: "flex", flexDirection: "column", gap: 12, background: "var(--bg-muted)" }}
-          >
+          <div ref={scrollRef} style={{ flex: 1, overflowY: "auto", padding: 14, display: "flex", flexDirection: "column", gap: 12, background: "var(--bg-muted)" }}>
             {thread.length === 0 && hands.length === 0 && (
               <div style={{ margin: "auto", textAlign: "center", maxWidth: 360 }}>
                 <div className="agent-avatar agent-avatar--gg" style={{ width: 48, height: 48, fontSize: 16, margin: "0 auto 12px" }}>GG</div>
                 <div style={{ fontSize: 14, fontWeight: 600, color: "var(--t1)", marginBottom: 4 }}>Convoca a tu equipo</div>
                 <p style={{ fontSize: 12, color: "var(--t2)", lineHeight: 1.6 }}>
-                  Plantea una pregunta o un problema y los agentes con dominio relevante responderán. Puedes adjuntar archivos o pegar texto largo para dar contexto.
+                  Plantea una pregunta o un problema y los agentes cuyo dominio sea relevante se sumarán a la conversación de forma automática.
                 </p>
                 <div style={{ display: "flex", flexWrap: "wrap", gap: 6, justifyContent: "center", marginTop: 14 }}>
                   {["¿Cómo recuperamos el atraso en PRY-001?", "Analicemos la desviación de costo de Tintaya", "¿Qué riesgos cruzados vemos en el portafolio?"].map((s) => (
@@ -366,72 +253,16 @@ export function RoundtableView() {
                 text={m.text}
                 time={m.time}
                 agentId={m.agentId}
-                modelLabel={(m as { modelLabel?: string }).modelLabel}
-                isError={(m as { isError?: boolean }).isError}
+                modelLabel={m.modelLabel}
+                isError={m.isError}
               />
             ))}
             {hands.map((h) => (
               <HandRaise key={h.agentId} agentId={h.agentId} reason={h.reason} modelLabel={h.modelLabel} />
             ))}
-            {typingAgentId && (
-              <TypingDots agentId={typingAgentId} modelLabel={typingModelLabel ?? undefined} />
-            )}
           </div>
 
-          {attachment && (
-            <div
-              style={{
-                flexShrink: 0,
-                padding: "6px 12px",
-                borderTop: "1px solid var(--border)",
-                background: "var(--blue-bg)",
-                display: "flex",
-                alignItems: "center",
-                gap: 8,
-              }}
-            >
-              <span style={{ fontSize: 11, color: "var(--t2)", flexShrink: 0 }}>Adjunto:</span>
-              <FileChip
-                name={attachment.name}
-                mimeType={attachment.mimeType}
-                isImage={attachment.isImage}
-                imageDataUrl={attachment.imageDataUrl}
-                onRemove={() => setAttachment(null)}
-              />
-              {attachment.textContent && (
-                <span style={{ fontSize: 10, color: "var(--t3)", marginLeft: 4 }}>
-                  {(attachment.textContent.length / 1000).toFixed(1)}k chars
-                </span>
-              )}
-            </div>
-          )}
-
-          <div
-            style={{
-              flexShrink: 0,
-              padding: 10,
-              borderTop: "1px solid var(--border)",
-              display: "flex",
-              gap: 8,
-              alignItems: "flex-end",
-            }}
-          >
-            <input
-              type="file"
-              ref={fileInputRef}
-              accept=".txt,.md,.csv,.json,.pdf,.docx,.xlsx,.png,.jpg,.jpeg,.gif,.webp"
-              onChange={handleFileUpload}
-              style={{ display: "none" }}
-            />
-            <button
-              className="btn btn--ghost"
-              style={{ padding: "8px 10px", flexShrink: 0, fontSize: 14 }}
-              onClick={() => fileInputRef.current?.click()}
-              title="Adjuntar archivo (texto, imagen, PDF, Word, Excel)"
-              disabled={busy}
-            >
-              <Icons.paperclip width={15} height={15} />
-            </button>
+          <div style={{ flexShrink: 0, padding: 10, borderTop: "1px solid var(--border)", display: "flex", gap: 8, alignItems: "flex-end" }}>
             <textarea
               value={input}
               onChange={(e) => setInput(e.target.value)}
@@ -440,12 +271,7 @@ export function RoundtableView() {
               rows={1}
               style={{ flex: 1, resize: "none", border: "1px solid var(--border)", borderRadius: "var(--r)", padding: "9px 11px", fontSize: 12.5, fontFamily: "var(--font)", color: "var(--t1)", maxHeight: 120, lineHeight: 1.5, outline: "none" }}
             />
-            <button
-              className="btn btn--primary"
-              style={{ padding: "9px 14px" }}
-              onClick={() => send()}
-              disabled={busy}
-            >
+            <button className="btn btn--primary" style={{ padding: "9px 14px" }} onClick={() => send()} disabled={busy}>
               <Icons.arrowRight width={15} height={15} />
             </button>
           </div>
