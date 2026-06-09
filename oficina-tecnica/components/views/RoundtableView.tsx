@@ -16,6 +16,17 @@ import { ChatAutoInput } from "../chat/ChatAutoInput";
 import { useSession } from "../../lib/auth/useSession";
 import { saveConversation, loadConversationHistory } from "../../lib/memory/conversationMemory";
 
+function useOnlineMode() {
+  const [online, setOnline] = useState(true);
+  useEffect(() => { setOnline(localStorage.getItem("ot:ollama:disabled") !== "false"); }, []);
+  function toggle() {
+    const next = !online;
+    setOnline(next);
+    localStorage.setItem("ot:ollama:disabled", next ? "true" : "false");
+  }
+  return { online, toggle };
+}
+
 const ROUNDTABLE_THREAD = "roundtable";
 
 const RT_SYSTEM_PROMPTS: Record<string, string> = {
@@ -133,6 +144,7 @@ function ProjectChip({ projectId, onClick }: { projectId: string; onClick: () =>
 export function RoundtableView() {
   const { state, appendChat, chatFor } = useStore();
   const { session } = useSession(false);
+  const { online, toggle: toggleOnline } = useOnlineMode();
   const [input, setInput] = useState("");
   const [projectId, setProjectId] = useState("PRY-001");
   const [busy, setBusy] = useState(false);
@@ -194,8 +206,12 @@ export function RoundtableView() {
         ? `\n\nProyecto activo: **${activeProject.name}** (${activeProject.id}). Cliente: ${activeProject.client}. Estado: ${activeProject.status}. Avance: ${activeProject.progress}%. ${activeProject.summary}`
         : "";
 
+      // Load long-term memory from Supabase for this agent
+      const supabaseHistory = simple ? [] : await loadConversationHistory(userId, agId, activeProject?.id, 6).catch(() => []);
+
       const messages: ChatMessage[] = [
         { role: "system", content: sysPrompt + projectCtx },
+        ...supabaseHistory.map((m) => ({ role: m.role as "user" | "assistant", content: m.content })),
         { role: "user", content: parsed.cleanText },
       ];
 
@@ -289,6 +305,14 @@ export function RoundtableView() {
             </div>
             <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
               <span className="badge badge--green">IA activa</span>
+              <button
+                className="btn btn--ghost btn--sm"
+                style={{ fontSize: 10, color: online ? "var(--blue)" : "var(--t3)" }}
+                title={online ? "Modo Online — solo modelos cloud" : "Ollama activo — click para solo-cloud"}
+                onClick={toggleOnline}
+              >
+                {online ? "☁ Online" : "🖥 Local+Cloud"}
+              </button>
               <button className="btn btn--ghost btn--sm" style={{ fontSize: 11 }} onClick={() => setShowHelp((v) => !v)}>
                 /ayuda
               </button>

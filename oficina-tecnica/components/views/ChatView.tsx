@@ -14,22 +14,22 @@ import { MdText } from "../chat/MdText";
 import { HelpPanel } from "../chat/HelpPanel";
 import { ChatAutoInput } from "../chat/ChatAutoInput";
 import { useSession } from "../../lib/auth/useSession";
-import { saveConversation } from "../../lib/memory/conversationMemory";
+import { saveConversation, loadConversationHistory } from "../../lib/memory/conversationMemory";
 
-const CHAT_AGENTS = ["ic", "pm", "gg", "ie"];
+const CHAT_AGENTS = ["ic", "pm", "ie", "gg"];
 
 const STARTERS: Record<string, string[]> = {
   ic: ["Presupuesto de tendido de cable 138kV", "Analiza esta desviación de costo", "¿Qué contingencia recomiendas?"],
   pm: ["Riesgo de retraso en PRY-001", "¿Cómo recupero 12 días?", "Restricciones de la ruta crítica"],
   gg: ["Resume el estado del portafolio", "¿Apruebo el adicional de Tintaya?"],
-  ie: ["¿Qué norma aplica a esta SET?"],
+  ie: ["¿Qué norma aplica a la SET 138kV?", "Criterios de diseño para tendido de cable", "¿Qué protecciones aplican en 22kV?"],
 };
 
 const INTRO: Record<string, string> = {
   ic: "Pídeme un presupuesto, análisis de desviación o valorización. Adjunta una memoria descriptiva o parámetros y lo proceso con mis skills.",
   pm: "Consúltame sobre cronograma, ruta crítica, riesgos o restricciones. Adjunta tu plan y modelo escenarios de recuperación.",
   gg: "Plantéame una decisión y te doy síntesis ejecutiva: diagnóstico, decisión y siguiente acción.",
-  ie: "Soy un agente futuro. Cuando el GG apruebe mi alcance normativo, revisaré criterios de diseño eléctrico (CNE, IEC, IEEE).",
+  ie: "Consúltame sobre normas eléctricas (CNE, IEC, IEEE), diseño de subestaciones, cálculo de cables o criterios de protección.",
 };
 
 const AGENT_SYSTEM_PROMPTS: Record<string, string> = {
@@ -122,9 +122,21 @@ function TypingDots({ agentId, modelLabel }: { agentId: string; modelLabel?: str
   );
 }
 
+function useOnlineMode() {
+  const [online, setOnline] = useState(true);
+  useEffect(() => { setOnline(localStorage.getItem("ot:ollama:disabled") !== "false"); }, []);
+  function toggle() {
+    const next = !online;
+    setOnline(next);
+    localStorage.setItem("ot:ollama:disabled", next ? "true" : "false");
+  }
+  return { online, toggle };
+}
+
 export function ChatView() {
   const { state, appendChat, chatFor } = useStore();
   const { session } = useSession(false);
+  const { online, toggle: toggleOnline } = useOnlineMode();
   const [agentId, setAgentId] = useState("ic");
   const [input, setInput] = useState("");
   const [busy, setBusy] = useState(false);
@@ -164,14 +176,31 @@ export function ChatView() {
     setTypingModel(routing.modelLabel);
 
     const systemPrompt = AGENT_SYSTEM_PROMPTS[agentId] ?? AGENT_SYSTEM_PROMPTS.ic;
-    const history = chatFor(agentId);
     const simple = isSimpleMessage(parsed.cleanText);
-    const messages: ChatMessage[] = [
-      { role: "system", content: systemPrompt },
-      ...(!simple ? history.slice(-10).map((m) => ({
+    const userId = session?.email ?? "anonymous";
+
+    // Load Supabase memory + local thread for context
+    const [supabaseHistory, localHistory] = await Promise.all([
+      simple ? Promise.resolve([]) : loadConversationHistory(userId, agentId, undefined, 8),
+      Promise.resolve(chatFor(agentId)),
+    ]);
+
+    const contextMessages: ChatMessage[] = simple ? [] : [
+      // Supabase long-term memory (older conversations)
+      ...supabaseHistory.slice(0, 6).map((m) => ({
+        role: m.role as "user" | "assistant",
+        content: m.content,
+      })),
+      // Recent local thread (current session)
+      ...localHistory.slice(-6).map((m) => ({
         role: (m.role === "gg" ? "user" : "assistant") as "user" | "assistant",
         content: m.text,
-      })) : []),
+      })),
+    ];
+
+    const messages: ChatMessage[] = [
+      { role: "system", content: systemPrompt },
+      ...contextMessages,
       { role: "user", content: parsed.cleanText },
     ];
 
@@ -248,6 +277,14 @@ export function ChatView() {
             </div>
             <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
               <span className="badge badge--green">IA activa</span>
+              <button
+                className="btn btn--ghost btn--sm"
+                style={{ fontSize: 10, color: online ? "var(--blue)" : "var(--t3)" }}
+                title={online ? "Modo Online — click para activar Ollama local" : "Ollama activo — click para modo solo-cloud"}
+                onClick={toggleOnline}
+              >
+                {online ? "☁ Online" : "🖥 Local+Cloud"}
+              </button>
               <button className="btn btn--ghost btn--sm" style={{ fontSize: 11 }} onClick={() => setShowHelp((v) => !v)}>/ayuda</button>
             </div>
           </div>

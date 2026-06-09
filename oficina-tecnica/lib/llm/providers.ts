@@ -64,6 +64,7 @@ export async function sendChat(messages: ChatMessage[], config: ModelConfig): Pr
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ messages, provider: config.provider, model: config.model }),
+      signal: AbortSignal.timeout(20000),
     });
     if (res.ok) {
       const data = await res.json();
@@ -118,6 +119,7 @@ async function sendOpenAICompatChat(
       ...extraHeaders,
     },
     body: JSON.stringify({ model: config.model, messages }),
+    signal: AbortSignal.timeout(20000),
   });
   if (!res.ok) {
     const errText = await res.text().catch(() => res.statusText);
