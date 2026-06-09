@@ -207,6 +207,11 @@ export const Icons = {
       <polyline points="1.5,5 8,1.5 14.5,5" />
     </Base>
   ),
+  paperclip: (p: IconProps) => (
+    <Base {...p}>
+      <path d="M13.5 7L7 13.5a4 4 0 01-5.7-5.7l7-7a2.5 2.5 0 013.5 3.5L5 11a1 1 0 01-1.4-1.4L9.5 4" />
+    </Base>
+  ),
 } satisfies Record<string, (p: IconProps) => React.ReactElement>;
 
 export type IconName = keyof typeof Icons;

@@ -159,4 +159,10 @@ export type ChatMessage = {
   agentId?: string;
   routing?: import("./llm/modelRouter").RoutingDecision;
   isError?: boolean;
+  attachment?: {
+    name: string;
+    mimeType: string;
+    isImage?: boolean;
+    imageDataUrl?: string;
+  };
 };
