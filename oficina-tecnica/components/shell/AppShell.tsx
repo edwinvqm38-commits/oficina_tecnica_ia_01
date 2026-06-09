@@ -9,12 +9,17 @@ import { GlobalSearch, routeIdToPath } from "./GlobalSearch";
 import { routeForPath } from "../../lib/routes";
 import type { RouteId } from "../../lib/routes";
 import { useSession } from "../../lib/auth/useSession";
+import { detectDeviceProfile } from "../../lib/llm/deviceDetection";
 
 export function AppShell({ children }: { children: ReactNode }) {
   const pathname = usePathname();
   const router = useRouter();
   const [searchOpen, setSearchOpen] = useState(false);
   const { session, loading, logout } = useSession(true);
+
+  useEffect(() => {
+    detectDeviceProfile(); // silent, saves to localStorage
+  }, []);
 
   useEffect(() => {
     function onKey(e: KeyboardEvent) {

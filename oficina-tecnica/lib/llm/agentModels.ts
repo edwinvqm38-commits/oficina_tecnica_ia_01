@@ -67,7 +67,7 @@ export const DEFAULT_AGENT_MODELS: Record<string, { provider: string; model: str
 
 export const OLLAMA_SETUP_STEPS = [
   { step: 1, title: "Descargar Ollama", description: "Ve a ollama.com y descarga el instalador para tu sistema operativo (Windows/Mac/Linux).", link: "https://ollama.com/download" },
-  { step: 2, title: "Instalar Ollama", description: "Ejecuta el instalador. Ollama correrá automáticamente en segundo plano en el puerto 11434." },
+  { step: 2, title: "Instalar Ollama",  description: "Ejecuta el instalador. Ollama correrá automáticamente en segundo plano en el puerto 11434." },
   { step: 3, title: "Descargar un modelo", description: "Abre una terminal y ejecuta:", command: "ollama pull qwen2.5:7b" },
   { step: 4, title: "Verificar instalación", description: "Ejecuta el siguiente comando para probar que funciona:", command: "ollama run qwen2.5:7b \"Hola, ¿puedes presentarte?\"" },
   { step: 5, title: "Acceso remoto (opcional)", description: "Si quieres usar la app desde otra PC o desde Vercel, instala Cloudflare Tunnel:", command: "cloudflared tunnel --url http://localhost:11434", link: "https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/get-started/" },

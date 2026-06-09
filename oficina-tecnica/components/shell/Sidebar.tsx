@@ -97,6 +97,8 @@ function ParentItem({
 
 export function Sidebar({ activeRoute }: { activeRoute: string }) {
   const { state } = useStore();
+  const { session } = useSession(false);
+  const isAdmin = session?.email === ADMIN_EMAIL;
   const pendingApprovals = usePendingApprovalsCount();
   const skills = useSkillsWithOverrides();
   const { session } = useSession(false);

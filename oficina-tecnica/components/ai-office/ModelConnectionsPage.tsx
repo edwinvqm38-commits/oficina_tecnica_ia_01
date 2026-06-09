@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { aiAgentsMock } from "@/lib/ai-office/aiAgentsMock";
 import { checkOllamaConnectivity, getOllamaModels } from "@/lib/llm/providers";
 import { DEFAULT_AGENT_MODELS, OLLAMA_SETUP_STEPS, RECOMMENDED_MODELS } from "@/lib/llm/agentModels";
@@ -62,6 +62,8 @@ function OllamaStatusBanner({
             {ollamaModels.length > 0 ? `${ollamaModels.length} modelo${ollamaModels.length !== 1 ? "s" : ""} disponible${ollamaModels.length !== 1 ? "s" : ""}` : "sin modelos descargados"}
           </p>
         </div>
+
+        {/* Modelos disponibles with compatibility */}
         {ollamaModels.length > 0 && (
           <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginTop: 8 }}>
             {ollamaModels.map((m) => (
@@ -159,11 +161,12 @@ function AgentModelAssignments({ assignments, onChange, ollamaModels }: {
   assignments: Record<string, AgentModelAssignment>;
   onChange: (agentId: string, value: AgentModelAssignment) => void;
   ollamaModels: string[];
+  sectionRef: React.RefObject<HTMLDivElement | null>;
 }) {
   const allProviders: ProviderKey[] = ["gemini", "groq", "sambanova", "openrouter", "cerebras", "mistral", "together", "huggingface", "ollama", "openai", "anthropic"];
 
   return (
-    <div className="card">
+    <div className="card" ref={sectionRef}>
       <div className="card-header">
         <div>
           <p className="page-eyebrow" style={{ marginBottom: 2 }}>Asignaciones</p>
@@ -306,7 +309,30 @@ function ApiKeyRow({ label, storageKey, placeholder, envVar }: {
   );
 }
 
-function ApiKeysSection() {
+// ── Provider Reference Table ────────────────────────────────────────────────
+
+const PROVIDER_REF = [
+  { name: "Gemini",      tag: "Google",      free: true,  speed: "~1-2 s",   envVar: "GEMINI_API_KEY",     url: "https://aistudio.google.com/app/apikey",           placeholder: "AQ.Ab8RN…",   note: "1,500 req/día gratis" },
+  { name: "Groq",        tag: "Llama/Mixtral", free: true, speed: "<1 s",    envVar: "GROQ_API_KEY",       url: "https://console.groq.com/keys",                    placeholder: "gsk_…",       note: "14,400 req/día gratis" },
+  { name: "Sambanova",   tag: "DeepSeek R1", free: true,  speed: "~2 s",     envVar: "SAMBANOVA_API_KEY",  url: "https://cloud.sambanova.ai/apis",                  placeholder: "uuid…",       note: "DeepSeek R1 gratis" },
+  { name: "OpenRouter",  tag: "Multi-modelo", free: true, speed: "~2 s",     envVar: "OPENROUTER_API_KEY", url: "https://openrouter.ai/settings/keys",              placeholder: "sk-or-…",     note: "10+ modelos gratis" },
+  { name: "Cerebras",    tag: "Ultra-rápido", free: true, speed: "~0.5 s",   envVar: "CEREBRAS_API_KEY",   url: "https://inference.cerebras.ai",                    placeholder: "csk-…",       note: "~1000 tok/s gratis" },
+  { name: "Mistral",     tag: "Español",     free: true,  speed: "~1-2 s",   envVar: "MISTRAL_API_KEY",    url: "https://console.mistral.ai/api-keys",              placeholder: "…",           note: "1,000 req/día gratis" },
+  { name: "Together AI", tag: "Multi-modelo", free: true, speed: "~2 s",     envVar: "TOGETHER_API_KEY",   url: "https://api.together.ai/settings/api-keys",        placeholder: "…",           note: "Créditos gratis al crear cuenta" },
+  { name: "OpenAI",      tag: "GPT-4o",      free: false, speed: "~2-3 s",   envVar: "OPENAI_API_KEY",     url: "https://platform.openai.com/api-keys",             placeholder: "sk-…",        note: "Pago por uso (~$0.01/50 msgs)" },
+  { name: "Anthropic",   tag: "Claude",      free: false, speed: "~2-3 s",   envVar: "ANTHROPIC_API_KEY",  url: "https://console.anthropic.com/settings/api-keys",  placeholder: "sk-ant-…",    note: "Pago por uso" },
+];
+
+function ProviderReferenceSection() {
+  const [serverStatus, setServerStatus] = useState<Record<string, boolean>>({});
+
+  useEffect(() => {
+    fetch("/api/llm/status")
+      .then((r) => r.json())
+      .then(setServerStatus)
+      .catch(() => {/* ignore */});
+  }, []);
+
   return (
     <div className="card">
       <div className="card-header">
@@ -335,6 +361,7 @@ export function ModelConnectionsPage() {
   const [ollamaModels, setOllamaModels] = useState<string[]>([]);
   const [setupOpen, setSetupOpen] = useState(false);
   const [assignments, setAssignments] = useState<Record<string, AgentModelAssignment>>({});
+  const [deviceProfile, setDeviceProfile] = useState<DeviceProfile | null>(null);
 
   useEffect(() => {
     const savedUrl = getLS(LS_OLLAMA_URL, "http://localhost:11434");
@@ -345,6 +372,11 @@ export function ModelConnectionsPage() {
     } else {
       setAssignments(DEFAULT_AGENT_MODELS as Record<string, AgentModelAssignment>);
     }
+
+    // Load stored profile immediately, then refresh in background
+    const stored = getStoredDeviceProfile();
+    if (stored) setDeviceProfile(stored);
+    detectDeviceProfile().then((p) => setDeviceProfile(p)).catch(() => {/* ignore */});
   }, []);
 
   const runConnectivityCheck = useCallback(async (url: string) => {

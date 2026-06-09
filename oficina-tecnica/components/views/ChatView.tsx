@@ -90,8 +90,16 @@ function TypingDots({ agentId, modelLabel }: { agentId: string; modelLabel?: str
   );
 }
 
+const AGENT_SYSTEM_PROMPTS: Record<string, string> = {
+  ic: "Eres el Ingeniero de Costos y Presupuestos de una Oficina Técnica de ingeniería. Analizas presupuestos, metrados, desviaciones de costo y haces recomendaciones técnicas. Responde en español de forma clara y profesional.",
+  pm: "Eres el Project Manager de una Oficina Técnica de ingeniería. Gestionas cronogramas, riesgos, rutas críticas y bloqueos de proyectos. Responde en español de forma clara y profesional.",
+  gg: "Eres el Gerente General de una Oficina Técnica de ingeniería. Tomas decisiones estratégicas, apruebas propuestas y supervisas el portafolio de proyectos. Responde en español de forma ejecutiva y directa.",
+  ie: "Eres un Ingeniero Especialista en normas eléctricas (CNE, IEC, IEEE). Asesoras sobre diseño eléctrico y criterios normativos. Responde en español de forma técnica y precisa.",
+};
+
 export function ChatView() {
   const { state, appendChat, chatFor } = useStore();
+  const { session } = useSession(false);
   const [agentId, setAgentId] = useState("ic");
   const [input, setInput] = useState("");
   const [busy, setBusy] = useState(false);
@@ -101,6 +109,10 @@ export function ChatView() {
 
   const thread = chatFor(agentId);
   const agent = agentById(agentId);
+
+  useEffect(() => {
+    getOllamaModels().then(setOllamaModels);
+  }, []);
 
   useEffect(() => {
     if (scrollRef.current) scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
