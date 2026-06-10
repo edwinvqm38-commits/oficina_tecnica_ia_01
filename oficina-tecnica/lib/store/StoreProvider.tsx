@@ -124,18 +124,27 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     if (!remoteConfigured) return;
     return subscribeRemote((remote) => {
-      setState((s) => ({ ...s, chats: mergeChats(s.chats, remote.chats) }));
+      setState((s) => {
+        const chats = mergeChats(s.chats, remote.chats);
+        return chats === s.chats ? s : { ...s, chats };
+      });
     });
   }, [remoteConfigured]);
 
   // Fallback poll: Realtime subscriptions can silently fail to deliver
   // (publication/replication not configured, dropped connection, etc.), so
   // periodically re-fetch the shared chats and merge in anything new.
+  // mergeChats returns the same `chats` reference when there's nothing new,
+  // so this is a no-op (no re-render, no re-save) when nothing changed.
   useEffect(() => {
     if (!remoteConfigured) return;
     const interval = setInterval(() => {
       void loadRemote().then((remote) => {
-        if (remote) setState((s) => ({ ...s, chats: mergeChats(s.chats, remote.chats) }));
+        if (!remote) return;
+        setState((s) => {
+          const chats = mergeChats(s.chats, remote.chats);
+          return chats === s.chats ? s : { ...s, chats };
+        });
       });
     }, 5000);
     return () => clearInterval(interval);

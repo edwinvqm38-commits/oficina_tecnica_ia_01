@@ -77,17 +77,26 @@ export function seedState(): AppState {
  * Merges two `chats` maps by message id (union, keeping both sides' new
  * messages), so polling/realtime updates from other users don't clobber
  * messages this client just sent (and vice versa).
+ *
+ * Returns `a` unchanged (same reference) when `b` has nothing new, so
+ * callers can skip the state update entirely — without this, every poll
+ * tick / realtime echo would produce a new object and re-trigger the
+ * persist effect forever (save -> realtime echo -> merge -> save -> ...).
  */
 export function mergeChats(a: AppState["chats"], b: AppState["chats"]): AppState["chats"] {
-  const keys = new Set([...Object.keys(a), ...Object.keys(b)]);
-  const merged: AppState["chats"] = {};
-  for (const key of keys) {
-    const byId = new Map<string, ChatMessage>();
-    for (const m of a[key] || []) byId.set(m.id, m);
-    for (const m of b[key] || []) byId.set(m.id, m);
-    merged[key] = Array.from(byId.values()).sort((x, y) => x.id.localeCompare(y.id));
+  let changed = false;
+  const merged: AppState["chats"] = { ...a };
+  for (const key of Object.keys(b)) {
+    const existing = a[key] || [];
+    const incoming = b[key] || [];
+    const existingIds = new Set(existing.map((m) => m.id));
+    const newOnes = incoming.filter((m) => !existingIds.has(m.id));
+    if (newOnes.length > 0) {
+      changed = true;
+      merged[key] = [...existing, ...newOnes].sort((x, y) => x.id.localeCompare(y.id));
+    }
   }
-  return merged;
+  return changed ? merged : a;
 }
 
 export function mergeWithSeed(partial: Partial<AppState> | null | undefined): AppState {
