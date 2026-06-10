@@ -2,8 +2,9 @@
 
 import { useEffect, useRef, useState } from "react";
 import { PageHeader } from "../shell/PageHeader";
-import { useStore } from "../../lib/store/StoreProvider";
-import { agentById, AGENTS, PROJECTS } from "../../lib/data";
+import { useStore, useSkillsWithOverrides } from "../../lib/store/StoreProvider";
+import { agentById, AGENTS, PROJECTS, APPROVALS, ALERTS } from "../../lib/data";
+import type { Skill } from "../../lib/types";
 import { agentAvatarClass } from "./shared";
 import { sendChatWithFallback, getOllamaModels } from "../../lib/llm/providers";
 import { routeRequest } from "../../lib/llm/modelRouter";
@@ -122,6 +123,51 @@ function agentsForMessage(text: string, targetId: string | null, hasAttachments 
   return ["ic", "pm"];
 }
 
+// Maps a skill's free-text "agent" field (as written in lib/data.ts) to the
+// roundtable agent id, so each agent only sees the skills assigned to it.
+function agentIdForSkill(skillAgent: string): string | null {
+  const a = skillAgent.toLowerCase();
+  if (a.includes("costos")) return "ic";
+  if (a.includes("project management")) return "pm";
+  if (a.includes("eléctric") || a.includes("electric")) return "ie";
+  return null;
+}
+
+// Active skills (status === "active", with user overrides applied) become
+// concrete instructions in the agent's system prompt — the documented
+// trigger/steps/safety rules are followed when relevant to the conversation.
+function buildSkillsCtx(agId: string, skills: Skill[]): string {
+  const active = skills.filter((s) => s.status === "active" && agentIdForSkill(s.agent) === agId);
+  if (!active.length) return "";
+  const blocks = active.map((s) =>
+    `- "${s.name}" (${s.version}). Se aplica cuando: ${s.trigger}. Pasos a seguir: ${s.steps.join(" → ")}. Reglas: ${s.safety.join("; ")}.`
+  );
+  return `\n\nSkills activas que debes seguir cuando el tema lo amerite:\n${blocks.join("\n")}`;
+}
+
+// Always-on, short snapshot of the office's current state (portfolio,
+// pending approvals, alerts) so any agent can place a question in context
+// even if the user doesn't mention a specific project/code.
+function buildPlatformSummary(
+  projects: { id: string; name: string; client: string; status: string; progress: number; nextMilestone: string; due: string }[],
+  pendingApprovals: { id: string; title: string; agent: string; project: string }[],
+  alerts: { level: string; title: string; message: string }[]
+): string {
+  const projectLines = projects.slice(0, 6).map((p) =>
+    `- ${p.id} ${p.name} (${p.client}): ${p.status}, avance ${p.progress}%, próximo hito "${p.nextMilestone}" (${p.due})`
+  );
+  const approvalLines = pendingApprovals.slice(0, 3).map((a) => `- ${a.title} (${a.agent}, ${a.project})`);
+  const alertLines = alerts.slice(0, 3).map((a) => `- [${a.level}] ${a.title}: ${a.message}`);
+
+  return `\n\nResumen general de la oficina (referencia de contexto; no lo repitas a menos que el usuario lo pida):
+Portafolio de proyectos:
+${projectLines.join("\n")}
+Aprobaciones pendientes (${pendingApprovals.length}):
+${approvalLines.length ? approvalLines.join("\n") : "- ninguna"}
+Alertas activas:
+${alertLines.length ? alertLines.join("\n") : "- ninguna"}`;
+}
+
 function fileIcon(type: string, name: string): string {
   const n = name.toLowerCase();
   if (type.startsWith("image/")) return "🖼️";
@@ -217,7 +263,8 @@ function HandRaise({ agentId, modelLabel }: { agentId: string; modelLabel?: stri
 }
 
 export function RoundtableView() {
-  const { state, appendChat, chatFor } = useStore();
+  const { state, appendChat, chatFor, approvalStatus } = useStore();
+  const skills = useSkillsWithOverrides();
   const { session } = useSession(false);
   const { online, toggle: toggleOnline } = useOnlineMode();
   const [input, setInput] = useState("");
@@ -308,6 +355,14 @@ export function RoundtableView() {
     // (jokes, small talk) while keeping the usual rigor for work topics.
     const toneCtx = `\n\nTono: si el mensaje del usuario es informal, una broma, comentario o charla casual (no relacionado a costos/cronograma/normas/proyectos), respóndele como lo haría un colega humano cercano: natural, cálido y breve (1-2 líneas), sin forzar negritas, listas ni tu formato técnico habitual. Cuando sí sea una consulta de trabajo, usa tu formato y expertise habitual.`;
 
+    // Always-on snapshot of projects/approvals/alerts, so any agent has
+    // office-wide context even without an explicit project reference.
+    const platformCtx = buildPlatformSummary(
+      allProjects,
+      APPROVALS.filter((a) => approvalStatus(a.id) === "pending"),
+      ALERTS
+    );
+
     // Mesa de trabajo memory is shared across all users in the room (see
     // ROUNDTABLE_MEMORY_ID), so every agent learns from the whole team.
     const userId = ROUNDTABLE_MEMORY_ID;
@@ -373,6 +428,7 @@ export function RoundtableView() {
 
     for (const agId of responders) {
       const sysPrompt = RT_SYSTEM_PROMPTS[agId] ?? RT_SYSTEM_PROMPTS.ic;
+      const skillsCtx = buildSkillsCtx(agId, skills);
       const projectCtx = activeProject && !simple
         ? `\n\nProyecto activo: **${activeProject.name}** (${activeProject.id}). Cliente: ${activeProject.client}. Estado: ${activeProject.status}. Avance: ${activeProject.progress}%. ${activeProject.summary}`
         : "";
@@ -384,7 +440,7 @@ export function RoundtableView() {
       const supabaseHistory = simple ? [] : await loadConversationHistory(userId, agId, activeProject?.id, 6).catch(() => []);
 
       const messages: ChatMessage[] = [
-        { role: "system", content: sysPrompt + projectCtx + requirementCtx + autoCodeCtx + attachmentCtx + recentThreadCtx + toneCtx + brevityCtx + coordinatorCtx },
+        { role: "system", content: sysPrompt + skillsCtx + platformCtx + projectCtx + requirementCtx + autoCodeCtx + attachmentCtx + recentThreadCtx + toneCtx + brevityCtx + coordinatorCtx },
         ...supabaseHistory.map((m) => ({ role: m.role as "user" | "assistant", content: m.content })),
         { role: "user", content: parsed.cleanText + fileCtx },
       ];
