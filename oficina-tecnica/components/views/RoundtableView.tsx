@@ -85,7 +85,7 @@ export const AGENT_TOPICS: Record<string, string> = {
 // @mención según corresponda. Evita que se llene el chat con saludos repetidos.
 const TEAM_COORDINATOR = "pm";
 
-function agentsForMessage(text: string, targetId: string | null): string[] {
+function agentsForMessage(text: string, targetId: string | null, hasAttachments = false): string[] {
   const allActive = AGENTS.filter((a) => a.type === "agent" && a.status === "active").map((a) => a.id);
 
   // If user directed to specific agent
@@ -102,7 +102,9 @@ function agentsForMessage(text: string, targetId: string | null): string[] {
 
   // Simple message: if it matches a specific agent's topic, only that agent responds;
   // otherwise (general greeting/intro) only the coordinator responds.
-  if (isSimpleMessage(text)) {
+  // A short message with a file attached is NOT "simple" — there is real
+  // content (the file) to analyze, so it goes through the technical path.
+  if (isSimpleMessage(text) && !hasAttachments) {
     const best = scored.sort((a, b) => b.hits - a.hits)[0];
     if (best && best.hits > 0) return [best.id];
     return allActive.includes(TEAM_COORDINATOR) ? [TEAM_COORDINATOR] : allActive;
@@ -246,7 +248,8 @@ export function RoundtableView() {
     setInput("");
     setBusy(true);
 
-    const responders = agentsForMessage(parsed.cleanText, parsed.targetAgentId);
+    const hasAttachments = (inputCtx?.attachments?.length ?? 0) > 0;
+    const responders = agentsForMessage(parsed.cleanText, parsed.targetAgentId, hasAttachments);
     const routing = routeRequest(parsed.cleanText, ollamaModelsRef.current);
 
     // True when the message had no specific target/topic and routed solely
@@ -260,9 +263,10 @@ export function RoundtableView() {
 
     const userId = session?.email ?? "anonymous";
     // A short message is only "simple" (greeting/no analysis) if the user
-    // hasn't attached project/RQ context via chips — otherwise they want
-    // that context used even if the question itself is short.
-    const simple = isSimpleMessage(parsed.cleanText) && !ctxProject && !ctxRequirement;
+    // hasn't attached project/RQ context via chips, nor a file — otherwise
+    // they want that context (or the file's content) used even if the
+    // question itself is short.
+    const simple = isSimpleMessage(parsed.cleanText) && !ctxProject && !ctxRequirement && !hasAttachments;
 
     // Auto-detect COT-xxx / RQ-xxx / OC-xxx codes pasted in the message
     let autoCodeCtx = "";
@@ -298,6 +302,14 @@ export function RoundtableView() {
       `\n\n--- Archivo adjunto: ${f.name} (${Math.round(f.size / 1024)}KB) ---\n${f.content}\n---`
     ).join("");
 
+    // Tell the agent how to read the "Archivo adjunto" block(s) appended to
+    // the user's message, and how to react when extraction yielded little
+    // or no usable text (scanned drawings, images, etc.) instead of
+    // ignoring the attachment and replying with a generic greeting.
+    const attachmentCtx = hasAttachments
+      ? `\n\nEl usuario adjuntó ${attachmentMeta.length === 1 ? "un archivo" : `${attachmentMeta.length} archivos`} a este mensaje. Su contenido (texto extraído) viene al final, en bloques "--- Archivo adjunto: <nombre> ---". Básate en ese contenido para responder a lo que pregunta el usuario sobre el/los archivo(s) — NO respondas con un saludo genérico ni ignores el adjunto. Si el contenido extraído está vacío, es muy corto o dice "sin texto extraíble" (típico de planos/imágenes escaneadas), dilo explícitamente, indica qué archivo es (nombre) y pide al usuario un resumen, las páginas/secciones clave o una versión más legible para poder ayudar.`
+      : "";
+
     // When several agents respond to the same message, keep replies short
     // so the chat doesn't get flooded — each agent covers only its angle.
     const brevityCtx = responders.length > 1
@@ -323,7 +335,7 @@ export function RoundtableView() {
       const supabaseHistory = simple ? [] : await loadConversationHistory(userId, agId, activeProject?.id, 6).catch(() => []);
 
       const messages: ChatMessage[] = [
-        { role: "system", content: sysPrompt + projectCtx + requirementCtx + autoCodeCtx + brevityCtx + coordinatorCtx },
+        { role: "system", content: sysPrompt + projectCtx + requirementCtx + autoCodeCtx + attachmentCtx + brevityCtx + coordinatorCtx },
         ...supabaseHistory.map((m) => ({ role: m.role as "user" | "assistant", content: m.content })),
         { role: "user", content: parsed.cleanText + fileCtx },
       ];
