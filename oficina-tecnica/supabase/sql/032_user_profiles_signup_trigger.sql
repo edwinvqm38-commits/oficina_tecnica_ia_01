@@ -72,8 +72,8 @@ begin
     new.email,
     coalesce(new.raw_user_meta_data ->> 'full_name', new.raw_user_meta_data ->> 'name'),
     new.raw_user_meta_data ->> 'avatar_url',
-    case when lower(new.email) = 'edwin.qm@outlook.com' then 'admin' else 'consulta' end,
-    case when lower(new.email) = 'edwin.qm@outlook.com' then 'approved' else 'pending' end,
+    case when lower(new.email) = 'edwin.qm@outlook.com' then 'admin'::app_role else 'consulta'::app_role end,
+    case when lower(new.email) = 'edwin.qm@outlook.com' then 'approved'::user_status else 'pending'::user_status end,
     lower(new.email) = 'edwin.qm@outlook.com',
     case when lower(new.email) = 'edwin.qm@outlook.com' then 'sistema' else null end,
     case when lower(new.email) = 'edwin.qm@outlook.com' then now() else null end
@@ -144,8 +144,8 @@ select
   u.email,
   coalesce(u.raw_user_meta_data ->> 'full_name', u.raw_user_meta_data ->> 'name'),
   u.raw_user_meta_data ->> 'avatar_url',
-  case when lower(u.email) = 'edwin.qm@outlook.com' then 'admin' else 'consulta' end,
-  case when lower(u.email) = 'edwin.qm@outlook.com' then 'approved' else 'pending' end,
+  case when lower(u.email) = 'edwin.qm@outlook.com' then 'admin'::app_role else 'consulta'::app_role end,
+  case when lower(u.email) = 'edwin.qm@outlook.com' then 'approved'::user_status else 'pending'::user_status end,
   lower(u.email) = 'edwin.qm@outlook.com',
   case when lower(u.email) = 'edwin.qm@outlook.com' then 'sistema' else null end,
   case when lower(u.email) = 'edwin.qm@outlook.com' then now() else null end
@@ -156,7 +156,7 @@ on conflict (id) do nothing;
 -- Asegura que tu cuenta quede como admin aprobado aunque ya existiera
 -- el perfil con otro estado/rol.
 update public.user_profiles
-set role = 'admin', status = 'approved', is_super_admin = true,
+set role = 'admin'::app_role, status = 'approved'::user_status, is_super_admin = true,
     approved_by = coalesce(approved_by, 'sistema'), approved_at = coalesce(approved_at, now())
 where lower(email) = 'edwin.qm@outlook.com';
 
