@@ -242,21 +242,37 @@ function debugLog(...args: unknown[]) {
 
 export type ProjectReferenceSource = "cotizacion" | "requerimiento" | "technical_proposal" | "historical_import" | "none";
 
+// Compact aggregate for historical-import matches that can fan out to many
+// requerimientos (e.g. "FOR-EKA-PRO-3_2025-143" -> 122 RQs). We never send
+// the full list/items to the LLM — just counts + a small sample.
+export interface HistoricalSummary {
+  total: number;
+  byEstado: Record<string, number>;
+  totalCosto: number;
+  sample: RequirementSummary[];
+}
+
 export interface ProjectReferenceResult {
   source: ProjectReferenceSource;
   cotizacion?: CotizacionSummary;
   requirements?: RequirementSummary[];
+  historicalSummary?: HistoricalSummary;
 }
+
+const HISTORICAL_SAMPLE_LIMIT = 20;
+const HISTORICAL_IDS_LIMIT = 200;
 
 export async function fetchProjectContextByCode(rawCode: string): Promise<ProjectReferenceResult> {
   const code = rawCode.trim().toUpperCase();
   if (!code) return { source: "none" };
 
-  // 1) cotizaciones.codigo (exact) or cotizaciones.proyecto (contains)
+  // 1) cotizaciones.codigo (exact match only — fuzzy matches on
+  // cotizaciones.proyecto can collide with unrelated cotizaciones whose
+  // project name happens to contain this code as a substring).
   const { data: cots } = await supabase
     .from("cotizaciones")
     .select("id, codigo, oc, cliente_nombre, proyecto, estado, avance, monto, responsable_tecnico, tipo_servicio_nombre, prioridad")
-    .or(`codigo.eq.${code},proyecto.ilike.%${code}%`)
+    .eq("codigo", code)
     .limit(1);
   if (cots && cots.length > 0) {
     debugLog(`'${code}' encontrado en cotizaciones`);
@@ -290,25 +306,48 @@ export async function fetchProjectContextByCode(rawCode: string): Promise<Projec
   }
 
   // 4) Fallback: historical-import metadata on requerimiento_items, linking
-  // back to the parent requerimientos.
+  // back to the parent requerimientos. Only requerimiento_id is fetched here
+  // (lightweight) — full requerimientos/items are fetched in capped,
+  // aggregate-only queries below so a code linked to 100+ RQs doesn't blow
+  // up the prompt or the page.
   const { data: items } = await supabase
     .from("requerimiento_items")
     .select("requerimiento_id")
     .or(
       `metadata->historical_import->>historical_cotizacion_key.eq.${code},` +
-      `metadata->historical_import->>historical_rq_key.ilike.${code}||%`
+      `metadata->historical_import->>historical_rq_key.ilike.${code}*`
     )
-    .limit(100);
+    .limit(500);
   if (items && items.length > 0) {
-    const ids = [...new Set(items.map((i) => i.requerimiento_id as string).filter(Boolean))];
+    const allIds = [...new Set(items.map((i) => i.requerimiento_id as string).filter(Boolean))];
+    const ids = allIds.slice(0, HISTORICAL_IDS_LIMIT);
     if (ids.length > 0) {
-      const { data: histReqs } = await supabase
-        .from("requerimientos")
-        .select("id, codigo, estado, responsable, avance, solicitante_rq, tipo_servicio_nombre, fecha_requerida, cotizacion_codigo, observaciones")
-        .in("id", ids);
-      if (histReqs && histReqs.length > 0) {
-        debugLog(`'${code}' encontrado vía historical_import en requerimiento_items -> ${histReqs.length} requerimiento(s)`);
-        return { source: "historical_import", requirements: histReqs as RequirementSummary[] };
+      const [{ count }, { data: sample }, { data: estadoRows }, { data: costRows }] = await Promise.all([
+        supabase.from("requerimientos").select("id", { count: "exact", head: true }).in("id", ids),
+        supabase
+          .from("requerimientos")
+          .select("id, codigo, estado, responsable, avance, solicitante_rq, tipo_servicio_nombre, fecha_requerida, cotizacion_codigo, observaciones")
+          .in("id", ids)
+          .order("codigo", { ascending: true })
+          .limit(HISTORICAL_SAMPLE_LIMIT),
+        supabase.from("requerimientos").select("estado").in("id", ids),
+        supabase.from("requerimiento_items").select("costo_total_presupuestado").in("requerimiento_id", ids).limit(2000),
+      ]);
+
+      if (sample && sample.length > 0) {
+        const byEstado: Record<string, number> = {};
+        for (const r of estadoRows ?? []) {
+          const estado = (r.estado as string | null) ?? "—";
+          byEstado[estado] = (byEstado[estado] ?? 0) + 1;
+        }
+        const totalCosto = (costRows ?? []).reduce((sum, r) => sum + Number(r.costo_total_presupuestado ?? 0), 0);
+
+        debugLog(`'${code}' encontrado vía historical_import en requerimiento_items -> ${count ?? ids.length} requerimiento(s)`);
+        return {
+          source: "historical_import",
+          requirements: sample as RequirementSummary[],
+          historicalSummary: { total: count ?? ids.length, byEstado, totalCosto, sample: sample as RequirementSummary[] },
+        };
       }
     }
   }
@@ -327,11 +366,22 @@ export function buildProjectReferencePrompt(code: string, result: ProjectReferen
     const origin = result.source === "technical_proposal" ? " (vía propuesta técnica)" : "";
     return `\n\nCódigo **${code}** → Cotización/Proyecto${origin}: **${p.id}**: ${p.name} · Cliente: ${p.client} · Estado: ${p.status} · Avance: ${p.progress}%${p.summary ? ` · ${p.summary}` : ""}`;
   }
+  if (result.source === "historical_import" && result.historicalSummary) {
+    const { total, byEstado, totalCosto, sample } = result.historicalSummary;
+    const estadoStr = Object.entries(byEstado).map(([estado, n]) => `${estado}: ${n}`).join(", ");
+    let prompt = `\n\nCódigo **${code}** (vinculado por importación histórica — no está directamente en cotizaciones.codigo, pero sí en los datos importados de los requerimientos):`;
+    prompt += `\n- Total de requerimientos asociados: **${total}**`;
+    if (estadoStr) prompt += `\n- Por estado: ${estadoStr}`;
+    if (totalCosto > 0) prompt += `\n- Costo total RQ aproximado: **PEN ${totalCosto.toLocaleString("es-PE", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}**`;
+    prompt += `\n- Muestra de los primeros ${Math.min(sample.length, 10)} requerimientos:`;
+    for (const rq of sample.slice(0, 10)) {
+      prompt += `\n  - **${rq.codigo}** · Estado: ${rq.estado} · Avance: ${rq.avance ?? "—"}%${rq.responsable ? ` · Responsable: ${rq.responsable}` : ""}`;
+    }
+    prompt += `\n\nEsta es información agregada (no la lista completa). Si el usuario pide el detalle de un RQ específico, pídele el código exacto para consultarlo.`;
+    return prompt;
+  }
   if (result.requirements && result.requirements.length > 0) {
-    const note = result.source === "historical_import"
-      ? ` (vinculados por importación histórica — el código **${code}** no está directamente en cotizaciones.codigo, pero sí en los datos importados de los requerimientos).`
-      : "";
-    let prompt = `\n\nRequerimientos relacionados al código **${code}**${note}:`;
+    let prompt = `\n\nRequerimientos relacionados al código **${code}**:`;
     for (const rq of result.requirements.slice(0, 10)) {
       prompt += `\n- **${rq.codigo}** · Estado: ${rq.estado} · Avance: ${rq.avance ?? "—"}%${rq.responsable ? ` · Responsable: ${rq.responsable}` : ""}`;
     }

@@ -406,41 +406,50 @@ export function RoundtableView() {
     // question itself is short.
     const simple = isSimpleMessage(parsed.cleanText) && !ctxProject && !ctxRequirement && !hasAttachments;
 
-    // Auto-detect COT-xxx / RQ-xxx / OC-xxx codes pasted in the message
+    // Auto-detect COT-xxx / RQ-xxx / OC-xxx codes pasted in the message.
+    // Wrapped in try/catch so a Supabase/network hiccup while building this
+    // extra context never breaks the whole send flow or leaves the page stuck.
     let autoCodeCtx = "";
     if (!simple) {
-      const codes = detectDocumentCodes(parsed.cleanText);
-      for (const dc of codes) {
-        if (dc.type === "COT") {
-          const cot = await fetchCotizacionByCode(dc.code).catch(() => null);
-          if (cot) {
-            const p = cotizacionToProject(cot);
-            autoCodeCtx += `\n\nCotización detectada **${p.id}**: ${p.name} · Cliente: ${p.client} · Estado: ${p.status} · Avance: ${p.progress}%${p.summary ? ` · ${p.summary}` : ""}`;
-          }
-        } else if (dc.type === "RQ") {
-          const rq = await fetchRequirementByCode(dc.code).catch(() => null);
-          if (rq) {
-            autoCodeCtx += buildContextPrompt({ project: null, requirement: rq });
-            const rqItems = await fetchRequirementItems(rq.id).catch(() => []);
-            autoCodeCtx += buildRequirementItemsPrompt(rqItems);
+      try {
+        const codes = detectDocumentCodes(parsed.cleanText);
+        for (const dc of codes) {
+          if (dc.type === "COT") {
+            const cot = await fetchCotizacionByCode(dc.code).catch(() => null);
+            if (cot) {
+              const p = cotizacionToProject(cot);
+              autoCodeCtx += `\n\nCotización detectada **${p.id}**: ${p.name} · Cliente: ${p.client} · Estado: ${p.status} · Avance: ${p.progress}%${p.summary ? ` · ${p.summary}` : ""}`;
+            }
+          } else if (dc.type === "RQ") {
+            const rq = await fetchRequirementByCode(dc.code).catch(() => null);
+            if (rq) {
+              autoCodeCtx += buildContextPrompt({ project: null, requirement: rq });
+              const rqItems = await fetchRequirementItems(rq.id).catch(() => []);
+              autoCodeCtx += buildRequirementItemsPrompt(rqItems);
+            }
           }
         }
-      }
 
-      // Codes that don't follow COT-/RQ-/OC- conventions (e.g. historical
-      // imports like "FOR-EKA-PRO-3_2025-143"): cascade through cotizaciones,
-      // requerimientos, technical_proposals, and historical-import metadata.
-      const exclude = new Set(codes.map((c) => c.code));
-      const otherCodes = detectOtherCodes(parsed.cleanText, exclude);
-      for (const code of otherCodes.slice(0, 3)) {
-        const result = await fetchProjectContextByCode(code).catch(() => null);
-        if (result && result.source !== "none") {
+        // Codes that don't follow COT-/RQ-/OC- conventions (e.g. historical
+        // imports like "FOR-EKA-PRO-3_2025-143"): cascade through cotizaciones,
+        // requerimientos, technical_proposals, and historical-import metadata.
+        const exclude = new Set(codes.map((c) => c.code));
+        const otherCodes = detectOtherCodes(parsed.cleanText, exclude);
+        for (const code of otherCodes.slice(0, 2)) {
+          const result = await fetchProjectContextByCode(code).catch(() => null);
+          if (!result || result.source === "none") continue;
           autoCodeCtx += buildProjectReferencePrompt(code, result);
-          if (result.requirements && result.requirements.length > 0) {
+          // Item-level detail is only worth loading when the code resolved to
+          // a single specific requerimiento — not for historical-import
+          // matches, which can fan out to 100+ RQs (already summarized above).
+          if (result.source === "requerimiento" && result.requirements?.length === 1) {
             const items = await fetchRequirementItems(result.requirements[0].id).catch(() => []);
             autoCodeCtx += buildRequirementItemsPrompt(items);
           }
         }
+      } catch (err) {
+        if (process.env.NODE_ENV !== "production") console.debug("[RoundtableView] autoCodeCtx error", err);
+        autoCodeCtx += `\n\n(No pude cargar el detalle histórico del código mencionado por un error temporal. Indícalo brevemente al usuario si pregunta por ese código.)`;
       }
     }
 
