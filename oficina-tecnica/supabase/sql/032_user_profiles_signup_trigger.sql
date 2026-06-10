@@ -27,6 +27,17 @@ create table if not exists public.user_profiles (
   updated_at timestamptz not null default now()
 );
 
+-- La tabla ya existía en tu proyecto sin estas columnas; las agregamos
+-- de forma segura (no-op si ya existen).
+alter table public.user_profiles add column if not exists avatar_url text;
+alter table public.user_profiles add column if not exists is_super_admin boolean not null default false;
+alter table public.user_profiles add column if not exists approved_by text;
+alter table public.user_profiles add column if not exists approved_at timestamptz;
+alter table public.user_profiles add column if not exists rejected_reason text;
+alter table public.user_profiles add column if not exists metadata jsonb not null default '{}'::jsonb;
+alter table public.user_profiles add column if not exists created_at timestamptz not null default now();
+alter table public.user_profiles add column if not exists updated_at timestamptz not null default now();
+
 create index if not exists user_profiles_status_idx on public.user_profiles (status);
 
 create or replace function public.set_user_profiles_updated_at()
