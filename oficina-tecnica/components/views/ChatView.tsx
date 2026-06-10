@@ -9,11 +9,11 @@ import { agentAvatarClass } from "./shared";
 import { sendChatWithFallback, getOllamaModels } from "../../lib/llm/providers";
 import { routeRequest } from "../../lib/llm/modelRouter";
 import type { ChatMessage } from "../../lib/llm/providers";
-import { parseInput, isSimpleMessage, detectDocumentCodes, HUMANIZE_CTX } from "../../lib/chat/messageUtils";
+import { parseInput, isSimpleMessage, detectDocumentCodes, detectOtherCodes, HUMANIZE_CTX } from "../../lib/chat/messageUtils";
 import { MdText } from "../chat/MdText";
 import { HelpPanel } from "../chat/HelpPanel";
 import { ChatAutoInput } from "../chat/ChatAutoInput";
-import { buildContextPrompt, buildRequirementItemsPrompt, fetchCotizacionByCode, fetchRequirementByCode, fetchRequirementItems, cotizacionToProject } from "../../lib/chat/contextQuery";
+import { buildContextPrompt, buildRequirementItemsPrompt, fetchCotizacionByCode, fetchRequirementByCode, fetchRequirementItems, fetchProjectContextByCode, buildProjectReferencePrompt, cotizacionToProject } from "../../lib/chat/contextQuery";
 import type { ChatCtx } from "../../lib/chat/contextQuery";
 import { useSession } from "../../lib/auth/useSession";
 import { saveConversation, loadConversationHistory } from "../../lib/memory/conversationMemory";
@@ -225,6 +225,22 @@ export function ChatView() {
             autoCodeCtx += buildContextPrompt({ project: null, requirement: rq });
             const rqItems = await fetchRequirementItems(rq.id).catch(() => []);
             autoCodeCtx += buildRequirementItemsPrompt(rqItems);
+          }
+        }
+      }
+
+      // Codes that don't follow COT-/RQ-/OC- conventions (e.g. historical
+      // imports like "FOR-EKA-PRO-3_2025-143"): cascade through cotizaciones,
+      // requerimientos, technical_proposals, and historical-import metadata.
+      const exclude = new Set(codes.map((c) => c.code));
+      const otherCodes = detectOtherCodes(parsed.cleanText, exclude);
+      for (const code of otherCodes.slice(0, 3)) {
+        const result = await fetchProjectContextByCode(code).catch(() => null);
+        if (result && result.source !== "none") {
+          autoCodeCtx += buildProjectReferencePrompt(code, result);
+          if (result.requirements && result.requirements.length > 0) {
+            const items = await fetchRequirementItems(result.requirements[0].id).catch(() => []);
+            autoCodeCtx += buildRequirementItemsPrompt(items);
           }
         }
       }

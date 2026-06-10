@@ -201,6 +201,30 @@ export function detectInlineCodes(text: string): InlineCodeMatch[] {
   return results;
 }
 
+// Codes that don't follow the COT-/RQ-/OC- conventions (e.g.
+// "FOR-EKA-PRO-3_2025-143" from the historical data import). Requires at
+// least 2 hyphen/underscore-separated segments after the prefix to avoid
+// matching short technical refs like "IEC-60364" or "CNE-U".
+const OTHER_CODE_RE = /\b[A-Z]{2,6}(?:[-_][A-Za-z0-9]+){2,6}\b/g;
+
+/**
+ * Detects codes that look like project/document references but don't match
+ * the known COT-/RQ-/OC- prefixes, excluding any codes already classified
+ * by `detectDocumentCodes`. Used as input for `fetchProjectContextByCode`'s
+ * historical-import fallback.
+ */
+export function detectOtherCodes(text: string, exclude: Set<string> = new Set()): string[] {
+  const seen = new Set<string>();
+  const results: string[] = [];
+  for (const m of text.matchAll(OTHER_CODE_RE)) {
+    const c = m[0].toUpperCase();
+    if (seen.has(c) || exclude.has(c)) continue;
+    seen.add(c);
+    results.push(c);
+  }
+  return results;
+}
+
 export function detectDocumentCodes(text: string): DocumentCode[] {
   const results: DocumentCode[] = [];
   const seen = new Set<string>();

@@ -228,3 +228,115 @@ export async function fetchAllRequirements(): Promise<RequirementSummary[]> {
   if (error || !data) return [];
   return data as RequirementSummary[];
 }
+
+// ── Generic project/code reference lookup (with historical-import fallback) ─
+// Codes pasted by users don't always follow the COT-/RQ-/OC- prefixes (e.g.
+// "FOR-EKA-PRO-3_2025-143" comes from the historical data import). This does
+// a best-effort cascade across the tables/fields where such a code can live,
+// so the agent can find the related requirements instead of saying it has
+// "no access" when the real issue is just that the code wasn't matched.
+
+function debugLog(...args: unknown[]) {
+  if (process.env.NODE_ENV !== "production") console.debug("[contextQuery]", ...args);
+}
+
+export type ProjectReferenceSource = "cotizacion" | "requerimiento" | "technical_proposal" | "historical_import" | "none";
+
+export interface ProjectReferenceResult {
+  source: ProjectReferenceSource;
+  cotizacion?: CotizacionSummary;
+  requirements?: RequirementSummary[];
+}
+
+export async function fetchProjectContextByCode(rawCode: string): Promise<ProjectReferenceResult> {
+  const code = rawCode.trim().toUpperCase();
+  if (!code) return { source: "none" };
+
+  // 1) cotizaciones.codigo (exact) or cotizaciones.proyecto (contains)
+  const { data: cots } = await supabase
+    .from("cotizaciones")
+    .select("id, codigo, oc, cliente_nombre, proyecto, estado, avance, monto, responsable_tecnico, tipo_servicio_nombre, prioridad")
+    .or(`codigo.eq.${code},proyecto.ilike.%${code}%`)
+    .limit(1);
+  if (cots && cots.length > 0) {
+    debugLog(`'${code}' encontrado en cotizaciones`);
+    return { source: "cotizacion", cotizacion: cots[0] as CotizacionSummary };
+  }
+
+  // 2) requerimientos.codigo or requerimientos.cotizacion_codigo (exact)
+  const { data: reqs } = await supabase
+    .from("requerimientos")
+    .select("id, codigo, estado, responsable, avance, solicitante_rq, tipo_servicio_nombre, fecha_requerida, cotizacion_codigo, observaciones")
+    .or(`codigo.eq.${code},cotizacion_codigo.eq.${code}`)
+    .limit(10);
+  if (reqs && reqs.length > 0) {
+    debugLog(`'${code}' encontrado en requerimientos (${reqs.length})`);
+    return { source: "requerimiento", requirements: reqs as RequirementSummary[] };
+  }
+
+  // 3) technical_proposals.code or .cotizacion_codigo -> resolve its cotizacion
+  const { data: proposals } = await supabase
+    .from("technical_proposals")
+    .select("cotizacion_codigo")
+    .or(`code.eq.${code},cotizacion_codigo.eq.${code}`)
+    .limit(1);
+  if (proposals && proposals.length > 0) {
+    const cotCodigo = proposals[0].cotizacion_codigo as string;
+    const cot = await fetchCotizacionByCode(cotCodigo);
+    if (cot) {
+      debugLog(`'${code}' encontrado en technical_proposals -> cotización ${cotCodigo}`);
+      return { source: "technical_proposal", cotizacion: cot };
+    }
+  }
+
+  // 4) Fallback: historical-import metadata on requerimiento_items, linking
+  // back to the parent requerimientos.
+  const { data: items } = await supabase
+    .from("requerimiento_items")
+    .select("requerimiento_id")
+    .or(
+      `metadata->historical_import->>historical_cotizacion_key.eq.${code},` +
+      `metadata->historical_import->>historical_rq_key.ilike.${code}||%`
+    )
+    .limit(100);
+  if (items && items.length > 0) {
+    const ids = [...new Set(items.map((i) => i.requerimiento_id as string).filter(Boolean))];
+    if (ids.length > 0) {
+      const { data: histReqs } = await supabase
+        .from("requerimientos")
+        .select("id, codigo, estado, responsable, avance, solicitante_rq, tipo_servicio_nombre, fecha_requerida, cotizacion_codigo, observaciones")
+        .in("id", ids);
+      if (histReqs && histReqs.length > 0) {
+        debugLog(`'${code}' encontrado vía historical_import en requerimiento_items -> ${histReqs.length} requerimiento(s)`);
+        return { source: "historical_import", requirements: histReqs as RequirementSummary[] };
+      }
+    }
+  }
+
+  debugLog(`'${code}' no encontrado en cotizaciones, requerimientos, technical_proposals ni historical_import`);
+  return { source: "none" };
+}
+
+export function buildProjectReferencePrompt(code: string, result: ProjectReferenceResult): string {
+  if (result.source === "none") {
+    return `\n\nSe detectó el código **${code}** en el mensaje, pero no se encontró en cotizaciones, requerimientos, propuestas técnicas ni en datos históricos importados. Dile al usuario claramente que no encontraste ese código (no es un problema de permisos) y pídele que confirme el código o el nombre del proyecto.`;
+  }
+  if (result.source === "cotizacion" || result.source === "technical_proposal") {
+    if (!result.cotizacion) return "";
+    const p = cotizacionToProject(result.cotizacion);
+    const origin = result.source === "technical_proposal" ? " (vía propuesta técnica)" : "";
+    return `\n\nCódigo **${code}** → Cotización/Proyecto${origin}: **${p.id}**: ${p.name} · Cliente: ${p.client} · Estado: ${p.status} · Avance: ${p.progress}%${p.summary ? ` · ${p.summary}` : ""}`;
+  }
+  if (result.requirements && result.requirements.length > 0) {
+    const note = result.source === "historical_import"
+      ? ` (vinculados por importación histórica — el código **${code}** no está directamente en cotizaciones.codigo, pero sí en los datos importados de los requerimientos).`
+      : "";
+    let prompt = `\n\nRequerimientos relacionados al código **${code}**${note}:`;
+    for (const rq of result.requirements.slice(0, 10)) {
+      prompt += `\n- **${rq.codigo}** · Estado: ${rq.estado} · Avance: ${rq.avance ?? "—"}%${rq.responsable ? ` · Responsable: ${rq.responsable}` : ""}`;
+    }
+    if (result.requirements.length > 10) prompt += `\n... y ${result.requirements.length - 10} más.`;
+    return prompt;
+  }
+  return "";
+}
