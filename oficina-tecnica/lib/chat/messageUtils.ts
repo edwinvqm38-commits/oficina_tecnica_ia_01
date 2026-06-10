@@ -134,6 +134,25 @@ export interface DocumentCode {
   code: string;
 }
 
+// ── Inline code detection (for textarea highlighting) ───────────────────────
+// Matches broader real-world codes like FOR-EKA-PRO-3_2025-143 or RQ-CJM075-001_2026
+const INLINE_CODE_RE = /\b[A-Z]{2,6}(?:[-_][A-Za-z0-9]+){1,6}\b/g;
+
+export interface InlineCodeMatch {
+  code: string;
+  start: number;
+  end: number;
+}
+
+export function detectInlineCodes(text: string): InlineCodeMatch[] {
+  const results: InlineCodeMatch[] = [];
+  for (const m of text.matchAll(INLINE_CODE_RE)) {
+    if (m.index == null) continue;
+    results.push({ code: m[0], start: m.index, end: m.index + m[0].length });
+  }
+  return results;
+}
+
 export function detectDocumentCodes(text: string): DocumentCode[] {
   const results: DocumentCode[] = [];
   const seen = new Set<string>();

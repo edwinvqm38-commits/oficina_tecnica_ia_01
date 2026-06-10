@@ -1,12 +1,13 @@
 "use client";
 
-import { useEffect, useRef, useState, KeyboardEvent } from "react";
+import { useEffect, useRef, useState, KeyboardEvent, ReactNode } from "react";
 import type {
   ChatCtx, RequirementSummary, CotizacionSummary, FileAttachment,
 } from "../../lib/chat/contextQuery";
 import {
   fetchRequirementsByProject, searchCotizaciones, cotizacionToProject,
 } from "../../lib/chat/contextQuery";
+import { detectInlineCodes } from "../../lib/chat/messageUtils";
 
 export type { ChatCtx };
 
@@ -38,6 +39,11 @@ const SLASH_COMMANDS: DropdownOption[] = [
 
 const PROJ_CMDS = ["proyecto", "p", "pro", "proy"];
 
+// Colors for inline code highlighting
+const COLOR_PROJECT = "#16a34a";  // green
+const COLOR_REQ = "#0e7490";      // cyan
+const COLOR_OTHER = "#b45309";    // amber (detected, unassigned code)
+
 function getAtMatch(val: string, cur: number): { query: string; from: number } | null {
   const before = val.slice(0, cur);
   const m = before.match(/@([A-Za-z0-9-]*)$/);
@@ -55,6 +61,36 @@ function getSlashMatch(val: string, cur: number): { cmd: string; query: string; 
   const cmd = parts[0] ?? "";
   const query = parts.slice(1).join(" ");
   return { cmd, query, from: slashIdx };
+}
+
+// Build highlighted overlay nodes for the textarea backdrop
+function renderHighlighted(text: string, ctx: ChatCtx): ReactNode[] {
+  const matches = detectInlineCodes(text);
+  const nodes: ReactNode[] = [];
+
+  if (matches.length === 0) {
+    nodes.push(text + "​");
+    return nodes;
+  }
+
+  const projId = ctx.project?.id?.toUpperCase();
+  const reqCode = ctx.requirement?.codigo?.toUpperCase();
+
+  let last = 0;
+  matches.forEach((m, i) => {
+    if (m.start > last) nodes.push(text.slice(last, m.start));
+    const codeUpper = m.code.toUpperCase();
+    let color = COLOR_OTHER;
+    if (projId && codeUpper === projId) color = COLOR_PROJECT;
+    else if (reqCode && codeUpper === reqCode) color = COLOR_REQ;
+    nodes.push(
+      <span key={i} style={{ fontWeight: 700, color }}>{m.code}</span>
+    );
+    last = m.end;
+  });
+  if (last < text.length) nodes.push(text.slice(last));
+  nodes.push("​");
+  return nodes;
 }
 
 // Simple PDF text extraction (works on uncompressed/simple PDFs)
@@ -120,6 +156,7 @@ export function ChatAutoInput({ value, onChange, onSubmit, placeholder, disabled
   const [searchingCot, setSearchingCot] = useState(false);
   const [attachments, setAttachments] = useState<FileAttachment[]>([]);
   const taRef = useRef<HTMLTextAreaElement>(null);
+  const overlayRef = useRef<HTMLDivElement>(null);
   const fileRef = useRef<HTMLInputElement>(null);
   const searchTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -129,6 +166,20 @@ export function ChatAutoInput({ value, onChange, onSubmit, placeholder, disabled
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [defaultProjectId]);
+
+  // Clear ctx.project / ctx.requirement if their code is no longer present in the text
+  useEffect(() => {
+    const upper = value.toUpperCase();
+    if (ctx.project && !upper.includes(ctx.project.id.toUpperCase())) {
+      setCtx((c) => ({ ...c, project: null, requirement: null }));
+      setRequirements([]);
+      return;
+    }
+    if (ctx.requirement && !upper.includes(ctx.requirement.codigo.toUpperCase())) {
+      setCtx((c) => ({ ...c, requirement: null }));
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [value]);
 
   const atMatch = getAtMatch(value, cursor);
   const slashMatch = !atMatch ? getSlashMatch(value, cursor) : null;
@@ -218,11 +269,13 @@ export function ChatAutoInput({ value, onChange, onSubmit, placeholder, disabled
     if (opt.id.startsWith("__")) return;
 
     if (opt.setCtxProjectFromCot) {
-      setCtx((c) => ({ ...c, project: cotizacionToProject(opt.setCtxProjectFromCot!), requirement: null }));
+      const project = cotizacionToProject(opt.setCtxProjectFromCot);
+      setCtx((c) => ({ ...c, project, requirement: null }));
       setRequirements([]);
-      const newVal = value.slice(0, replaceFrom).trimEnd() + value.slice(replaceFrom + replaceLen);
-      onChange(newVal.trimStart());
-      const newCur = replaceFrom;
+      const insertText = project.id + " ";
+      const newVal = value.slice(0, replaceFrom) + insertText + value.slice(replaceFrom + replaceLen);
+      const newCur = replaceFrom + insertText.length;
+      onChange(newVal);
       setTimeout(() => { taRef.current?.setSelectionRange(newCur, newCur); taRef.current?.focus(); setCursor(newCur); }, 0);
       return;
     }
@@ -232,10 +285,12 @@ export function ChatAutoInput({ value, onChange, onSubmit, placeholder, disabled
     }
 
     if (opt.setCtxRequirement) {
-      setCtx((c) => ({ ...c, requirement: opt.setCtxRequirement! }));
-      const newVal = value.slice(0, replaceFrom).trimEnd() + value.slice(replaceFrom + replaceLen);
-      onChange(newVal.trimStart());
-      const newCur = replaceFrom;
+      const req = opt.setCtxRequirement;
+      setCtx((c) => ({ ...c, requirement: req }));
+      const insertText = req.codigo + " ";
+      const newVal = value.slice(0, replaceFrom) + insertText + value.slice(replaceFrom + replaceLen);
+      const newCur = replaceFrom + insertText.length;
+      onChange(newVal);
       setTimeout(() => { taRef.current?.setSelectionRange(newCur, newCur); taRef.current?.focus(); setCursor(newCur); }, 0);
       return;
     }
@@ -272,6 +327,10 @@ export function ChatAutoInput({ value, onChange, onSubmit, placeholder, disabled
     setCursor((e.target as HTMLTextAreaElement).selectionStart ?? 0);
   }
 
+  function syncScroll(e: React.UIEvent<HTMLTextAreaElement>) {
+    if (overlayRef.current) overlayRef.current.scrollTop = e.currentTarget.scrollTop;
+  }
+
   async function handleFiles(files: FileList | null) {
     if (!files || files.length === 0) return;
     const newAttachments: FileAttachment[] = [];
@@ -289,30 +348,44 @@ export function ChatAutoInput({ value, onChange, onSubmit, placeholder, disabled
   function removeProject()     { setCtx((c) => ({ ...c, project: null, requirement: null })); setRequirements([]); }
   function removeRequirement() { setCtx((c) => ({ ...c, requirement: null })); }
 
-  const hasCtx = ctx.project || ctx.requirement || attachments.length > 0;
+  const sharedTextStyle: React.CSSProperties = {
+    padding: "9px 11px", fontSize: 12.5, fontFamily: "var(--font)",
+    lineHeight: 1.5, boxSizing: "border-box", border: "1px solid transparent",
+  };
 
   return (
     <div style={{ position: "relative", flex: 1, display: "flex", flexDirection: "column", gap: 4 }}>
-      {/* Context + attachment chips */}
-      {hasCtx && (
-        <div style={{ display: "flex", flexWrap: "wrap", gap: 5, padding: "4px 2px" }}>
+      {/* Reference details (project / requirement currently mentioned in the text) */}
+      {(ctx.project || ctx.requirement) && (
+        <div style={{ display: "flex", flexDirection: "column", gap: 4, padding: "6px 8px", background: "var(--bg-subtle)", border: "1px solid var(--border)", borderRadius: "var(--r)", fontSize: 11 }}>
           {ctx.project && (
-            <span style={{ display: "inline-flex", alignItems: "center", gap: 5, background: "#f0fdf4", color: "#166534", border: "1px solid #bbf7d0", borderRadius: 6, padding: "2px 8px 2px 10px", fontSize: 11.5, fontWeight: 700 }}>
-              <span style={{ fontFamily: "var(--mono)" }}>{ctx.project.id}</span>
-              <span style={{ fontWeight: 400, color: "#4ade80", margin: "0 2px" }}>·</span>
-              <span style={{ fontWeight: 500, maxWidth: 140, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{ctx.project.name}</span>
-              <button onClick={removeProject} style={{ background: "none", border: "none", cursor: "pointer", color: "#4ade80", fontSize: 12, lineHeight: 1, padding: "0 0 0 2px" }}>×</button>
-            </span>
+            <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
+              <span style={{ fontFamily: "var(--mono)", fontWeight: 700, color: COLOR_PROJECT }}>{ctx.project.id}</span>
+              <span style={{ color: "var(--t2)" }}>
+                {ctx.project.name} · Cliente: {ctx.project.client} · Estado: {ctx.project.status} · Avance: {ctx.project.progress}%
+                {ctx.project.summary ? ` · ${ctx.project.summary}` : ""}
+              </span>
+              <button onClick={removeProject} title="Quitar referencia de proyecto" style={{ marginLeft: "auto", background: "none", border: "none", cursor: "pointer", color: "var(--t3)", fontSize: 12, lineHeight: 1, padding: 0 }}>×</button>
+            </div>
           )}
           {ctx.requirement && (
-            <span style={{ display: "inline-flex", alignItems: "center", gap: 5, background: "#ecfeff", color: "#0e7490", border: "1px solid #a5f3fc", borderRadius: 6, padding: "2px 8px 2px 10px", fontSize: 11.5, fontWeight: 700 }}>
-              <span style={{ fontFamily: "var(--mono)" }}>{ctx.requirement.codigo}</span>
-              <span style={{ fontWeight: 400 }}>·</span>
-              <span style={{ fontWeight: 500 }}>{ctx.requirement.estado}</span>
-              {ctx.requirement.avance != null && <span style={{ fontWeight: 400, fontSize: 10.5 }}>{ctx.requirement.avance}%</span>}
-              <button onClick={removeRequirement} style={{ background: "none", border: "none", cursor: "pointer", color: "#22d3ee", fontSize: 12, lineHeight: 1, padding: "0 0 0 2px" }}>×</button>
-            </span>
+            <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
+              <span style={{ fontFamily: "var(--mono)", fontWeight: 700, color: COLOR_REQ }}>{ctx.requirement.codigo}</span>
+              <span style={{ color: "var(--t2)" }}>
+                Estado: {ctx.requirement.estado}{ctx.requirement.avance != null ? ` · Avance: ${ctx.requirement.avance}%` : ""}
+                {ctx.requirement.responsable ? ` · Responsable: ${ctx.requirement.responsable}` : ""}
+                {ctx.requirement.tipo_servicio_nombre ? ` · ${ctx.requirement.tipo_servicio_nombre}` : ""}
+                {ctx.requirement.fecha_requerida ? ` · Requerido: ${ctx.requirement.fecha_requerida}` : ""}
+              </span>
+              <button onClick={removeRequirement} title="Quitar referencia de RQ" style={{ marginLeft: "auto", background: "none", border: "none", cursor: "pointer", color: "var(--t3)", fontSize: 12, lineHeight: 1, padding: 0 }}>×</button>
+            </div>
           )}
+        </div>
+      )}
+
+      {/* Attachment chips */}
+      {attachments.length > 0 && (
+        <div style={{ display: "flex", flexWrap: "wrap", gap: 5, padding: "4px 2px" }}>
           {attachments.map((a) => (
             <span key={a.name} style={{ display: "inline-flex", alignItems: "center", gap: 5, background: "#fdf4ff", color: "#7e22ce", border: "1px solid #e9d5ff", borderRadius: 6, padding: "2px 8px 2px 10px", fontSize: 11.5, fontWeight: 600 }}>
               <span>📎</span>
@@ -327,7 +400,7 @@ export function ChatAutoInput({ value, onChange, onSubmit, placeholder, disabled
       {/* Dropdown */}
       {options.length > 0 && (
         <div style={{
-          position: "absolute", bottom: hasCtx ? "calc(100% - 8px)" : "calc(100% + 4px)", left: 0, right: 0,
+          position: "absolute", bottom: "calc(100% + 4px)", left: 0, right: 0,
           background: "var(--bg-card)", border: "1px solid var(--border)", borderRadius: "var(--r)",
           boxShadow: "0 6px 20px rgba(0,0,0,.12)", zIndex: 100, overflow: "hidden", maxHeight: 240, overflowY: "auto",
         }}>
@@ -361,24 +434,42 @@ export function ChatAutoInput({ value, onChange, onSubmit, placeholder, disabled
 
       {/* Input row */}
       <div style={{ display: "flex", gap: 4, alignItems: "flex-end" }}>
-        <textarea
-          ref={taRef}
-          value={value}
-          onChange={(e) => { onChange(e.target.value); setCursor(e.target.selectionStart ?? 0); }}
-          onKeyDown={handleKeyDown}
-          onSelect={syncCursor}
-          onClick={syncCursor}
-          placeholder={placeholder ?? "Escribe… @IC /proyecto /rq /ayuda"}
-          rows={1}
-          disabled={disabled}
-          style={{
-            flex: 1, resize: "none",
-            border: "1px solid var(--border)", borderRadius: "var(--r)",
-            padding: "9px 11px", fontSize: 12.5, fontFamily: "var(--font)",
-            color: "var(--t1)", maxHeight: 120, lineHeight: 1.5, outline: "none",
-            background: "var(--bg-card)", boxSizing: "border-box",
-          }}
-        />
+        <div style={{ position: "relative", flex: 1, background: "var(--bg-card)", borderRadius: "var(--r)" }}>
+          {/* Highlight overlay */}
+          <div
+            ref={overlayRef}
+            aria-hidden
+            style={{
+              ...sharedTextStyle,
+              position: "absolute", inset: 0,
+              color: "var(--t1)", whiteSpace: "pre-wrap", wordBreak: "break-word",
+              overflow: "hidden", pointerEvents: "none", maxHeight: 120,
+            }}
+          >
+            {renderHighlighted(value, ctx)}
+          </div>
+          {/* Actual textarea (transparent text, visible caret) */}
+          <textarea
+            ref={taRef}
+            value={value}
+            onChange={(e) => { onChange(e.target.value); setCursor(e.target.selectionStart ?? 0); }}
+            onKeyDown={handleKeyDown}
+            onSelect={syncCursor}
+            onClick={syncCursor}
+            onScroll={syncScroll}
+            placeholder={placeholder ?? "Escribe… @IC /proyecto /rq /ayuda"}
+            rows={1}
+            disabled={disabled}
+            style={{
+              ...sharedTextStyle,
+              position: "relative", width: "100%", resize: "none",
+              border: "1px solid var(--border)", borderRadius: "var(--r)",
+              color: "transparent", caretColor: "var(--t1)",
+              maxHeight: 120, outline: "none",
+              background: "transparent",
+            }}
+          />
+        </div>
         {/* File upload button */}
         <button
           type="button"

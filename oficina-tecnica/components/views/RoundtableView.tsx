@@ -86,10 +86,12 @@ function agentsForMessage(text: string, targetId: string | null): string[] {
     id, hits: (RT_KEYWORDS[id] || []).filter((k) => t.includes(k)).length,
   }));
 
-  // Simple one-to-one greeting → only most relevant agent (or IC)
+  // Simple message: if it matches a specific agent's topic, only that agent responds;
+  // otherwise (general greeting/intro) the whole team responds.
   if (isSimpleMessage(text)) {
     const best = scored.sort((a, b) => b.hits - a.hits)[0];
-    return [best?.hits > 0 ? best.id : "ic"];
+    if (best && best.hits > 0) return [best.id];
+    return allActive;
   }
 
   // Technical message → all agents with keyword hits; if none, IC+PM
