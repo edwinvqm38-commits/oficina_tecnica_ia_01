@@ -20,6 +20,11 @@ import { saveConversation, loadConversationHistory } from "../../lib/memory/conv
 
 const CHAT_AGENTS = ["ic", "pm", "ie", "gg"];
 
+// Cap how many messages get mounted in the DOM at once — long threads (e.g.
+// loaded from Supabase history) shouldn't render hundreds of MessageBubble
+// (and MdText) instances on mount. Older messages are revealed on demand.
+const VISIBLE_MESSAGES_STEP = 50;
+
 const STARTERS: Record<string, string[]> = {
   ic: ["Presupuesto de tendido de cable 138kV", "Analiza esta desviación de costo", "¿Qué contingencia recomiendas?"],
   pm: ["Riesgo de retraso en PRY-001", "¿Cómo recupero 12 días?", "Restricciones de la ruta crítica"],
@@ -147,6 +152,7 @@ export function ChatView() {
   const [busy, setBusy] = useState(false);
   const [typingModel, setTypingModel] = useState<string | undefined>();
   const [showHelp, setShowHelp] = useState(false);
+  const [visibleCount, setVisibleCount] = useState(VISIBLE_MESSAGES_STEP);
   const scrollRef = useRef<HTMLDivElement>(null);
   const ollamaModelsRef = useRef<string[]>([]);
 
@@ -161,6 +167,15 @@ export function ChatView() {
   useEffect(() => {
     if (scrollRef.current) scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
   }, [thread.length, busy, showHelp]);
+
+  // Reset to "show last N" whenever the active thread changes (agent switch).
+  // Adjusting state during render (React's documented pattern for resetting
+  // state on prop change) instead of an effect, to avoid an extra render pass.
+  const [prevThreadKey, setPrevThreadKey] = useState(threadKey);
+  if (threadKey !== prevThreadKey) {
+    setPrevThreadKey(threadKey);
+    setVisibleCount(VISIBLE_MESSAGES_STEP);
+  }
 
   useEffect(() => {
     getOllamaModels().then((models) => { ollamaModelsRef.current = models; });
@@ -388,7 +403,16 @@ export function ChatView() {
                 </div>
               </div>
             )}
-            {thread.map((m) => (
+            {thread.length > visibleCount && (
+              <button
+                className="btn btn--ghost btn--sm"
+                style={{ alignSelf: "center" }}
+                onClick={() => setVisibleCount((v) => v + VISIBLE_MESSAGES_STEP)}
+              >
+                Cargar mensajes anteriores ({thread.length - visibleCount} más)
+              </button>
+            )}
+            {thread.slice(-visibleCount).map((m) => (
               <MessageBubble key={m.id} role={m.role} text={m.text} time={m.time} agentId={agentId} modelLabel={(m as { modelLabel?: string }).modelLabel} isError={(m as { isError?: boolean }).isError} />
             ))}
             {busy && <TypingDots agentId={agentId} modelLabel={typingModel} />}

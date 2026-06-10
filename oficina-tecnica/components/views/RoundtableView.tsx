@@ -49,6 +49,10 @@ function useAiAssist() {
 
 const ROUNDTABLE_THREAD = "roundtable";
 
+// Cap how many messages get mounted in the DOM at once — long shared threads
+// shouldn't render hundreds of RTMessage (and MdText) instances on mount.
+const VISIBLE_MESSAGES_STEP = 50;
+
 // Mesa de trabajo is a shared room: all users see the same conversation, so
 // the agents' long-term memory for it is stored under one shared id instead
 // of being split per user — agents learn from everyone in the room.
@@ -290,6 +294,7 @@ export function RoundtableView() {
   const [busy, setBusy] = useState(false);
   const [hands, setHands] = useState<{ agentId: string; modelLabel?: string }[]>([]);
   const [showHelp, setShowHelp] = useState(false);
+  const [visibleCount, setVisibleCount] = useState(VISIBLE_MESSAGES_STEP);
   const scrollRef = useRef<HTMLDivElement>(null);
   const ollamaModelsRef = useRef<string[]>([]);
 
@@ -617,7 +622,16 @@ export function RoundtableView() {
               </div>
             )}
 
-            {thread.map((m) => (
+            {thread.length > visibleCount && (
+              <button
+                className="btn btn--ghost btn--sm"
+                style={{ alignSelf: "center" }}
+                onClick={() => setVisibleCount((v) => v + VISIBLE_MESSAGES_STEP)}
+              >
+                Cargar mensajes anteriores ({thread.length - visibleCount} más)
+              </button>
+            )}
+            {thread.slice(-visibleCount).map((m) => (
               <RTMessage key={m.id} role={m.role} text={m.text} time={m.time} agentId={m.agentId} modelLabel={m.modelLabel} isError={m.isError} attachments={m.attachments} userEmail={m.userEmail} userName={m.userName} currentUserEmail={session?.email} status={m.status} />
             ))}
             {hands.map((h) => (

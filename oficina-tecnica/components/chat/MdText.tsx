@@ -1,6 +1,11 @@
 "use client";
+import { useMemo } from "react";
 import type { CSSProperties } from "react";
 import { parseMd, AGENT_FULL_LABELS } from "../../lib/chat/messageUtils";
+
+// Texts longer than this render as plain text (no markdown/mention parsing)
+// to keep parseMd's per-line work bounded for very long messages.
+const MAX_PARSE_LENGTH = 10000;
 
 const AGENT_COLORS: Record<string, { bg: string; text: string; border: string }> = {
   ic: { bg: "#eff6ff", text: "#1d4ed8", border: "#bfdbfe" },
@@ -19,7 +24,12 @@ const INVERTED_CHIP: CSSProperties = {
 };
 
 export function MdText({ text, variant = "default" }: { text: string; variant?: "default" | "inverted" }) {
-  const segments = parseMd(text);
+  const segments = useMemo(() => {
+    if (text.length > MAX_PARSE_LENGTH) {
+      return [{ type: "text" as const, value: text }];
+    }
+    return parseMd(text);
+  }, [text]);
   const inverted = variant === "inverted";
 
   return (

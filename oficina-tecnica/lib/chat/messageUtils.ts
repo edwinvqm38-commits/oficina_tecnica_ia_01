@@ -151,6 +151,16 @@ export function parseMd(text: string): MdSegment[] {
         segments.push({ type: "text", value: line.slice(i) });
         break;
       }
+      if (next === 0) {
+        // The char at `i` is "*" or "@" but didn't match any of the
+        // special-case branches above (e.g. "@todos", a lone unmatched "*").
+        // Consume just this one character as plain text so `i` always
+        // advances — without this guard `next` stays 0 forever, pushing
+        // empty segments in an infinite loop (OOM crash).
+        segments.push({ type: "text", value: line[i] });
+        i += 1;
+        continue;
+      }
       segments.push({ type: "text", value: line.slice(i, i + next) });
       i += next;
     }

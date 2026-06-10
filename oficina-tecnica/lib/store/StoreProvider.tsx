@@ -27,6 +27,11 @@ function uid(prefix = "id") {
   return `${prefix}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
 }
 
+// Cap how many messages each chat thread keeps in state — applies to private
+// chats and Mesa de trabajo alike, so persisted state (localStorage and
+// `workspace_state`) and rendered history don't grow unbounded over time.
+const MAX_THREAD_MESSAGES = 200;
+
 type StoreActions = {
   /** True once persisted state (local or remote) has finished loading. */
   ready: boolean;
@@ -234,7 +239,10 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
         ? { status: remoteConfigured ? "pending" : "sent" }
         : {}),
     };
-    setState((s) => ({ ...s, chats: { ...s.chats, [agentId]: [...(s.chats[agentId] || []), full] } }));
+    setState((s) => ({
+      ...s,
+      chats: { ...s.chats, [agentId]: [...(s.chats[agentId] || []), full].slice(-MAX_THREAD_MESSAGES) },
+    }));
     return full;
   }, [remoteConfigured]);
 
