@@ -7,6 +7,8 @@ export interface FileAttachment {
   type: string;
   content: string;
   size: number;
+  /** Base64 data URL, only populated for small files (used for in-chat download). */
+  dataUrl?: string;
 }
 
 // ── Requirement ─────────────────────────────────────────────────────────────

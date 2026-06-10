@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState, KeyboardEvent, ReactNode } from "react";
 import { useRouter } from "next/navigation";
+import { Icons } from "../../lib/icons";
 import type {
   ChatCtx, RequirementSummary, CotizacionSummary, FileAttachment,
 } from "../../lib/chat/contextQuery";
@@ -155,6 +156,19 @@ async function extractFileContent(file: File): Promise<string> {
   }
 
   return `[Archivo: ${file.name} — ${file.type || "binario"}, ${Math.round(file.size / 1024)} KB — adjunto para referencia]`;
+}
+
+// Cap on files we keep as a downloadable data URL in chat history (avoid bloating storage)
+const MAX_DOWNLOAD_BYTES = 3 * 1024 * 1024; // 3MB
+
+async function readFileAsDataUrl(file: File): Promise<string | undefined> {
+  if (file.size > MAX_DOWNLOAD_BYTES) return undefined;
+  return new Promise((resolve) => {
+    const reader = new FileReader();
+    reader.onload = (e) => resolve(String(e.target?.result ?? "") || undefined);
+    reader.onerror = () => resolve(undefined);
+    reader.readAsDataURL(file);
+  });
 }
 
 interface Props {
@@ -338,9 +352,7 @@ export function ChatAutoInput({ value, onChange, onSubmit, placeholder, disabled
     }
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
-      const fullCtx: ChatCtx = { ...ctx, attachments: attachments.length ? attachments : undefined };
-      onSubmit(value.trim(), fullCtx);
-      setAttachments([]);
+      submit();
     }
   }
 
@@ -356,10 +368,17 @@ export function ChatAutoInput({ value, onChange, onSubmit, placeholder, disabled
     if (!files || files.length === 0) return;
     const newAttachments: FileAttachment[] = [];
     for (const file of Array.from(files)) {
-      const content = await extractFileContent(file);
-      newAttachments.push({ name: file.name, type: file.type || "unknown", content, size: file.size });
+      const [content, dataUrl] = await Promise.all([extractFileContent(file), readFileAsDataUrl(file)]);
+      newAttachments.push({ name: file.name, type: file.type || "unknown", content, size: file.size, dataUrl });
     }
     setAttachments((prev) => [...prev, ...newAttachments]);
+  }
+
+  function submit() {
+    if (disabled) return;
+    const fullCtx: ChatCtx = { ...ctx, attachments: attachments.length ? attachments : undefined };
+    onSubmit(value.trim(), fullCtx);
+    setAttachments([]);
   }
 
   function removeAttachment(name: string) {
@@ -522,6 +541,15 @@ export function ChatAutoInput({ value, onChange, onSubmit, placeholder, disabled
           style={{ display: "none" }}
           onChange={(e) => handleFiles(e.target.files)}
         />
+        <button
+          type="button"
+          className="btn btn--primary"
+          style={{ padding: "9px 14px", flexShrink: 0 }}
+          onClick={submit}
+          disabled={disabled}
+        >
+          <Icons.arrowRight width={15} height={15} />
+        </button>
       </div>
     </div>
   );

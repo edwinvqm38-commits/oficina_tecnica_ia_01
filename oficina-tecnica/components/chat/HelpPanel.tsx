@@ -48,11 +48,11 @@ export function HelpPanel({ onClose }: { onClose: () => void }) {
           <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
             <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
               {plainCode("@todos")} {plainCode("/equipo")}
-              <span>Responden todos los agentes activos</span>
+              <span>Responde el coordinador (PM) y deriva al especialista correcto</span>
             </div>
             <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
               <span>👋</span>
-              <span>Un saludo o mensaje corto sin mención específica también lo responden todos</span>
+              <span>Un saludo o mensaje corto sin mención específica también lo responde solo el coordinador</span>
             </div>
             <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
               <span>🎯</span>

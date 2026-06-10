@@ -2,7 +2,6 @@
 
 import { useEffect, useRef, useState } from "react";
 import { PageHeader } from "../shell/PageHeader";
-import { Icons } from "../../lib/icons";
 import { useStore } from "../../lib/store/StoreProvider";
 import { agentById, AGENTS, PROJECTS } from "../../lib/data";
 import { agentAvatarClass } from "./shared";
@@ -72,14 +71,29 @@ const RT_KEYWORDS: Record<string, string[]> = {
   ie: ["diseño", "eléctric", "norma", "normativ", "cálculo", "cne", "iec", "ieee", "protección", "tensión", "kv", "subestación", "cable", "tendido", "set ", "potencia"],
 };
 
+// Matriz de responsabilidades: a qué agente le corresponde cada tema.
+// Usada para enrutar consultas y para que el coordinador (PM) derive
+// al especialista correcto sin que todo el equipo responda a la vez.
+export const AGENT_TOPICS: Record<string, string> = {
+  ic: "presupuestos, costos, valorizaciones, metrados",
+  pm: "cronograma, plazos, riesgos del proyecto",
+  ie: "diseño eléctrico, normas técnicas, cálculos",
+};
+
+// "Coordinador" único para mensajes generales (saludos / mensajes al equipo
+// sin tema específico): solo este agente responde, derivando al resto por
+// @mención según corresponda. Evita que se llene el chat con saludos repetidos.
+const TEAM_COORDINATOR = "pm";
+
 function agentsForMessage(text: string, targetId: string | null): string[] {
   const allActive = AGENTS.filter((a) => a.type === "agent" && a.status === "active").map((a) => a.id);
 
   // If user directed to specific agent
   if (targetId && allActive.includes(targetId)) return [targetId];
 
-  // "buenos días a todos" / team messages → all active agents respond
-  if (isTeamMessage(text)) return allActive;
+  // "buenos días a todos" / team messages → only the coordinator responds
+  // briefly and points to the right specialist via @mención.
+  if (isTeamMessage(text)) return allActive.includes(TEAM_COORDINATOR) ? [TEAM_COORDINATOR] : allActive;
 
   const t = text.toLowerCase();
   const scored = allActive.map((id) => ({
@@ -87,11 +101,11 @@ function agentsForMessage(text: string, targetId: string | null): string[] {
   }));
 
   // Simple message: if it matches a specific agent's topic, only that agent responds;
-  // otherwise (general greeting/intro) the whole team responds.
+  // otherwise (general greeting/intro) only the coordinator responds.
   if (isSimpleMessage(text)) {
     const best = scored.sort((a, b) => b.hits - a.hits)[0];
     if (best && best.hits > 0) return [best.id];
-    return allActive;
+    return allActive.includes(TEAM_COORDINATOR) ? [TEAM_COORDINATOR] : allActive;
   }
 
   // Technical message → all agents with keyword hits; if none, IC+PM
@@ -100,8 +114,42 @@ function agentsForMessage(text: string, targetId: string | null): string[] {
   return ["ic", "pm"];
 }
 
-function RTMessage({ role, text, time, agentId, modelLabel, isError }: {
+function fileIcon(type: string, name: string): string {
+  const n = name.toLowerCase();
+  if (type.startsWith("image/")) return "🖼️";
+  if (type === "application/pdf" || n.endsWith(".pdf")) return "📕";
+  if (/\.(xlsx?|csv)$/.test(n)) return "📊";
+  if (/\.(docx?)$/.test(n)) return "📝";
+  return "📎";
+}
+
+function AttachmentChip({ a }: { a: { name: string; size: number; type: string; dataUrl?: string } }) {
+  const sizeLabel = a.size > 1024 * 1024 ? `${(a.size / (1024 * 1024)).toFixed(1)}MB` : `${Math.round(a.size / 1024)}KB`;
+  const content = (
+    <>
+      <span>{fileIcon(a.type, a.name)}</span>
+      <span style={{ maxWidth: 160, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{a.name}</span>
+      <span style={{ fontWeight: 400, fontSize: 10, opacity: 0.75 }}>{sizeLabel}</span>
+    </>
+  );
+  const sharedStyle: React.CSSProperties = {
+    display: "inline-flex", alignItems: "center", gap: 5, background: "rgba(255,255,255,.18)",
+    border: "1px solid rgba(255,255,255,.35)", borderRadius: 6, padding: "3px 9px", fontSize: 11.5, fontWeight: 600,
+  };
+  if (a.dataUrl) {
+    return (
+      <a href={a.dataUrl} download={a.name} title="Descargar archivo" style={{ ...sharedStyle, color: "inherit", textDecoration: "none", cursor: "pointer" }}>
+        {content}
+        <span aria-hidden>⬇</span>
+      </a>
+    );
+  }
+  return <span style={sharedStyle}>{content}</span>;
+}
+
+function RTMessage({ role, text, time, agentId, modelLabel, isError, attachments }: {
   role: "gg" | "agent"; text: string; time: string; agentId?: string; modelLabel?: string; isError?: boolean;
+  attachments?: { name: string; size: number; type: string; dataUrl?: string }[];
 }) {
   const isUser = role === "gg";
   const agent = agentId ? agentById(agentId) : null;
@@ -119,6 +167,11 @@ function RTMessage({ role, text, time, agentId, modelLabel, isError }: {
           border: isUser ? "none" : `1px solid ${isError ? "var(--red-border, #fca5a5)" : "var(--border)"}`,
           fontSize: 12.5, lineHeight: 1.6, borderTopRightRadius: isUser ? 3 : 10, borderTopLeftRadius: isUser ? 10 : 3,
         }}>
+          {attachments && attachments.length > 0 && (
+            <div style={{ display: "flex", flexWrap: "wrap", gap: 5, marginBottom: text ? 6 : 0 }}>
+              {attachments.map((a) => <AttachmentChip key={a.name} a={a} />)}
+            </div>
+          )}
           {isUser ? text : <MdText text={text} />}
         </div>
         <div style={{ fontSize: 10, color: "var(--t3)", marginTop: 3, display: "flex", gap: 6, alignItems: "center", justifyContent: isUser ? "flex-end" : "flex-start" }}>
@@ -187,13 +240,21 @@ export function RoundtableView() {
     const activeProject = ctxProject
       ?? (parsed.targetProjectId ? allProjects.find((p) => p.id === parsed.targetProjectId) ?? null : null);
     const userDisplay = raw;
+    const attachmentMeta = (inputCtx?.attachments ?? []).map((f) => ({ name: f.name, size: f.size, type: f.type, dataUrl: f.dataUrl }));
 
-    appendChat(ROUNDTABLE_THREAD, { role: "gg", text: userDisplay });
+    appendChat(ROUNDTABLE_THREAD, { role: "gg", text: userDisplay, attachments: attachmentMeta.length ? attachmentMeta : undefined });
     setInput("");
     setBusy(true);
 
     const responders = agentsForMessage(parsed.cleanText, parsed.targetAgentId);
     const routing = routeRequest(parsed.cleanText, ollamaModelsRef.current);
+
+    // True when the message had no specific target/topic and routed solely
+    // to the team coordinator — it should briefly point to the right
+    // specialist instead of trying to cover every domain.
+    const isCoordinatorRouting = !parsed.targetAgentId
+      && responders.length === 1 && responders[0] === TEAM_COORDINATOR
+      && (isTeamMessage(parsed.cleanText) || isSimpleMessage(parsed.cleanText));
 
     setHands(responders.map((id) => ({ agentId: id, modelLabel: routing.modelLabel })));
 
@@ -237,6 +298,18 @@ export function RoundtableView() {
       `\n\n--- Archivo adjunto: ${f.name} (${Math.round(f.size / 1024)}KB) ---\n${f.content}\n---`
     ).join("");
 
+    // When several agents respond to the same message, keep replies short
+    // so the chat doesn't get flooded — each agent covers only its angle.
+    const brevityCtx = responders.length > 1
+      ? `\n\nVarios miembros del equipo responden a este mismo mensaje: sé MUY breve (1-3 líneas), enfócate solo en tu área y evita repetir lo que otros agentes ya cubrirían.`
+      : `\n\nResponde de forma breve y concreta (máximo 4-5 líneas o una tabla corta), salvo que el usuario pida explícitamente un análisis extenso.`;
+
+    // Coordinator routing: this agent should greet/acknowledge in 1-2 líneas
+    // and point to the right specialist (@IC/@IE/etc.) using the responsibility matrix.
+    const coordinatorCtx = isCoordinatorRouting
+      ? `\n\nEste mensaje no tiene un tema específico ni va dirigido a un agente. Responde tú como coordinador en 1-2 líneas y, si aplica, indica brevemente a quién más mencionar según sus responsabilidades:\n${Object.entries(AGENT_TOPICS).filter(([id]) => id !== TEAM_COORDINATOR).map(([id, topics]) => `- @${id.toUpperCase()}: ${topics}`).join("\n")}\nNo hace falta que los demás agentes intervengan ahora.`
+      : "";
+
     for (const agId of responders) {
       const sysPrompt = RT_SYSTEM_PROMPTS[agId] ?? RT_SYSTEM_PROMPTS.ic;
       const projectCtx = activeProject && !simple
@@ -250,7 +323,7 @@ export function RoundtableView() {
       const supabaseHistory = simple ? [] : await loadConversationHistory(userId, agId, activeProject?.id, 6).catch(() => []);
 
       const messages: ChatMessage[] = [
-        { role: "system", content: sysPrompt + projectCtx + requirementCtx + autoCodeCtx },
+        { role: "system", content: sysPrompt + projectCtx + requirementCtx + autoCodeCtx + brevityCtx + coordinatorCtx },
         ...supabaseHistory.map((m) => ({ role: m.role as "user" | "assistant", content: m.content })),
         { role: "user", content: parsed.cleanText + fileCtx },
       ];
@@ -259,7 +332,7 @@ export function RoundtableView() {
         const { response, actualConfig } = await sendChatWithFallback(messages, routing.config, ollamaModelsRef.current);
         const label = `${actualConfig.provider}/${response.model}`;
         appendChat(ROUNDTABLE_THREAD, { role: "agent", agentId: agId, text: response.content, modelLabel: label });
-        saveConversation(userId, agId, parsed.cleanText, response.content, label, routing.complexity, activeProject?.id).catch(() => {});
+        saveConversation(userId, agId, parsed.cleanText + fileCtx, response.content, label, routing.complexity, activeProject?.id).catch(() => {});
       } catch (err) {
         appendChat(ROUNDTABLE_THREAD, {
           role: "agent", agentId: agId,
@@ -359,7 +432,7 @@ export function RoundtableView() {
             )}
 
             {thread.map((m) => (
-              <RTMessage key={m.id} role={m.role} text={m.text} time={m.time} agentId={m.agentId} modelLabel={m.modelLabel} isError={m.isError} />
+              <RTMessage key={m.id} role={m.role} text={m.text} time={m.time} agentId={m.agentId} modelLabel={m.modelLabel} isError={m.isError} attachments={m.attachments} />
             ))}
             {hands.map((h) => (
               <HandRaise key={h.agentId} agentId={h.agentId} modelLabel={h.modelLabel} />
@@ -389,9 +462,6 @@ export function RoundtableView() {
                 placeholder="Escribe… @IC /proyecto /rq /ayuda"
                 disabled={busy}
               />
-              <button className="btn btn--primary" style={{ padding: "9px 14px" }} onClick={() => send()} disabled={busy}>
-                <Icons.arrowRight width={15} height={15} />
-              </button>
             </div>
           </div>
         </div>

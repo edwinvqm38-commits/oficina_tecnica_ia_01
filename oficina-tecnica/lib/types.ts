@@ -151,6 +151,13 @@ export type KnowledgeNote = {
   date: string;
 };
 
+export type ChatAttachmentMeta = {
+  name: string;
+  size: number;
+  type: string;
+  dataUrl?: string;
+};
+
 export type ChatMessage = {
   id: string;
   role: "gg" | "agent";
@@ -159,4 +166,5 @@ export type ChatMessage = {
   agentId?: string;
   modelLabel?: string;
   isError?: boolean;
+  attachments?: ChatAttachmentMeta[];
 };
