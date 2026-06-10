@@ -7,6 +7,7 @@ import { ROUTE_GROUPS, type RouteDef } from "../../lib/routes";
 import { useStore, useSkillsWithOverrides, usePendingApprovalsCount } from "../../lib/store/StoreProvider";
 import { KNOWLEDGE, PROJECTS } from "../../lib/data";
 import { useSession } from "../../lib/auth/useSession";
+import { usePendingUsersCount } from "../../lib/auth/usePendingUsersCount";
 
 const ADMIN_EMAIL = "edwin.qm@outlook.com";
 const ADMIN_ROUTES = new Set(["connections", "wiki-ia", "admin-users"]);
@@ -100,6 +101,7 @@ export function Sidebar({ activeRoute }: { activeRoute: string }) {
   const { session } = useSession(false);
   const isAdmin = session?.email === ADMIN_EMAIL;
   const pendingApprovals = usePendingApprovalsCount();
+  const pendingUsers = usePendingUsersCount(isAdmin);
   const skills = useSkillsWithOverrides();
   const proposedKB = [...KNOWLEDGE, ...state.knowledge].filter((k) => k.status === "proposed").length;
   const totalProjects = PROJECTS.length + state.customProjects.length;
@@ -109,6 +111,7 @@ export function Sidebar({ activeRoute }: { activeRoute: string }) {
     projects: totalProjects || null,
     skills: skills.length || null,
     memory: proposedKB || null,
+    "admin-users": pendingUsers || null,
   };
 
   return (
