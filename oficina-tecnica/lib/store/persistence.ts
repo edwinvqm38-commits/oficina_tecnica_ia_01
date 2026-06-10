@@ -67,3 +67,29 @@ export function saveRemote(state: AppState) {
 export function isRemoteConfigured(): boolean {
   return getSupabaseClient() !== null;
 }
+
+/**
+ * Subscribes to live updates of the shared workspace row (e.g. another
+ * user posting in Mesa de trabajo) and invokes `onChange` with the merged
+ * remote state. Returns an unsubscribe function.
+ */
+export function subscribeRemote(onChange: (state: AppState) => void): () => void {
+  const supabase = getSupabaseClient();
+  if (!supabase) return () => {};
+
+  const channel = supabase
+    .channel(`workspace_state:${WORKSPACE_ID}`)
+    .on(
+      "postgres_changes",
+      { event: "UPDATE", schema: "public", table: "workspace_state", filter: `id=eq.${WORKSPACE_ID}` },
+      (payload) => {
+        const newState = (payload.new as { state?: Partial<AppState> } | null)?.state;
+        if (newState) onChange(mergeWithSeed(newState));
+      }
+    )
+    .subscribe();
+
+  return () => {
+    supabase.removeChannel(channel);
+  };
+}

@@ -167,4 +167,8 @@ export type ChatMessage = {
   modelLabel?: string;
   isError?: boolean;
   attachments?: ChatAttachmentMeta[];
+  // Sender of "gg" messages in shared threads (e.g. Mesa de trabajo), so
+  // other users can tell who wrote what.
+  userEmail?: string;
+  userName?: string;
 };

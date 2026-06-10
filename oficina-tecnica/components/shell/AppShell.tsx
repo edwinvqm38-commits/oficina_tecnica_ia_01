@@ -6,6 +6,7 @@ import { Sidebar } from "./Sidebar";
 import { Topbar } from "./Topbar";
 import { ContextPanel, CONTEXT_ROUTES } from "./ContextPanel";
 import { GlobalSearch, routeIdToPath } from "./GlobalSearch";
+import { PresenceBar } from "./PresenceBar";
 import { routeForPath } from "../../lib/routes";
 import type { RouteId } from "../../lib/routes";
 import { useSession } from "../../lib/auth/useSession";
@@ -62,7 +63,14 @@ export function AppShell({ children }: { children: ReactNode }) {
       <div className="ig-body">
         <Sidebar activeRoute={activeRoute} />
         <main className="ig-main">
-          <div style={{ width: "100%", maxWidth: "100%" }}>{children}</div>
+          <div style={{ width: "100%", maxWidth: "100%" }}>
+            <PresenceBar
+              routeId={activeRoute}
+              email={session.email}
+              name={(session.user.user_metadata?.full_name as string | undefined) || (session.user.user_metadata?.name as string | undefined)}
+            />
+            {children}
+          </div>
         </main>
         {hasCtx && <ContextPanel route={activeRoute} />}
       </div>

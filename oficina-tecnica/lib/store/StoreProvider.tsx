@@ -11,7 +11,7 @@ import {
 } from "react";
 import { APPROVALS, SKILLS } from "../data";
 import type { ApprovalStatus, ChatMessage, KnowledgeNote, Project, Skill, SkillStatus } from "../types";
-import { isRemoteConfigured, loadLocal, loadRemote, saveLocal, saveRemote } from "./persistence";
+import { isRemoteConfigured, loadLocal, loadRemote, saveLocal, saveRemote, subscribeRemote } from "./persistence";
 import {
   AppState,
   ModelProviderId,
@@ -114,6 +114,17 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
     saveLocal(state);
     if (remoteConfigured) saveRemote(state);
   }, [state, remoteConfigured]);
+
+  // Live-sync shared chats (e.g. Mesa de trabajo) across users: when another
+  // client saves the workspace state, merge their `chats` into ours so new
+  // messages appear without a manual refresh. Only `chats` is merged to
+  // avoid clobbering this client's own in-flight edits to other state.
+  useEffect(() => {
+    if (!remoteConfigured) return;
+    return subscribeRemote((remote) => {
+      setState((s) => ({ ...s, chats: remote.chats }));
+    });
+  }, [remoteConfigured]);
 
   const notify = useCallback<StoreActions["notify"]>((n) => {
     const full: Notification = { id: uid("NTF"), ts: Date.now(), read: false, ...n };

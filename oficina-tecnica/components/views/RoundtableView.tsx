@@ -16,6 +16,7 @@ import { HelpPanel } from "../chat/HelpPanel";
 import { ChatAutoInput } from "../chat/ChatAutoInput";
 import { useSession } from "../../lib/auth/useSession";
 import { saveConversation, loadConversationHistory } from "../../lib/memory/conversationMemory";
+import { colorForEmail, initialsFor } from "../../lib/presence/avatar";
 
 function useOnlineMode() {
   const [online, setOnline] = useState(true);
@@ -29,6 +30,11 @@ function useOnlineMode() {
 }
 
 const ROUNDTABLE_THREAD = "roundtable";
+
+// Mesa de trabajo is a shared room: all users see the same conversation, so
+// the agents' long-term memory for it is stored under one shared id instead
+// of being split per user — agents learn from everyone in the room.
+const ROUNDTABLE_MEMORY_ID = "roundtable-shared";
 
 const RT_SYSTEM_PROMPTS: Record<string, string> = {
   ic: `Eres Arturo, el Ingeniero de Costos (IC) de EKA Ingeniería, empresa eléctrica peruana.
@@ -149,25 +155,35 @@ function AttachmentChip({ a }: { a: { name: string; size: number; type: string; 
   return <span style={sharedStyle}>{content}</span>;
 }
 
-function RTMessage({ role, text, time, agentId, modelLabel, isError, attachments }: {
+function RTMessage({ role, text, time, agentId, modelLabel, isError, attachments, userEmail, userName, currentUserEmail }: {
   role: "gg" | "agent"; text: string; time: string; agentId?: string; modelLabel?: string; isError?: boolean;
   attachments?: { name: string; size: number; type: string; dataUrl?: string }[];
+  userEmail?: string; userName?: string; currentUserEmail?: string;
 }) {
   const isUser = role === "gg";
   const agent = agentId ? agentById(agentId) : null;
+  const isOwn = isUser && (!userEmail || userEmail === currentUserEmail);
+  const senderLabel = userName || userEmail;
+  const senderInitials = isUser ? (userEmail ? initialsFor(userName || userEmail, userEmail) : "GG") : (agentId || "").toUpperCase();
+  const senderColor = isUser && userEmail ? colorForEmail(userEmail) : undefined;
   return (
-    <div style={{ display: "flex", gap: 9, flexDirection: isUser ? "row-reverse" : "row", alignItems: "flex-start" }}>
-      <div className={`agent-avatar ${isUser ? "agent-avatar--gg" : agentAvatarClass(agentId || "")}`} style={{ width: 28, height: 28, fontSize: 10, flexShrink: 0 }}>
-        {isUser ? "GG" : (agentId || "").toUpperCase()}
+    <div style={{ display: "flex", gap: 9, flexDirection: isOwn ? "row-reverse" : "row", alignItems: "flex-start" }}>
+      <div
+        className={`agent-avatar ${!isUser ? agentAvatarClass(agentId || "") : senderColor ? "" : "agent-avatar--gg"}`}
+        style={{ width: 28, height: 28, fontSize: 10, flexShrink: 0, ...(senderColor ? { background: senderColor, color: "#fff" } : {}) }}
+        title={isUser ? senderLabel : undefined}
+      >
+        {senderInitials}
       </div>
       <div style={{ maxWidth: "80%" }}>
         {!isUser && agent && <div style={{ fontSize: 11.5, fontWeight: 600, color: "var(--t1)", marginBottom: 3 }}>{agent.name}</div>}
+        {isUser && !isOwn && senderLabel && <div style={{ fontSize: 11.5, fontWeight: 600, color: "var(--t1)", marginBottom: 3 }}>{senderLabel}</div>}
         <div style={{
           padding: "8px 11px", borderRadius: 10,
-          background: isError ? "var(--red-bg, #fff1f0)" : isUser ? "var(--blue)" : "var(--bg-card)",
-          color: isError ? "var(--red-text, #c00)" : isUser ? "#fff" : "var(--t1)",
-          border: isUser ? "none" : `1px solid ${isError ? "var(--red-border, #fca5a5)" : "var(--border)"}`,
-          fontSize: 12.5, lineHeight: 1.6, borderTopRightRadius: isUser ? 3 : 10, borderTopLeftRadius: isUser ? 10 : 3,
+          background: isError ? "var(--red-bg, #fff1f0)" : isOwn ? "var(--blue)" : "var(--bg-card)",
+          color: isError ? "var(--red-text, #c00)" : isOwn ? "#fff" : "var(--t1)",
+          border: isOwn ? "none" : `1px solid ${isError ? "var(--red-border, #fca5a5)" : "var(--border)"}`,
+          fontSize: 12.5, lineHeight: 1.6, borderTopRightRadius: isOwn ? 3 : 10, borderTopLeftRadius: isOwn ? 10 : 3,
         }}>
           {attachments && attachments.length > 0 && (
             <div style={{ display: "flex", flexWrap: "wrap", gap: 5, marginBottom: text ? 6 : 0 }}>
@@ -176,7 +192,7 @@ function RTMessage({ role, text, time, agentId, modelLabel, isError, attachments
           )}
           {isUser ? text : <MdText text={text} />}
         </div>
-        <div style={{ fontSize: 10, color: "var(--t3)", marginTop: 3, display: "flex", gap: 6, alignItems: "center", justifyContent: isUser ? "flex-end" : "flex-start" }}>
+        <div style={{ fontSize: 10, color: "var(--t3)", marginTop: 3, display: "flex", gap: 6, alignItems: "center", justifyContent: isOwn ? "flex-end" : "flex-start" }}>
           <span>{time}</span>
           {modelLabel && !isUser && (
             <span style={{ background: "var(--bg-subtle)", border: "1px solid var(--border)", borderRadius: 4, padding: "1px 5px", fontFamily: "var(--mono)" }}>{modelLabel}</span>
@@ -243,8 +259,14 @@ export function RoundtableView() {
       ?? (parsed.targetProjectId ? allProjects.find((p) => p.id === parsed.targetProjectId) ?? null : null);
     const userDisplay = raw;
     const attachmentMeta = (inputCtx?.attachments ?? []).map((f) => ({ name: f.name, size: f.size, type: f.type, dataUrl: f.dataUrl }));
+    const senderName = (session?.user.user_metadata?.full_name as string | undefined)
+      || (session?.user.user_metadata?.name as string | undefined)
+      || session?.email;
 
-    appendChat(ROUNDTABLE_THREAD, { role: "gg", text: userDisplay, attachments: attachmentMeta.length ? attachmentMeta : undefined });
+    appendChat(ROUNDTABLE_THREAD, {
+      role: "gg", text: userDisplay, attachments: attachmentMeta.length ? attachmentMeta : undefined,
+      userEmail: session?.email, userName: senderName,
+    });
     setInput("");
     setBusy(true);
 
@@ -261,7 +283,9 @@ export function RoundtableView() {
 
     setHands(responders.map((id) => ({ agentId: id, modelLabel: routing.modelLabel })));
 
-    const userId = session?.email ?? "anonymous";
+    // Mesa de trabajo memory is shared across all users in the room (see
+    // ROUNDTABLE_MEMORY_ID), so every agent learns from the whole team.
+    const userId = ROUNDTABLE_MEMORY_ID;
     // A short message is only "simple" (greeting/no analysis) if the user
     // hasn't attached project/RQ context via chips, nor a file — otherwise
     // they want that context (or the file's content) used even if the
@@ -444,7 +468,7 @@ export function RoundtableView() {
             )}
 
             {thread.map((m) => (
-              <RTMessage key={m.id} role={m.role} text={m.text} time={m.time} agentId={m.agentId} modelLabel={m.modelLabel} isError={m.isError} attachments={m.attachments} />
+              <RTMessage key={m.id} role={m.role} text={m.text} time={m.time} agentId={m.agentId} modelLabel={m.modelLabel} isError={m.isError} attachments={m.attachments} userEmail={m.userEmail} userName={m.userName} currentUserEmail={session?.email} />
             ))}
             {hands.map((h) => (
               <HandRaise key={h.agentId} agentId={h.agentId} modelLabel={h.modelLabel} />
