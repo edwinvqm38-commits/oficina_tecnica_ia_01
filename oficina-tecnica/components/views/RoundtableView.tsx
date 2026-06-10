@@ -9,7 +9,7 @@ import { agentAvatarClass } from "./shared";
 import { sendChatWithFallback, getOllamaModels } from "../../lib/llm/providers";
 import { routeRequest } from "../../lib/llm/modelRouter";
 import type { ChatMessage } from "../../lib/llm/providers";
-import { parseInput, isSimpleMessage, isTeamMessage, detectDocumentCodes } from "../../lib/chat/messageUtils";
+import { parseInput, isSimpleMessage, isTeamMessage, hasClearIntent, detectDocumentCodes, HUMANIZE_CTX } from "../../lib/chat/messageUtils";
 import { buildContextPrompt, buildRequirementItemsPrompt, fetchCotizacionByCode, fetchRequirementByCode, fetchRequirementItems, cotizacionToProject } from "../../lib/chat/contextQuery";
 import type { ChatCtx } from "../../lib/chat/contextQuery";
 import { MdText } from "../chat/MdText";
@@ -32,7 +32,7 @@ function useOnlineMode() {
 
 // Commands that explicitly request an AI response in Mesa de trabajo, even
 // when "IA: por mención" is active.
-const AI_COMMAND_RE = /^\/(ia|resumen|pendientes|consulta|rfi)\b/i;
+const AI_COMMAND_RE = /^\/(ia|resumen|pendientes|consulta|rfi|revisar|costos|cronograma)\b/i;
 
 // Whether the AI team should jump into every message (vs. only when
 // explicitly @mentioned or asked via a /command). Off by default so
@@ -60,18 +60,16 @@ Carácter: meticuloso, preciso con los números, ligeramente pesimista sobre pre
 Especialista en: presupuestos S/., metrados, valorizaciones, análisis de desviación de costo, adicionales de obra, análisis de propuestas.
 Personalidad: Usas S/ naturalmente. Conviertes USD a S/ (TC ≈ 3.75). Preguntas por las partidas antes de opinar. Te incomoda cuando no hay desglose. Dices "Ojo:" para alertas.
 Formato:
-- Saludo simple → responde con calidez en 1-2 líneas, puedes preguntar "¿qué proyecto revisamos?".
 - Análisis → **negritas** para S/ importes, % desviaciones y conclusiones. Estructura con partidas cuando aplica.
 - Menciona @PM si el retraso afecta costos, @IE si necesitas validar alcance técnico.
 - Si la decisión supera tu nivel, menciona @GG.
-- Responde en español peruano. Frase final recurrente cuando detectas sobrecoste: "Ojo con las provisiones."`,
+- Responde en español peruano. Cuando detectes sobrecoste, puedes cerrar con "Ojo con las provisiones." (sin abusar de la frase).`,
 
   pm: `Eres Carlos, el Project Manager (PM) de EKA Ingeniería, empresa eléctrica peruana.
 Carácter: práctico, orientado a hitos, directo. Hablas en fechas, semanas y semáforos.
 Especialista en: cronogramas, ruta crítica, riesgos, restricciones, recuperación de atrasos, look-ahead semanal.
 Personalidad: Usas ● para listas. Referencias a semanas (S1, S2). Siempre tienes Plan B. Tu pregunta favorita: "¿y cuánto tiempo falta?". Semáforos: 🟢 en tiempo / 🟡 con riesgo / 🔴 retrasado.
 Formato:
-- Saludo simple → responde cordialmente, 1-2 líneas, puedes preguntar "¿qué proyecto necesitas revisar?".
 - Análisis → **negritas** para fechas críticas, hitos y riesgos. Máx 3 párrafos. Si hay retraso: días de atraso, impacto en hito siguiente, 2 opciones de recuperación.
 - Menciona @IC para impacto económico, @IE para validar alcance técnico.
 - Cuando necesitas aprobación, menciona @GG.
@@ -82,7 +80,6 @@ Carácter: técnica, apasionada por las normas, cita estándares naturalmente. T
 Especialista en: CNE-U, IEC 60364, IEEE Std 141/242/519, diseño de SET, cálculo de cables, coordinación de protecciones, estudios de cortocircuito.
 Personalidad: Citas normativas (CNE-U Art. 020, IEC 60364-4-41) cuando aplica. Usas kV, MVA, A, Ω con precisión. Distingues instalaciones (CNE) de concesionarias (DGE/MINEM).
 Formato:
-- Saludo simple → responde con calidez, 1-2 líneas, puedes preguntar "¿hay algo técnico que revisar?".
 - Análisis → **negritas** para valores técnicos, normas y conclusiones de diseño. Usa tablas de comparación cuando hay opciones.
 - Menciona @IC para presupuesto de materiales, @PM para integración en cronograma.
 - Escala a @GG cuando requiere decisión de inversión mayor.
@@ -253,7 +250,7 @@ function RTMessage({ role, text, time, agentId, modelLabel, isError, attachments
               {attachments.map((a) => <AttachmentChip key={a.name} a={a} />)}
             </div>
           )}
-          {isUser ? text : <MdText text={text} />}
+          <MdText text={text} variant={isOwn ? "inverted" : "default"} />
         </div>
         <div style={{ fontSize: 10, color: "var(--t3)", marginTop: 3, display: "flex", gap: 6, alignItems: "center", justifyContent: isOwn ? "flex-end" : "flex-start" }}>
           <span>{time}</span>
@@ -339,11 +336,14 @@ export function RoundtableView() {
     setInput("");
 
     // Activation gate: the AI team only steps into Mesa de trabajo when
-    // explicitly addressed (@IC/@PM/@IE), asked via a /command, or when the
-    // user has turned on "IA: siempre". Otherwise this is just a message
-    // between people and no agent should respond.
+    // asked via a /command, when an @mention comes with a clear question or
+    // instruction for that agent, or when the user has turned on
+    // "IA: siempre". A bare @mention attached to a greeting/thanks/comment
+    // ("Buenos días @gg", "Gracias @ic", "@gg estamos revisando esto") only
+    // shows the visual mention — no agent reply.
     const aiCommand = raw.trim().match(AI_COMMAND_RE);
-    const shouldRespond = !!parsed.targetAgentId || !!aiCommand || aiAssist;
+    const mentionWithIntent = !!parsed.targetAgentId && hasClearIntent(parsed.cleanText);
+    const shouldRespond = !!aiCommand || mentionWithIntent || aiAssist;
     if (!shouldRespond) return;
     if (aiCommand) {
       parsed.cleanText = parsed.cleanText.replace(AI_COMMAND_RE, "").trim() || parsed.cleanText;
@@ -474,7 +474,7 @@ export function RoundtableView() {
       const supabaseHistory = simple ? [] : await loadConversationHistory(userId, agId, activeProject?.id, 6).catch(() => []);
 
       const messages: ChatMessage[] = [
-        { role: "system", content: sysPrompt + skillsCtx + platformCtx + projectCtx + requirementCtx + autoCodeCtx + attachmentCtx + recentThreadCtx + toneCtx + brevityCtx + coordinatorCtx },
+        { role: "system", content: sysPrompt + HUMANIZE_CTX + skillsCtx + platformCtx + projectCtx + requirementCtx + autoCodeCtx + attachmentCtx + recentThreadCtx + toneCtx + brevityCtx + coordinatorCtx },
         ...supabaseHistory.map((m) => ({ role: m.role as "user" | "assistant", content: m.content })),
         { role: "user", content: parsed.cleanText + fileCtx },
       ];

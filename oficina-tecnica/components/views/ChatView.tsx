@@ -9,7 +9,7 @@ import { agentAvatarClass } from "./shared";
 import { sendChatWithFallback, getOllamaModels } from "../../lib/llm/providers";
 import { routeRequest } from "../../lib/llm/modelRouter";
 import type { ChatMessage } from "../../lib/llm/providers";
-import { parseInput, isSimpleMessage, detectDocumentCodes } from "../../lib/chat/messageUtils";
+import { parseInput, isSimpleMessage, detectDocumentCodes, HUMANIZE_CTX } from "../../lib/chat/messageUtils";
 import { MdText } from "../chat/MdText";
 import { HelpPanel } from "../chat/HelpPanel";
 import { ChatAutoInput } from "../chat/ChatAutoInput";
@@ -40,7 +40,6 @@ Carácter: meticuloso, preciso con los números, ligeramente pesimista sobre pre
 Especialista en: presupuestos S/., metrados, valorizaciones, análisis de desviación de costo, adicionales de obra, análisis de propuestas.
 Personalidad: Usas S/ naturalmente. Conviertes USD a S/ (TC ≈ 3.75). Preguntas por las partidas antes de opinar. Te incomoda cuando no hay desglose. Dices "Ojo:" para alertas.
 Formato:
-- Saludo simple → responde con calidez en 1-2 líneas, puedes preguntar "¿qué proyecto revisamos?".
 - Análisis → **negritas** para S/ importes, % desviaciones y conclusiones. Estructura con partidas cuando aplica.
 - Menciona @PM si el retraso afecta costos, @IE si necesitas validar alcance técnico.
 - Si la decisión supera tu nivel, menciona @GG.
@@ -50,7 +49,6 @@ Carácter: práctico, orientado a hitos, directo. Hablas en fechas, semanas y se
 Especialista en: cronogramas, ruta crítica, riesgos, restricciones, recuperación de atrasos, look-ahead semanal.
 Personalidad: Usas ● para listas. Referencias a semanas (S1, S2). Siempre tienes Plan B. Tu pregunta favorita: "¿y cuánto tiempo falta?". Semáforos: 🟢 en tiempo / 🟡 con riesgo / 🔴 retrasado.
 Formato:
-- Saludo simple → responde cordialmente, 1-2 líneas.
 - Análisis → **negritas** para fechas críticas, hitos y riesgos. Máx 3 párrafos. Si hay retraso: días de atraso, impacto en hito siguiente, 2 opciones de recuperación.
 - Menciona @IC para impacto económico, @IE para validar alcance técnico.
 - Cuando necesitas aprobación, menciona @GG.
@@ -60,7 +58,6 @@ Carácter: ejecutivo, directo, visión de portafolio. No te pierdes en el detall
 Tu rol: diagnóstico → decisión → siguiente acción (BLUF: la conclusión primero, el razonamiento después).
 Personalidad: Si necesitas detalle de costos, dices "Que @IC revise...". Si necesitas cronograma, "@PM, ¿impacto en el timeline?". Si es técnico, "@IE, valida esto".
 Formato:
-- Saludo simple → responde con energía, 1-2 líneas.
 - Análisis → máx 3 puntos clave con **negritas** en la decisión y cifras críticas. Marca: ✅ Aprobado / ⏸ En revisión / ❌ Rechazado cuando aplique.
 - Responde en español ejecutivo, directo al grano.`,
   ie: `Eres María, la Ingeniera Eléctrica Especialista (IE) de EKA Ingeniería, empresa eléctrica peruana.
@@ -68,7 +65,6 @@ Carácter: técnica, apasionada por las normas, cita estándares naturalmente. T
 Especialista en: CNE-U, IEC 60364, IEEE Std 141/242/519, diseño de SET, cálculo de cables, coordinación de protecciones, estudios de cortocircuito.
 Personalidad: Citas normativas (CNE-U Art. 020, IEC 60364-4-41) cuando aplica. Usas kV, MVA, A, Ω con precisión. Distingues instalaciones (CNE) de concesionarias (DGE/MINEM).
 Formato:
-- Saludo simple → responde con calidez, 1-2 líneas.
 - Análisis → **negritas** para valores técnicos, normas y conclusiones de diseño. Usa tablas de comparación cuando hay opciones.
 - Menciona @IC para presupuesto de materiales, @PM para integración en cronograma.
 - Escala a @GG cuando requiere decisión de inversión mayor.
@@ -100,7 +96,7 @@ function MessageBubble({
             borderTopLeftRadius: isUser ? 10 : 3,
           }}
         >
-          {isUser ? text : <MdText text={text} />}
+          <MdText text={text} variant={isUser ? "inverted" : "default"} />
         </div>
         <div style={{ fontSize: 10, color: "var(--t3)", marginTop: 3, textAlign: isUser ? "right" : "left", display: "flex", gap: 6, alignItems: "center", justifyContent: isUser ? "flex-end" : "flex-start" }}>
           <span>{time}</span>
@@ -238,15 +234,18 @@ export function ChatView() {
       `\n\n--- Archivo adjunto: ${f.name} (${Math.round(f.size / 1024)}KB) ---\n${f.content}\n---`
     ).join("");
 
-    const systemPrompt = (AGENT_SYSTEM_PROMPTS[agentId] ?? AGENT_SYSTEM_PROMPTS.ic) + ctxPrompt + autoCodeCtx;
+    const systemPrompt = (AGENT_SYSTEM_PROMPTS[agentId] ?? AGENT_SYSTEM_PROMPTS.ic) + HUMANIZE_CTX + ctxPrompt + autoCodeCtx;
 
-    // Load Supabase memory + local thread for context
+    // Load Supabase memory (older conversations) only for non-trivial
+    // messages, but always read this thread's local history — it's already
+    // in memory and is what lets the agent follow up on "ok"/short replies
+    // instead of repeating its opening question.
     const [supabaseHistory, localHistory] = await Promise.all([
       simple ? Promise.resolve([]) : loadConversationHistory(userId, agentId, undefined, 8),
       Promise.resolve(chatFor(threadKey)),
     ]);
 
-    const contextMessages: ChatMessage[] = simple ? [] : [
+    const contextMessages: ChatMessage[] = [
       // Supabase long-term memory (older conversations)
       ...supabaseHistory.slice(0, 6).map((m) => ({
         role: m.role as "user" | "assistant",

@@ -10,6 +10,18 @@ const AGENT_LABELS: Record<string, { label: string; color: string }> = {
   gg:  { label: "GG",  color: "#b45309" },
 };
 
+/**
+ * Full display names for @mentions, shown as chips (e.g. "Gerente General")
+ * instead of the raw "@GG" the user typed. Centralized here so both the
+ * activation logic and the rendering (MdText) agree on agent identities.
+ */
+export const AGENT_FULL_LABELS: Record<string, string> = {
+  ic: "Ingeniero de Costos",
+  pm: "Project Manager",
+  ie: "Ingeniera Eléctrica",
+  gg: "Gerente General",
+};
+
 const GREETING_RE = /^(hola|buenos|buenas|buen\s?d[íi]a|hi\b|hey\b|saludos|cómo estás|como estas|gracias|de nada|ok\b|okay\b|perfecto|entendido|claro|sí\b|no\b|genial|bien\b)/i;
 const TEAM_RE = /\b(todos|equipo|chicos|team|a todos|buenas a todos|saludos a todos)\b/i;
 
@@ -21,6 +33,28 @@ export function isSimpleMessage(text: string): boolean {
 /** True when message is addressed to the whole team (all agents should respond) */
 export function isTeamMessage(text: string): boolean {
   return TEAM_RE.test(text);
+}
+
+// Words/phrases that signal the user actually wants the mentioned agent to
+// do something or answer something — as opposed to just greeting/thanking
+// them or talking near their name ("Buenos días @gg", "Gracias @ic",
+// "@gg estamos revisando esto").
+const QUESTION_WORD_RE = /\b(qu[eé]|cu[aá]l|cu[aá]nto|cu[aá]ndo|d[oó]nde|c[oó]mo|por qu[eé])\b/i;
+const REQUEST_VERB_RE = /^\s*(revisa|revisar|genera|generar|dame|necesito|necesitamos|puedes|podr[ií]as|ay[uú]dame|analiza|analizar|calcula|calcular|resume|resumir|prepara|preparar|verifica|verificar|actualiza|actualizar|env[ií]a|enviar|crea|crear|arma|armar|cotiza|cotizar|valida|validar|indica|indicar|dime|dinos|confirma|confirmar)\b/i;
+
+/**
+ * True when a message directed at a mentioned agent contains a clear
+ * question or instruction (and therefore deserves an AI reply). False for
+ * bare greetings/acknowledgements/statements ("Buenos días", "Gracias",
+ * "estamos revisando esto") even if they're attached to an @mention.
+ */
+export function hasClearIntent(cleanText: string): boolean {
+  const t = cleanText.trim();
+  if (!t) return false;
+  if (t.includes("?") || t.includes("¿")) return true;
+  if (REQUEST_VERB_RE.test(t)) return true;
+  if (QUESTION_WORD_RE.test(t)) return true;
+  return false;
 }
 
 export type ParsedInput = {
@@ -125,6 +159,20 @@ export function parseMd(text: string): MdSegment[] {
 }
 
 export { AGENT_LABELS };
+
+/**
+ * Shared humanization rules appended to every agent's system prompt
+ * (Mesa de trabajo and Chat privado). Keeps replies grounded in the actual
+ * conversation instead of repeating generic openers.
+ */
+export const HUMANIZE_CTX = `\n\nReglas de comportamiento:
+- No empieces siempre con un saludo. Si ya veniste conversando o el usuario te dio contexto (proyecto, código, archivo, pregunta concreta), respóndele directo a eso.
+- No repitas frases genéricas ya usadas antes en la conversación.
+- Responde lo que se te pregunta primero; el contexto adicional va después.
+- Si te falta un dato puntual para responder, pide SOLO ese dato, de forma específica (ej: "No encuentro el código o nombre del proyecto en este hilo. Indícame el proyecto o menciona el código PRY-XXX para revisar sus requerimientos."). No preguntes algo genérico como "¿qué proyecto revisamos hoy?".
+- No inventes datos, cifras ni nombres de proyectos que no estén en el contexto. Si no tienes acceso a cierta información, dilo explícitamente.
+- Si necesitas revisar datos internos (presupuesto, cronograma, requerimientos), indica qué dato/sección vas a buscar.
+- Tono profesional, breve y colaborativo, como un colega del equipo.`;
 
 // ── Document code detection ──────────────────────────────────────────────────
 // Detects codes like COT-EKA-2026-001, RQ-001, OC-123 pasted in chat
