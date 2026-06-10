@@ -8,8 +8,9 @@
 --
 -- Alcance:
 -- - solo actualiza public.cotizaciones.estado_propuesta
--- - solo afecta filas cuyo valor coincide EXACTAMENTE con los patrones
---   corruptos conocidos (sin tocar otras filas/columnas)
+-- - solo afecta filas cuyo valor empieza con "Hist" y termina en "rico"
+--   (es decir, variantes corruptas de "Historico") y que no sea ya
+--   exactamente 'Histórico' (sin tocar otras filas/columnas/estados)
 -- - usa las politicas UPDATE ya existentes (023_cotizaciones_update_policy.sql)
 -- - no crea ni modifica policies/permissions
 
@@ -24,23 +25,16 @@ where estado_propuesta like '%Ã%'
 group by estado_propuesta
 order by filas desc;
 
--- Repara la corrupcion "doble" (incluye el caracter de reemplazo U+FFFD
--- re-codificado como Latin1->UTF8): "HistÃ¯Â¿Â½rico" -> "Histórico"
+-- Repara cualquier variante de mojibake del estado "Historico".
+-- En vez de comparar por igualdad exacta (que falla porque los bytes
+-- corruptos pueden representarse/transmitirse distinto segun el cliente
+-- SQL), se usa un patron por prefijo/sufijo ASCII: cualquier valor que
+-- empiece con "Hist" y termine en "rico" pero que NO sea ya 'Histórico'
+-- se considera una variante corrupta y se normaliza.
 update public.cotizaciones
 set estado_propuesta = 'Histórico'
-where estado_propuesta = 'HistÃ¯Â¿Â½rico';
-
--- Repara la corrupcion "simple" (un solo paso de Latin1->UTF8):
--- "HistÃ³rico" -> "Histórico"
-update public.cotizaciones
-set estado_propuesta = 'Histórico'
-where estado_propuesta = 'HistÃ³rico';
-
--- Repara la corrupcion "triple" (tres pasos de Latin1->UTF8):
--- "HistÃÂÃÂ³rico" -> "Histórico"
-update public.cotizaciones
-set estado_propuesta = 'Histórico'
-where estado_propuesta = 'HistÃÂÃÂ³rico';
+where estado_propuesta like 'Hist%rico'
+  and estado_propuesta <> 'Histórico';
 
 -- Validacion manual 2 (despues): ya no deberian quedar filas con 'Ã'
 -- en estado_propuesta. Si esta consulta devuelve filas, revisalas
