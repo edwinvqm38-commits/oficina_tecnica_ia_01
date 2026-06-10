@@ -14,6 +14,7 @@ import type { ApprovalStatus, ChatMessage, KnowledgeNote, Project, Skill, SkillS
 import { isRemoteConfigured, loadLocal, loadRemote, saveLocal, saveRemote, subscribeRemote } from "./persistence";
 import {
   AppState,
+  mergeChats,
   ModelProviderId,
   Notification,
   ProviderConnection,
@@ -117,13 +118,27 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
 
   // Live-sync shared chats (e.g. Mesa de trabajo) across users: when another
   // client saves the workspace state, merge their `chats` into ours so new
-  // messages appear without a manual refresh. Only `chats` is merged to
-  // avoid clobbering this client's own in-flight edits to other state.
+  // messages appear without a manual refresh. Only `chats` is merged (by
+  // message id) to avoid clobbering this client's own in-flight edits to
+  // other state or dropping messages not yet round-tripped.
   useEffect(() => {
     if (!remoteConfigured) return;
     return subscribeRemote((remote) => {
-      setState((s) => ({ ...s, chats: remote.chats }));
+      setState((s) => ({ ...s, chats: mergeChats(s.chats, remote.chats) }));
     });
+  }, [remoteConfigured]);
+
+  // Fallback poll: Realtime subscriptions can silently fail to deliver
+  // (publication/replication not configured, dropped connection, etc.), so
+  // periodically re-fetch the shared chats and merge in anything new.
+  useEffect(() => {
+    if (!remoteConfigured) return;
+    const interval = setInterval(() => {
+      void loadRemote().then((remote) => {
+        if (remote) setState((s) => ({ ...s, chats: mergeChats(s.chats, remote.chats) }));
+      });
+    }, 5000);
+    return () => clearInterval(interval);
   }, [remoteConfigured]);
 
   const notify = useCallback<StoreActions["notify"]>((n) => {

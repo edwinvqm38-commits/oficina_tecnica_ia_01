@@ -73,6 +73,23 @@ export function seedState(): AppState {
   };
 }
 
+/**
+ * Merges two `chats` maps by message id (union, keeping both sides' new
+ * messages), so polling/realtime updates from other users don't clobber
+ * messages this client just sent (and vice versa).
+ */
+export function mergeChats(a: AppState["chats"], b: AppState["chats"]): AppState["chats"] {
+  const keys = new Set([...Object.keys(a), ...Object.keys(b)]);
+  const merged: AppState["chats"] = {};
+  for (const key of keys) {
+    const byId = new Map<string, ChatMessage>();
+    for (const m of a[key] || []) byId.set(m.id, m);
+    for (const m of b[key] || []) byId.set(m.id, m);
+    merged[key] = Array.from(byId.values()).sort((x, y) => x.id.localeCompare(y.id));
+  }
+  return merged;
+}
+
 export function mergeWithSeed(partial: Partial<AppState> | null | undefined): AppState {
   const seed = seedState();
   if (!partial) return seed;

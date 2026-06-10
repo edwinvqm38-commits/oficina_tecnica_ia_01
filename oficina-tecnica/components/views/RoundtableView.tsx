@@ -283,6 +283,22 @@ export function RoundtableView() {
 
     setHands(responders.map((id) => ({ agentId: id, modelLabel: routing.modelLabel })));
 
+    // Recent conversation in Mesa de trabajo, shared by everyone in the
+    // room — included for every responding agent (not just the ones that
+    // answered before) so nobody loses track of the project/topic/files
+    // already discussed by the team or other users.
+    const recentThread: ChatMessage[] = thread.slice(-10).flatMap((m): ChatMessage[] => {
+      if (m.role === "gg") {
+        const attNote = m.attachments?.length
+          ? ` [Adjuntó: ${m.attachments.map((a) => a.name).join(", ")}]`
+          : "";
+        const content = (m.text + attNote).trim();
+        return content ? [{ role: "user", content }] : [];
+      }
+      const agentName = m.agentId ? agentById(m.agentId)?.name || m.agentId.toUpperCase() : "Agente";
+      return m.text ? [{ role: "assistant", content: `[${agentName}] ${m.text}` }] : [];
+    });
+
     // Mesa de trabajo memory is shared across all users in the room (see
     // ROUNDTABLE_MEMORY_ID), so every agent learns from the whole team.
     const userId = ROUNDTABLE_MEMORY_ID;
@@ -360,6 +376,7 @@ export function RoundtableView() {
 
       const messages: ChatMessage[] = [
         { role: "system", content: sysPrompt + projectCtx + requirementCtx + autoCodeCtx + attachmentCtx + brevityCtx + coordinatorCtx },
+        ...recentThread,
         ...supabaseHistory.map((m) => ({ role: m.role as "user" | "assistant", content: m.content })),
         { role: "user", content: parsed.cleanText + fileCtx },
       ];

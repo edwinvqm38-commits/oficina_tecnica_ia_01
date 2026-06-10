@@ -81,7 +81,7 @@ export function subscribeRemote(onChange: (state: AppState) => void): () => void
     .channel(`workspace_state:${WORKSPACE_ID}`)
     .on(
       "postgres_changes",
-      { event: "UPDATE", schema: "public", table: "workspace_state", filter: `id=eq.${WORKSPACE_ID}` },
+      { event: "*", schema: "public", table: "workspace_state", filter: `id=eq.${WORKSPACE_ID}` },
       (payload) => {
         const newState = (payload.new as { state?: Partial<AppState> } | null)?.state;
         if (newState) onChange(mergeWithSeed(newState));
