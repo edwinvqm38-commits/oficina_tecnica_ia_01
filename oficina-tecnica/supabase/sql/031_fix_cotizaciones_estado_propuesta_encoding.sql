@@ -36,6 +36,12 @@ update public.cotizaciones
 set estado_propuesta = 'Histórico'
 where estado_propuesta = 'HistÃ³rico';
 
+-- Repara la corrupcion "triple" (tres pasos de Latin1->UTF8):
+-- "HistÃÂÃÂ³rico" -> "Histórico"
+update public.cotizaciones
+set estado_propuesta = 'Histórico'
+where estado_propuesta = 'HistÃÂÃÂ³rico';
+
 -- Validacion manual 2 (despues): ya no deberian quedar filas con 'Ã'
 -- en estado_propuesta. Si esta consulta devuelve filas, revisalas
 -- manualmente antes de repetir/ajustar este script.
