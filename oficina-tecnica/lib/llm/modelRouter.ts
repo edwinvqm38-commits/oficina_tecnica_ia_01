@@ -1,4 +1,5 @@
 import type { ModelConfig, LLMProvider } from "./providers";
+import { isOllamaEnabled } from "./providers";
 
 export type RequestComplexity = "simple" | "technical" | "analytical" | "generative";
 
@@ -41,7 +42,7 @@ export function routeRequest(
 ): RoutingDecision {
   const complexity = classifyRequest(text);
   const ollamaBase = getKey("ot:ollama:baseUrl") || "http://localhost:11434";
-  const ollamaDisabled = getKey("ot:ollama:disabled") === "true";
+  const ollamaEnabled = isOllamaEnabled();
 
   const geminiKey     = getKey("ot:apikey:gemini");
   const groqKey       = getKey("ot:apikey:groq");
@@ -115,7 +116,7 @@ export function routeRequest(
     return { config: { provider: "huggingface", model: "meta-llama/Llama-3.1-8B-Instruct", apiKey: huggingfaceKey }, complexity, reason: "HuggingFace → gratuito, miles de modelos", modelLabel: "Llama-3.1-8B" };
   }
 
-  if (!ollamaDisabled && availableOllamaModels.length > 0) {
+  if (ollamaEnabled && availableOllamaModels.length > 0) {
     function pickOllama(preferred: string[], fallback: string): string {
       for (const m of preferred) {
         const found = availableOllamaModels.find((am) => am.startsWith(m));

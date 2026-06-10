@@ -14,6 +14,7 @@ import { useAccessGate } from "../../lib/auth/useAccessGate";
 import { usePendingUserNotifications } from "../../lib/auth/usePendingUserNotifications";
 import { useSectionAccess } from "../../lib/auth/useSectionAccess";
 import { detectDeviceProfile } from "../../lib/llm/deviceDetection";
+import { ViewErrorBoundary } from "./ErrorBoundary";
 
 export function AppShell({ children }: { children: ReactNode }) {
   const pathname = usePathname();
@@ -69,7 +70,7 @@ export function AppShell({ children }: { children: ReactNode }) {
               email={session.email}
               name={(session.user.user_metadata?.full_name as string | undefined) || (session.user.user_metadata?.name as string | undefined)}
             />
-            {children}
+            <ViewErrorBoundary key={pathname}>{children}</ViewErrorBoundary>
           </div>
         </main>
         {hasCtx && <ContextPanel route={activeRoute} />}

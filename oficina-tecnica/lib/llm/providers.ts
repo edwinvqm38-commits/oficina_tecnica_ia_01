@@ -32,6 +32,15 @@ export type LLMResponse = {
   tokensUsed?: number;
 };
 
+// Ollama is local-only and disabled by default (it caused CORS/connection
+// errors in production, where localhost:11434 doesn't exist). It must be
+// explicitly enabled by the user (e.g. from Conexiones) — absence of the
+// flag means disabled.
+export function isOllamaEnabled(): boolean {
+  if (typeof localStorage === "undefined") return false;
+  return localStorage.getItem("ot:ollama:disabled") === "false";
+}
+
 export async function checkOllamaConnectivity(baseUrl = "http://localhost:11434"): Promise<boolean> {
   try {
     const res = await fetch(`${baseUrl}/api/tags`, { signal: AbortSignal.timeout(3000) });
@@ -42,6 +51,7 @@ export async function checkOllamaConnectivity(baseUrl = "http://localhost:11434"
 }
 
 export async function getOllamaModels(baseUrl = "http://localhost:11434"): Promise<string[]> {
+  if (!isOllamaEnabled()) return [];
   try {
     const res = await fetch(`${baseUrl}/api/tags`, { signal: AbortSignal.timeout(5000) });
     if (!res.ok) return [];
@@ -220,7 +230,6 @@ export async function sendChatWithFallback(
   ];
 
   const ollamaBase = localStorage.getItem("ot:ollama:baseUrl") ?? "http://localhost:11434";
-  const ollamaDisabled = localStorage.getItem("ot:ollama:disabled") === "true";
 
   for (const fb of CLOUD_FALLBACKS) {
     if (fb.provider === primaryConfig.provider) continue;
@@ -233,7 +242,7 @@ export async function sendChatWithFallback(
     } catch { /* try next */ }
   }
 
-  if (!ollamaDisabled && primaryConfig.provider !== "ollama" && ollamaModels.length > 0) {
+  if (isOllamaEnabled() && primaryConfig.provider !== "ollama" && ollamaModels.length > 0) {
     const config: ModelConfig = { provider: "ollama", model: ollamaModels[0], baseUrl: ollamaBase };
     try {
       const response = await sendChat(messages, config);

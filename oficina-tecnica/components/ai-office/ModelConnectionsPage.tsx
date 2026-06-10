@@ -2,10 +2,10 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { aiAgentsMock } from "@/lib/ai-office/aiAgentsMock";
-import { checkOllamaConnectivity, getOllamaModels } from "@/lib/llm/providers";
+import { checkOllamaConnectivity, getOllamaModels, isOllamaEnabled } from "@/lib/llm/providers";
 import { DEFAULT_AGENT_MODELS, OLLAMA_SETUP_STEPS, RECOMMENDED_MODELS } from "@/lib/llm/agentModels";
 
-type OllamaStatus = "checking" | "connected" | "disconnected";
+type OllamaStatus = "checking" | "connected" | "disconnected" | "disabled";
 
 type ProviderKey =
   | "ollama" | "gemini" | "groq" | "sambanova" | "openrouter"
@@ -42,6 +42,16 @@ function OllamaStatusBanner({
 }: {
   status: OllamaStatus; ollamaUrl: string; ollamaModels: string[]; setupOpen: boolean; onToggleSetup: () => void;
 }) {
+  if (status === "disabled") {
+    return (
+      <div className="card" style={{ borderLeft: "3px solid var(--t3)", padding: "12px 16px" }}>
+        <p style={{ fontSize: 13, color: "var(--t2)" }}>
+          Ollama está desactivado. No se realizan llamadas a <span style={{ fontFamily: "var(--mono)" }}>{ollamaUrl}</span>. Actívalo arriba si quieres usar modelos locales.
+        </p>
+      </div>
+    );
+  }
+
   if (status === "checking") {
     return (
       <div className="card" style={{ borderLeft: "3px solid var(--blue)", padding: "12px 16px", display: "flex", alignItems: "center", gap: 10 }}>
@@ -355,14 +365,14 @@ function ProviderReferenceSection() {
 
 export function ModelConnectionsPage() {
   const [ollamaUrl, setOllamaUrl] = useState("http://localhost:11434");
-  const [ollamaStatus, setOllamaStatus] = useState<OllamaStatus>("checking");
+  const [ollamaStatus, setOllamaStatus] = useState<OllamaStatus>("disabled");
   const [ollamaModels, setOllamaModels] = useState<string[]>([]);
   const [setupOpen, setSetupOpen] = useState(false);
   const [assignments, setAssignments] = useState<Record<string, AgentModelAssignment>>({});
-  const [ollamaEnabled, setOllamaEnabled] = useState(true);
+  const [ollamaEnabled, setOllamaEnabled] = useState(false);
 
   useEffect(() => {
-    setOllamaEnabled(getLS("ot:ollama:disabled", "false") !== "true");
+    setOllamaEnabled(isOllamaEnabled());
   }, []);
 
   useEffect(() => {
@@ -377,6 +387,11 @@ export function ModelConnectionsPage() {
   }, []);
 
   const runConnectivityCheck = useCallback(async (url: string) => {
+    if (!isOllamaEnabled()) {
+      setOllamaModels([]);
+      setOllamaStatus("disabled");
+      return;
+    }
     setOllamaStatus("checking");
     const ok = await checkOllamaConnectivity(url);
     if (ok) {
@@ -391,7 +406,7 @@ export function ModelConnectionsPage() {
 
   useEffect(() => {
     runConnectivityCheck(getLS(LS_OLLAMA_URL, "http://localhost:11434"));
-  }, [runConnectivityCheck]);
+  }, [runConnectivityCheck, ollamaEnabled]);
 
   function handleAssignmentChange(agentId: string, value: AgentModelAssignment) {
     setAssignments((prev) => {
