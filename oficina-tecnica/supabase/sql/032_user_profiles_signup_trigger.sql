@@ -125,6 +125,30 @@ with check (
   )
 );
 
+-- Backfill: crea el perfil para usuarios que ya existían en auth.users
+-- antes de este trigger (p. ej. tu cuenta de administrador).
+insert into public.user_profiles (id, email, full_name, avatar_url, role, status, is_super_admin, approved_by, approved_at)
+select
+  u.id,
+  u.email,
+  coalesce(u.raw_user_meta_data ->> 'full_name', u.raw_user_meta_data ->> 'name'),
+  u.raw_user_meta_data ->> 'avatar_url',
+  case when lower(u.email) = 'edwin.qm@outlook.com' then 'admin' else 'consulta' end,
+  case when lower(u.email) = 'edwin.qm@outlook.com' then 'approved' else 'pending' end,
+  lower(u.email) = 'edwin.qm@outlook.com',
+  case when lower(u.email) = 'edwin.qm@outlook.com' then 'sistema' else null end,
+  case when lower(u.email) = 'edwin.qm@outlook.com' then now() else null end
+from auth.users u
+where not exists (select 1 from public.user_profiles p where p.id = u.id)
+on conflict (id) do nothing;
+
+-- Asegura que tu cuenta quede como admin aprobado aunque ya existiera
+-- el perfil con otro estado/rol.
+update public.user_profiles
+set role = 'admin', status = 'approved', is_super_admin = true,
+    approved_by = coalesce(approved_by, 'sistema'), approved_at = coalesce(approved_at, now())
+where lower(email) = 'edwin.qm@outlook.com';
+
 -- Realtime: permite al admin recibir notificaciones en vivo de nuevos
 -- registros pendientes (suscripción a INSERT/UPDATE en user_profiles).
 do $$
