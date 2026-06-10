@@ -10,6 +10,7 @@ import {
   fetchRequirementsByProject, searchCotizaciones, cotizacionToProject,
 } from "../../lib/chat/contextQuery";
 import { detectInlineCodes } from "../../lib/chat/messageUtils";
+import { extractFileContent } from "../../lib/chat/fileExtraction";
 
 export type { ChatCtx };
 
@@ -114,50 +115,6 @@ function renderHighlighted(
   return nodes;
 }
 
-// Simple PDF text extraction (works on uncompressed/simple PDFs)
-async function extractFileContent(file: File): Promise<string> {
-  const name = file.name.toLowerCase();
-  const isText = file.type.startsWith("text/") ||
-    /\.(txt|csv|md|json|xml|html?|log|py|ts|js|tsx|jsx|css|yaml|yml|toml|ini|conf|sql)$/.test(name);
-
-  if (isText) {
-    return new Promise<string>((resolve) => {
-      const reader = new FileReader();
-      reader.onload = (e) => resolve(String(e.target?.result ?? "").slice(0, 8000));
-      reader.readAsText(file, "utf-8");
-    });
-  }
-
-  if (file.type === "application/pdf" || name.endsWith(".pdf")) {
-    return new Promise<string>((resolve) => {
-      const reader = new FileReader();
-      reader.onload = (e) => {
-        try {
-          const raw = new TextDecoder("latin1").decode(e.target?.result as ArrayBuffer);
-          const blocks = raw.match(/BT[\s\S]*?ET/g) ?? [];
-          const lines: string[] = [];
-          for (const b of blocks) {
-            for (const m of b.matchAll(/\(([^)]{1,200})\)\s*Tj/g)) {
-              const t = m[1].trim();
-              if (t && /[a-zA-ZáéíóúñÁÉÍÓÚÑ0-9]/.test(t)) lines.push(t);
-            }
-          }
-          const text = lines.join(" ").replace(/\s+/g, " ").trim();
-          resolve(text.length > 60
-            ? `[PDF: ${file.name}]\n${text.slice(0, 4000)}`
-            : `[PDF: ${file.name} — ${Math.round(file.size / 1024)} KB — contenido comprimido, texto no extraíble]`
-          );
-        } catch {
-          resolve(`[PDF: ${file.name} — error al leer]`);
-        }
-      };
-      reader.readAsArrayBuffer(file);
-    });
-  }
-
-  return `[Archivo: ${file.name} — ${file.type || "binario"}, ${Math.round(file.size / 1024)} KB — adjunto para referencia]`;
-}
-
 // Cap on files we keep as a downloadable data URL in chat history (avoid bloating storage)
 const MAX_DOWNLOAD_BYTES = 3 * 1024 * 1024; // 3MB
 
@@ -190,6 +147,8 @@ export function ChatAutoInput({ value, onChange, onSubmit, placeholder, disabled
   const [cotizaciones, setCotizaciones] = useState<CotizacionSummary[]>([]);
   const [searchingCot, setSearchingCot] = useState(false);
   const [attachments, setAttachments] = useState<FileAttachment[]>([]);
+  const [processingFiles, setProcessingFiles] = useState(false);
+  const [processingMsg, setProcessingMsg] = useState<string | null>(null);
   const taRef = useRef<HTMLTextAreaElement>(null);
   const overlayRef = useRef<HTMLDivElement>(null);
   const fileRef = useRef<HTMLInputElement>(null);
@@ -366,16 +325,23 @@ export function ChatAutoInput({ value, onChange, onSubmit, placeholder, disabled
 
   async function handleFiles(files: FileList | null) {
     if (!files || files.length === 0) return;
-    const newAttachments: FileAttachment[] = [];
-    for (const file of Array.from(files)) {
-      const [content, dataUrl] = await Promise.all([extractFileContent(file), readFileAsDataUrl(file)]);
-      newAttachments.push({ name: file.name, type: file.type || "unknown", content, size: file.size, dataUrl });
+    setProcessingFiles(true);
+    try {
+      for (const file of Array.from(files)) {
+        const [content, dataUrl] = await Promise.all([
+          extractFileContent(file, (msg) => setProcessingMsg(msg)),
+          readFileAsDataUrl(file),
+        ]);
+        setAttachments((prev) => [...prev, { name: file.name, type: file.type || "unknown", content, size: file.size, dataUrl }]);
+      }
+    } finally {
+      setProcessingFiles(false);
+      setProcessingMsg(null);
     }
-    setAttachments((prev) => [...prev, ...newAttachments]);
   }
 
   function submit() {
-    if (disabled) return;
+    if (disabled || processingFiles) return;
     const fullCtx: ChatCtx = { ...ctx, attachments: attachments.length ? attachments : undefined };
     onSubmit(value.trim(), fullCtx);
     setAttachments([]);
@@ -447,6 +413,14 @@ export function ChatAutoInput({ value, onChange, onSubmit, placeholder, disabled
               <button onClick={() => removeAttachment(a.name)} style={{ background: "none", border: "none", cursor: "pointer", color: "#c084fc", fontSize: 12, lineHeight: 1, padding: "0 0 0 2px" }}>×</button>
             </span>
           ))}
+        </div>
+      )}
+
+      {/* File processing indicator */}
+      {processingFiles && (
+        <div style={{ display: "flex", alignItems: "center", gap: 6, padding: "4px 8px", fontSize: 11.5, color: "var(--t2)" }}>
+          <span aria-hidden style={{ width: 12, height: 12, border: "2px solid var(--border)", borderTopColor: "var(--blue)", borderRadius: "50%", display: "inline-block", animation: "igspin 0.7s linear infinite" }} />
+          <span>{processingMsg ?? "Analizando archivo…"}</span>
         </div>
       )}
 
@@ -546,7 +520,7 @@ export function ChatAutoInput({ value, onChange, onSubmit, placeholder, disabled
           className="btn btn--primary"
           style={{ padding: "9px 14px", flexShrink: 0 }}
           onClick={submit}
-          disabled={disabled}
+          disabled={disabled || processingFiles}
         >
           <Icons.arrowRight width={15} height={15} />
         </button>
