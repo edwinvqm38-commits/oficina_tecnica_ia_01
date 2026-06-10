@@ -75,7 +75,7 @@ begin
     case when lower(new.email) = 'edwin.qm@outlook.com' then 'admin'::app_role else 'consulta'::app_role end,
     case when lower(new.email) = 'edwin.qm@outlook.com' then 'approved'::user_status else 'pending'::user_status end,
     lower(new.email) = 'edwin.qm@outlook.com',
-    case when lower(new.email) = 'edwin.qm@outlook.com' then 'sistema' else null end,
+    case when lower(new.email) = 'edwin.qm@outlook.com' then new.id else null end,
     case when lower(new.email) = 'edwin.qm@outlook.com' then now() else null end
   )
   on conflict (id) do nothing;
@@ -147,7 +147,7 @@ select
   case when lower(u.email) = 'edwin.qm@outlook.com' then 'admin'::app_role else 'consulta'::app_role end,
   case when lower(u.email) = 'edwin.qm@outlook.com' then 'approved'::user_status else 'pending'::user_status end,
   lower(u.email) = 'edwin.qm@outlook.com',
-  case when lower(u.email) = 'edwin.qm@outlook.com' then 'sistema' else null end,
+  case when lower(u.email) = 'edwin.qm@outlook.com' then u.id else null end,
   case when lower(u.email) = 'edwin.qm@outlook.com' then now() else null end
 from auth.users u
 where not exists (select 1 from public.user_profiles p where p.id = u.id)
@@ -157,7 +157,7 @@ on conflict (id) do nothing;
 -- el perfil con otro estado/rol.
 update public.user_profiles
 set role = 'admin'::app_role, status = 'approved'::user_status, is_super_admin = true,
-    approved_by = coalesce(approved_by, 'sistema'), approved_at = coalesce(approved_at, now())
+    approved_by = coalesce(approved_by, id), approved_at = coalesce(approved_at, now())
 where lower(email) = 'edwin.qm@outlook.com';
 
 -- Realtime: permite al admin recibir notificaciones en vivo de nuevos
