@@ -145,20 +145,11 @@ function HandRaise({ agentId, modelLabel }: { agentId: string; modelLabel?: stri
   );
 }
 
-function ProjectChip({ projectId, onClick }: { projectId: string; onClick: () => void }) {
-  return (
-    <button onClick={onClick} style={{ background: "#f0fdf4", color: "#166534", border: "1px solid #bbf7d0", borderRadius: 4, padding: "2px 8px", fontFamily: "var(--mono)", fontSize: 11, fontWeight: 700, cursor: "pointer" }}>
-      @{projectId}
-    </button>
-  );
-}
-
 export function RoundtableView() {
   const { state, appendChat, chatFor } = useStore();
   const { session } = useSession(false);
   const { online, toggle: toggleOnline } = useOnlineMode();
   const [input, setInput] = useState("");
-  const [projectId, setProjectId] = useState("PRY-001");
   const [busy, setBusy] = useState(false);
   const [hands, setHands] = useState<{ agentId: string; modelLabel?: string }[]>([]);
   const [showHelp, setShowHelp] = useState(false);
@@ -167,7 +158,6 @@ export function RoundtableView() {
 
   const thread = chatFor(ROUNDTABLE_THREAD);
   const allProjects = [...PROJECTS, ...state.customProjects];
-  const project = allProjects.find((p) => p.id === projectId);
 
   useEffect(() => {
     if (scrollRef.current) scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
@@ -193,16 +183,9 @@ export function RoundtableView() {
     const ctxProject = inputCtx?.project ?? null;
     const ctxRequirement = inputCtx?.requirement ?? null;
 
-    // If @PRY-xxx detected in text OR chip context → switch project
-    const effectiveProjectId = ctxProject?.id ?? parsed.targetProjectId ?? projectId;
-    if (parsed.targetProjectId) {
-      const found = allProjects.find((p) => p.id === parsed.targetProjectId);
-      if (found) setProjectId(found.id);
-    } else if (ctxProject) {
-      setProjectId(ctxProject.id);
-    }
-
-    const activeProject = ctxProject ?? allProjects.find((p) => p.id === effectiveProjectId) ?? null;
+    // Project context comes only from /proyecto (chip) or @PRY-xxx mentioned in the message
+    const activeProject = ctxProject
+      ?? (parsed.targetProjectId ? allProjects.find((p) => p.id === parsed.targetProjectId) ?? null : null);
     const userDisplay = raw;
 
     appendChat(ROUNDTABLE_THREAD, { role: "gg", text: userDisplay });
@@ -292,8 +275,6 @@ export function RoundtableView() {
     setBusy(false);
   }
 
-  const projectOptions = allProjects.map((p) => p.id);
-
   return (
     <>
       <PageHeader
@@ -305,29 +286,6 @@ export function RoundtableView() {
 
       <div style={{ display: "grid", gridTemplateColumns: "230px 1fr", gap: 10, alignItems: "start" }}>
         <div className="space-y-2">
-          <div className="card" style={{ padding: "10px 12px" }}>
-            <div style={{ fontSize: 11, fontWeight: 600, color: "var(--t1)", marginBottom: 6 }}>Proyecto activo</div>
-            <select className="select" value={projectId} onChange={(e) => setProjectId(e.target.value)} style={{ width: "100%" }}>
-              {allProjects.map((p) => <option key={p.id} value={p.id}>{p.id} · {p.name}</option>)}
-            </select>
-            {project && (
-              <div style={{ marginTop: 10 }}>
-                <div className="info-row"><span className="info-row-label">Cliente</span><span className="info-row-value">{project.client}</span></div>
-                <div className="info-row"><span className="info-row-label">Estado</span><span className="info-row-value">{project.status}</span></div>
-                <div className="info-row"><span className="info-row-label">Avance</span><span className="info-row-value">{project.progress}%</span></div>
-                <p style={{ fontSize: 10.5, color: "var(--t3)", marginTop: 8, lineHeight: 1.5 }}>{project.summary}</p>
-              </div>
-            )}
-            <div style={{ marginTop: 10, borderTop: "1px solid var(--border)", paddingTop: 8 }}>
-              <div style={{ fontSize: 10, color: "var(--t3)", marginBottom: 5 }}>Acceso rápido:</div>
-              <div style={{ display: "flex", flexWrap: "wrap", gap: 4 }}>
-                {projectOptions.slice(0, 4).map((pid) => (
-                  <ProjectChip key={pid} projectId={pid} onClick={() => { setProjectId(pid); setInput((v) => v + `@${pid} `); }} />
-                ))}
-              </div>
-            </div>
-          </div>
-
           <div className="card" style={{ padding: "10px 12px" }}>
             <div style={{ fontSize: 11, fontWeight: 600, color: "var(--t1)", marginBottom: 6 }}>Equipo en la mesa</div>
             <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
@@ -357,7 +315,7 @@ export function RoundtableView() {
               <div className="agent-avatar agent-avatar--gg">GG</div>
               <div>
                 <div style={{ fontSize: 13, fontWeight: 600, color: "var(--t1)" }}>Mesa de trabajo</div>
-                <div style={{ fontSize: 11, color: "var(--t3)" }}>{project ? `${project.id} · ${project.name}` : "Sin proyecto"}</div>
+                <div style={{ fontSize: 11, color: "var(--t3)" }}>Usa /proyecto o /rq para referenciar un caso</div>
               </div>
             </div>
             <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
@@ -430,7 +388,6 @@ export function RoundtableView() {
                 onSubmit={(text, ctx) => send(text, ctx)}
                 placeholder="Escribe… @IC /proyecto /rq /ayuda"
                 disabled={busy}
-                defaultProjectId={projectId}
               />
               <button className="btn btn--primary" style={{ padding: "9px 14px" }} onClick={() => send()} disabled={busy}>
                 <Icons.arrowRight width={15} height={15} />

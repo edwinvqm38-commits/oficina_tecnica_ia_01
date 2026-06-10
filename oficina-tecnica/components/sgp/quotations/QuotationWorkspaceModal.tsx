@@ -1039,14 +1039,14 @@ export function QuotationWorkspaceModal({
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/20 p-1.5">
       <div className="relative flex h-auto max-h-[calc(100dvh-12px)] w-[97vw] max-w-[1860px] flex-col overflow-hidden rounded-xl border border-border bg-panel shadow-lg">
-        <div className="flex min-h-0 flex-1 flex-col overflow-hidden p-2.5">
+        <div className="flex min-h-0 flex-1 flex-col overflow-y-auto overflow-x-hidden p-2.5 xl:overflow-hidden">
           <section
-            className="mb-2 flex min-h-0 flex-1 gap-2 xl:items-stretch xl:flex-row"
+            className="mb-2 flex flex-col gap-2 xl:min-h-0 xl:flex-1 xl:flex-row xl:items-stretch"
             style={sectionDynamicStyle}
           >
             <div
               ref={leftWorkspaceRef}
-              className="flex min-h-0 flex-1 flex-col gap-1 overflow-hidden xl:basis-[calc(100%-520px)] xl:max-w-[calc(100%-520px)]"
+              className="flex flex-col gap-1 xl:min-h-0 xl:flex-1 xl:overflow-hidden xl:basis-[calc(100%-520px)] xl:max-w-[calc(100%-520px)]"
             >
               <div className="flex min-h-6 items-center justify-between gap-2">
                 <FieldLabelIcon icon="file-text" label="Datos de la cotización" className="text-[11px] font-medium" />
@@ -1987,7 +1987,7 @@ export function QuotationWorkspaceModal({
               )}
             </div>
 
-            <div className="flex min-h-0 w-full flex-col xl:h-[var(--quotation-left-height)] xl:w-[520px] xl:min-w-[520px]">
+            <div className="flex max-h-[60vh] w-full flex-col overflow-hidden xl:max-h-none xl:h-[var(--quotation-left-height)] xl:min-h-0 xl:w-[520px] xl:min-w-[520px]">
               <div className="flex min-h-6 items-center justify-between gap-2">
                 <FieldLabelIcon
                   icon="clipboard-list"
