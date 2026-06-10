@@ -8,9 +8,10 @@ import { useStore, useSkillsWithOverrides, usePendingApprovalsCount } from "../.
 import { KNOWLEDGE, PROJECTS } from "../../lib/data";
 import { useSession } from "../../lib/auth/useSession";
 import { usePendingUsersCount } from "../../lib/auth/usePendingUsersCount";
+import { useSectionAccess } from "../../lib/auth/useSectionAccess";
 
 const ADMIN_EMAIL = "edwin.qm@outlook.com";
-const ADMIN_ROUTES = new Set(["connections", "wiki-ia", "admin-users"]);
+const ADMIN_ROUTES = new Set(["connections", "wiki-ia", "admin-users", "administrador"]);
 
 function hasActiveChild(item: RouteDef, activeRoute: string): boolean {
   return item.children?.some((child) => child.id === activeRoute) ?? false;
@@ -20,10 +21,12 @@ function ParentItem({
   item,
   activeRoute,
   badges,
+  canAccessRoute,
 }: {
   item: RouteDef;
   activeRoute: string;
   badges: Partial<Record<string, number | null>>;
+  canAccessRoute: (routeId: string) => boolean;
 }) {
   const isChildActive = hasActiveChild(item, activeRoute);
   const [open, setOpen] = useState(isChildActive);
@@ -35,6 +38,7 @@ function ParentItem({
   const Icon = Icons[item.icon];
   const isParentActive = activeRoute === item.id;
   const cls = ["sb-item", isParentActive ? "sb-item--active" : ""].filter(Boolean).join(" ");
+  const visibleChildren = (item.children ?? []).filter((child) => canAccessRoute(child.id));
 
   return (
     <div>
@@ -64,9 +68,9 @@ function ParentItem({
         </span>
       </button>
 
-      {open && item.children ? (
+      {open && visibleChildren.length > 0 ? (
         <div style={{ paddingLeft: "12px" }}>
-          {item.children.map((child) => {
+          {visibleChildren.map((child) => {
             const active = activeRoute === child.id;
             const ChildIcon = Icons[child.icon];
             const childCls = ["sb-item", active ? "sb-item--active" : ""].filter(Boolean).join(" ");
@@ -100,6 +104,7 @@ export function Sidebar({ activeRoute }: { activeRoute: string }) {
   const { state } = useStore();
   const { session } = useSession(false);
   const isAdmin = session?.email === ADMIN_EMAIL;
+  const { canAccessRoute } = useSectionAccess(session?.email);
   const pendingApprovals = usePendingApprovalsCount();
   const pendingUsers = usePendingUsersCount(isAdmin);
   const skills = useSkillsWithOverrides();
@@ -128,7 +133,9 @@ export function Sidebar({ activeRoute }: { activeRoute: string }) {
         {ROUTE_GROUPS.map((group) => (
           <div key={group.label} className="sb-group">
             <span className="sb-group-label">{group.label}</span>
-            {group.items.filter((item) => !ADMIN_ROUTES.has(item.id) || isAdmin).map((item) => {
+            {group.items
+              .filter((item) => (!ADMIN_ROUTES.has(item.id) || isAdmin) && canAccessRoute(item.id))
+              .map((item) => {
               if (item.children && item.children.length > 0) {
                 return (
                   <ParentItem
@@ -136,6 +143,7 @@ export function Sidebar({ activeRoute }: { activeRoute: string }) {
                     item={item}
                     activeRoute={activeRoute}
                     badges={badges}
+                    canAccessRoute={canAccessRoute}
                   />
                 );
               }

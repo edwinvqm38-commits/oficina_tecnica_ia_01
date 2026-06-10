@@ -1,4 +1,21 @@
-export type PermissionModuleKey = "recursos" | "cotizaciones" | "requerimientos" | "detalle_rq" | "datos";
+export type PermissionModuleKey =
+  | "recursos"
+  | "cotizaciones"
+  | "requerimientos"
+  | "detalle_rq"
+  | "datos"
+  | "dashboard"
+  | "office"
+  | "roundtable"
+  | "chat"
+  | "inbox"
+  | "approvals"
+  | "projects"
+  | "agents"
+  | "org"
+  | "skills"
+  | "memory"
+  | "timeline";
 
 export type StandardPermissionKey =
   | "can_view"
@@ -40,12 +57,16 @@ export type ModulePermissionCatalogItem = {
   module_key: PermissionModuleKey;
   label: string;
   description: string;
+  group: string;
   enabled: boolean;
   columns: ModulePermissionColumn[];
   viewGroups?: ModuleViewGroup[];
   sensitivePermissions: SensitivePermissionDefinition[];
   standardPermissions: StandardPermissionKey[];
 };
+
+export const MODULE_GROUP_OPERACIONES_SGP = "Operaciones SGP";
+export const MODULE_GROUP_PLATAFORMA = "Plataforma";
 
 export const STANDARD_PERMISSIONS: StandardPermissionKey[] = [
   "can_view",
@@ -58,6 +79,7 @@ export const STANDARD_PERMISSIONS: StandardPermissionKey[] = [
 export const MODULE_PERMISSIONS_CATALOG: ModulePermissionCatalogItem[] = [
   {
     module_key: "cotizaciones",
+    group: MODULE_GROUP_OPERACIONES_SGP,
     label: "Log de cotizaciones",
     description: "Permisos base para visualización y operación del log de cotizaciones.",
     enabled: true,
@@ -134,6 +156,7 @@ export const MODULE_PERMISSIONS_CATALOG: ModulePermissionCatalogItem[] = [
   },
   {
     module_key: "requerimientos",
+    group: MODULE_GROUP_OPERACIONES_SGP,
     label: "Log de requerimientos",
     description: "Permisos base para visualización y operación del log de requerimientos.",
     enabled: true,
@@ -215,6 +238,7 @@ export const MODULE_PERMISSIONS_CATALOG: ModulePermissionCatalogItem[] = [
   },
   {
     module_key: "detalle_rq",
+    group: MODULE_GROUP_OPERACIONES_SGP,
     label: "Detalle de requerimientos",
     description: "Permisos base para visualización del detalle de RQ e ítems.",
     enabled: true,
@@ -310,6 +334,7 @@ export const MODULE_PERMISSIONS_CATALOG: ModulePermissionCatalogItem[] = [
   },
   {
     module_key: "recursos",
+    group: MODULE_GROUP_OPERACIONES_SGP,
     label: "Recursos",
     description: "Permisos base para visualización del maestro de recursos.",
     enabled: true,
@@ -371,6 +396,7 @@ export const MODULE_PERMISSIONS_CATALOG: ModulePermissionCatalogItem[] = [
   },
   {
     module_key: "datos",
+    group: MODULE_GROUP_OPERACIONES_SGP,
     label: "Datos",
     description: "Permisos base para catálogos y datos maestros.",
     enabled: true,
@@ -419,11 +445,132 @@ export const MODULE_PERMISSIONS_CATALOG: ModulePermissionCatalogItem[] = [
       { key: "acciones", label: "Acciones" },
     ],
   },
+  {
+    module_key: "dashboard",
+    group: MODULE_GROUP_PLATAFORMA,
+    label: "Dashboard",
+    description: "Controla el acceso a la sección Dashboard.",
+    enabled: true,
+    standardPermissions: ["can_view"],
+    sensitivePermissions: [],
+    columns: [],
+  },
+  {
+    module_key: "office",
+    group: MODULE_GROUP_PLATAFORMA,
+    label: "Oficina IA",
+    description: "Controla el acceso a la sección Oficina IA.",
+    enabled: true,
+    standardPermissions: ["can_view"],
+    sensitivePermissions: [],
+    columns: [],
+  },
+  {
+    module_key: "roundtable",
+    group: MODULE_GROUP_PLATAFORMA,
+    label: "Mesa de trabajo",
+    description: "Controla el acceso a la sección Mesa de trabajo.",
+    enabled: true,
+    standardPermissions: ["can_view"],
+    sensitivePermissions: [],
+    columns: [],
+  },
+  {
+    module_key: "chat",
+    group: MODULE_GROUP_PLATAFORMA,
+    label: "Chat privado",
+    description: "Controla el acceso a la sección Chat privado.",
+    enabled: true,
+    standardPermissions: ["can_view"],
+    sensitivePermissions: [],
+    columns: [],
+  },
+  {
+    module_key: "inbox",
+    group: MODULE_GROUP_PLATAFORMA,
+    label: "Bandeja Gerencial",
+    description: "Controla el acceso a la sección Bandeja Gerencial.",
+    enabled: true,
+    standardPermissions: ["can_view"],
+    sensitivePermissions: [],
+    columns: [],
+  },
+  {
+    module_key: "approvals",
+    group: MODULE_GROUP_PLATAFORMA,
+    label: "Aprobaciones",
+    description: "Controla el acceso a la sección Aprobaciones.",
+    enabled: true,
+    standardPermissions: ["can_view"],
+    sensitivePermissions: [],
+    columns: [],
+  },
+  {
+    module_key: "projects",
+    group: MODULE_GROUP_PLATAFORMA,
+    label: "Proyectos",
+    description: "Controla el acceso a la sección Proyectos.",
+    enabled: true,
+    standardPermissions: ["can_view"],
+    sensitivePermissions: [],
+    columns: [],
+  },
+  {
+    module_key: "agents",
+    group: MODULE_GROUP_PLATAFORMA,
+    label: "Agentes",
+    description: "Controla el acceso a la sección Agentes.",
+    enabled: true,
+    standardPermissions: ["can_view"],
+    sensitivePermissions: [],
+    columns: [],
+  },
+  {
+    module_key: "org",
+    group: MODULE_GROUP_PLATAFORMA,
+    label: "Organigrama",
+    description: "Controla el acceso a la sección Organigrama.",
+    enabled: true,
+    standardPermissions: ["can_view"],
+    sensitivePermissions: [],
+    columns: [],
+  },
+  {
+    module_key: "skills",
+    group: MODULE_GROUP_PLATAFORMA,
+    label: "Skills",
+    description: "Controla el acceso a la sección Skills.",
+    enabled: true,
+    standardPermissions: ["can_view"],
+    sensitivePermissions: [],
+    columns: [],
+  },
+  {
+    module_key: "memory",
+    group: MODULE_GROUP_PLATAFORMA,
+    label: "Conocimiento",
+    description: "Controla el acceso a la sección Conocimiento.",
+    enabled: true,
+    standardPermissions: ["can_view"],
+    sensitivePermissions: [],
+    columns: [],
+  },
+  {
+    module_key: "timeline",
+    group: MODULE_GROUP_PLATAFORMA,
+    label: "Línea de tiempo",
+    description: "Controla el acceso a la sección Línea de tiempo.",
+    enabled: true,
+    standardPermissions: ["can_view"],
+    sensitivePermissions: [],
+    columns: [],
+  },
 ];
 
 export const MODULE_PERMISSION_OPTIONS = MODULE_PERMISSIONS_CATALOG.map((item) => ({
   key: item.module_key,
   label: item.label,
+  group: item.group,
   enabled: item.enabled,
 }));
 

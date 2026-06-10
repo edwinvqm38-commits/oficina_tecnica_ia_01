@@ -266,6 +266,16 @@ export default function AdministradorContent() {
     });
   }, [isAdmin]);
 
+  const modulePermissionGroups = useMemo(() => {
+    const groups = new Map<string, typeof MODULE_PERMISSION_OPTIONS>();
+    for (const option of MODULE_PERMISSION_OPTIONS) {
+      const list = groups.get(option.group) ?? [];
+      list.push(option);
+      groups.set(option.group, list);
+    }
+    return Array.from(groups.entries());
+  }, []);
+
   const permissionUserOptions = useMemo(() => {
     const fromProfiles = profiles
       .map((item) => item.email?.trim().toLowerCase())
@@ -694,6 +704,8 @@ export default function AdministradorContent() {
     const moduleNotReady = !selectedModuleMeta?.enabled;
     const selectedColumnsCount = permissionForm.visible_columns.length;
     const totalColumnsCount = selectedModuleCatalog.columns.length;
+    const hasColumnsConfig = totalColumnsCount > 0;
+    const hasSensitivePermissionsConfig = selectedModuleCatalog.sensitivePermissions.length > 0;
     const viewGroups = selectedModuleCatalog.viewGroups ?? [];
     const selectedViewGroupsCount = viewGroups.filter((item) => permissionForm.viewGroups[item.key] !== false).length;
     const baselinePermissionForm = loadedPermissions
@@ -756,11 +768,15 @@ export default function AdministradorContent() {
               onChange={(event) => setSelectedPermissionModule(event.target.value as PermissionModuleKey)}
               className="h-9 rounded-md border border-stone-300 bg-white px-2 text-xs outline-none"
             >
-              {MODULE_PERMISSION_OPTIONS.map((moduleOption) => (
-                <option key={moduleOption.key} value={moduleOption.key}>
-                  {moduleOption.label}
-                  {moduleOption.enabled ? "" : " (Proximamente)"}
-                </option>
+              {modulePermissionGroups.map(([groupLabel, options]) => (
+                <optgroup key={groupLabel} label={groupLabel}>
+                  {options.map((moduleOption) => (
+                    <option key={moduleOption.key} value={moduleOption.key}>
+                      {moduleOption.label}
+                      {moduleOption.enabled ? "" : " (Proximamente)"}
+                    </option>
+                  ))}
+                </optgroup>
               ))}
             </select>
           </label>
@@ -815,33 +831,35 @@ export default function AdministradorContent() {
               </div>
             </div>
 
-            <div className="rounded-lg border border-stone-200 bg-stone-50 p-3">
-              <p className="text-xs font-semibold text-stone-700">Permisos sensibles</p>
-              <div className="mt-2 grid gap-2 md:grid-cols-2 xl:grid-cols-3">
-                {selectedModuleCatalog.sensitivePermissions.map((permission) => (
-                  <label
-                    key={permission.key}
-                    className="flex items-center justify-between rounded-md border border-stone-200 bg-white px-3 py-2 text-xs"
-                  >
-                    <span className="text-stone-700">{permission.label}</span>
-                    <input
-                      type="checkbox"
-                      checked={Boolean(permissionForm.sensitiveFlags[permission.key])}
-                      onChange={(event) =>
-                        setPermissionForm((current) => ({
-                          ...current,
-                          sensitiveFlags: {
-                            ...current.sensitiveFlags,
-                            [permission.key]: event.target.checked,
-                          },
-                        }))
-                      }
-                      disabled={permissionLoading || permissionSaving || !canManagePermissions}
-                    />
-                  </label>
-                ))}
+            {hasSensitivePermissionsConfig ? (
+              <div className="rounded-lg border border-stone-200 bg-stone-50 p-3">
+                <p className="text-xs font-semibold text-stone-700">Permisos sensibles</p>
+                <div className="mt-2 grid gap-2 md:grid-cols-2 xl:grid-cols-3">
+                  {selectedModuleCatalog.sensitivePermissions.map((permission) => (
+                    <label
+                      key={permission.key}
+                      className="flex items-center justify-between rounded-md border border-stone-200 bg-white px-3 py-2 text-xs"
+                    >
+                      <span className="text-stone-700">{permission.label}</span>
+                      <input
+                        type="checkbox"
+                        checked={Boolean(permissionForm.sensitiveFlags[permission.key])}
+                        onChange={(event) =>
+                          setPermissionForm((current) => ({
+                            ...current,
+                            sensitiveFlags: {
+                              ...current.sensitiveFlags,
+                              [permission.key]: event.target.checked,
+                            },
+                          }))
+                        }
+                        disabled={permissionLoading || permissionSaving || !canManagePermissions}
+                      />
+                    </label>
+                  ))}
+                </div>
               </div>
-            </div>
+            ) : null}
 
             {viewGroups.length > 0 ? (
               <div className="rounded-lg border border-stone-200 bg-stone-50 p-3">
@@ -879,27 +897,29 @@ export default function AdministradorContent() {
               </div>
             ) : null}
 
-            <div className="rounded-lg border border-stone-200 bg-stone-50 p-3">
-              <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
-                <p className="text-xs font-semibold text-stone-700">Columnas visibles ({selectedModuleMeta?.label})</p>
-                <span className="text-[11px] text-stone-500">
-                  Columnas visibles seleccionadas: {selectedColumnsCount} de {totalColumnsCount}
-                </span>
+            {hasColumnsConfig ? (
+              <div className="rounded-lg border border-stone-200 bg-stone-50 p-3">
+                <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+                  <p className="text-xs font-semibold text-stone-700">Columnas visibles ({selectedModuleMeta?.label})</p>
+                  <span className="text-[11px] text-stone-500">
+                    Columnas visibles seleccionadas: {selectedColumnsCount} de {totalColumnsCount}
+                  </span>
+                </div>
+                <div className="grid gap-2 md:grid-cols-2 xl:grid-cols-3">
+                  {selectedModuleCatalog.columns.map((columnOption) => (
+                    <label key={columnOption.key} className="flex items-center gap-2 rounded-md border border-stone-200 bg-white px-3 py-2 text-xs">
+                      <input
+                        type="checkbox"
+                        checked={permissionForm.visible_columns.includes(columnOption.key)}
+                        onChange={() => toggleVisibleColumn(columnOption.key)}
+                        disabled={permissionLoading || permissionSaving || !canManagePermissions}
+                      />
+                      <span className="text-stone-700">{columnOption.label}</span>
+                    </label>
+                  ))}
+                </div>
               </div>
-              <div className="grid gap-2 md:grid-cols-2 xl:grid-cols-3">
-                {selectedModuleCatalog.columns.map((columnOption) => (
-                  <label key={columnOption.key} className="flex items-center gap-2 rounded-md border border-stone-200 bg-white px-3 py-2 text-xs">
-                    <input
-                      type="checkbox"
-                      checked={permissionForm.visible_columns.includes(columnOption.key)}
-                      onChange={() => toggleVisibleColumn(columnOption.key)}
-                      disabled={permissionLoading || permissionSaving || !canManagePermissions}
-                    />
-                    <span className="text-stone-700">{columnOption.label}</span>
-                  </label>
-                ))}
-              </div>
-            </div>
+            ) : null}
 
           </div>
         ) : null}

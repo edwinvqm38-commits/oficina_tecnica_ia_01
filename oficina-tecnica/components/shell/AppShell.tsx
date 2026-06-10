@@ -11,6 +11,7 @@ import type { RouteId } from "../../lib/routes";
 import { useSession } from "../../lib/auth/useSession";
 import { useAccessGate } from "../../lib/auth/useAccessGate";
 import { usePendingUserNotifications } from "../../lib/auth/usePendingUserNotifications";
+import { useSectionAccess } from "../../lib/auth/useSectionAccess";
 import { detectDeviceProfile } from "../../lib/llm/deviceDetection";
 
 export function AppShell({ children }: { children: ReactNode }) {
@@ -20,10 +21,18 @@ export function AppShell({ children }: { children: ReactNode }) {
   const { session, loading, logout } = useSession(true);
   const { checking } = useAccessGate(session);
   usePendingUserNotifications(session?.email);
+  const { canAccessRoute, loading: accessLoading } = useSectionAccess(session?.email);
 
   useEffect(() => {
     detectDeviceProfile(); // silent, saves to localStorage
   }, []);
+
+  useEffect(() => {
+    if (loading || checking || accessLoading) return;
+    const route = routeForPath(pathname);
+    if (!route || route.id === "dashboard") return;
+    if (!canAccessRoute(route.id)) router.replace("/");
+  }, [loading, checking, accessLoading, pathname, router, canAccessRoute]);
 
   useEffect(() => {
     function onKey(e: KeyboardEvent) {

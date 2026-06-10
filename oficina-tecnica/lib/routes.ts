@@ -67,7 +67,6 @@ export const ROUTE_GROUPS: SidebarGroup[] = [
           { id: "requerimientos", label: "Requerimientos", path: "/requerimientos", icon: "layers" },
           { id: "recursos", label: "Recursos", path: "/recursos", icon: "folder" },
           { id: "datos", label: "Datos", path: "/datos", icon: "memory" },
-          { id: "administrador", label: "Administrador", path: "/administrador", icon: "settings" },
         ],
       },
       { id: "report", label: "Reporte ejecutivo", path: "/reporte", icon: "layers", disabled: true },
@@ -91,6 +90,10 @@ export const ROUTE_GROUPS: SidebarGroup[] = [
   {
     label: "Sistema",
     items: [{ id: "settings", label: "Estado / Respaldo", path: "/ajustes", icon: "settings", disabled: true }],
+  },
+  {
+    label: "Administración",
+    items: [{ id: "administrador", label: "Administrador", path: "/administrador", icon: "settings" }],
   },
 ];
 
