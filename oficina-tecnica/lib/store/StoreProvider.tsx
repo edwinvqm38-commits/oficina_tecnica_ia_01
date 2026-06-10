@@ -18,7 +18,9 @@ import {
   ModelProviderId,
   Notification,
   ProviderConnection,
+  redactProviderKeys,
   seedState,
+  updateChatStatuses,
 } from "./types";
 
 function uid(prefix = "id") {
@@ -42,6 +44,8 @@ type StoreActions = {
   // Chats
   appendChat: (agentId: string, message: Omit<ChatMessage, "id" | "time"> & { time?: string }) => ChatMessage;
   chatFor: (agentId: string) => ChatMessage[];
+  /** One-time migration: copies `chats[fromKey]` into `chats[toKey]` if `toKey` is empty and `fromKey` has messages. No-op otherwise. */
+  seedThreadFromLegacy: (fromKey: string, toKey: string) => void;
 
   // Knowledge base
   proposeKnowledge: (note: Omit<KnowledgeNote, "id" | "status" | "date"> & { date?: string }) => KnowledgeNote;
@@ -88,7 +92,12 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
   const remoteConfigured = useMemo(() => isRemoteConfigured(), []);
   const hydrated = useRef(false);
 
-  // Hydrate: prefer remote (if configured), fall back to local cache.
+  // Hydrate: prefer remote (if configured), fall back to local cache. The
+  // remote `workspace_state` row only ever carries the shared `roundtable`
+  // thread (see pickSharedChats) — private "Chat privado" threads and
+  // legacy unscoped agent threads live only in this browser's local cache,
+  // so we keep the locally-loaded `chats` and just merge the remote
+  // `roundtable` into it instead of replacing `chats` wholesale.
   useEffect(() => {
     let cancelled = false;
     (async () => {
@@ -96,7 +105,9 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
       if (!cancelled) setState(local);
       if (remoteConfigured) {
         const remote = await loadRemote();
-        if (!cancelled && remote) setState(remote);
+        if (!cancelled && remote) {
+          setState((prev) => ({ ...remote, chats: mergeChats(prev.chats, remote.chats) }));
+        }
       }
       if (!cancelled) {
         hydrated.current = true;
@@ -113,7 +124,17 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     if (!hydrated.current) return;
     saveLocal(state);
-    if (remoteConfigured) saveRemote(state);
+    // When there's no shared backend, appendChat already marks "gg" messages
+    // as "sent" immediately (nothing to wait on), so there's nothing to
+    // reconcile here.
+    if (remoteConfigured) {
+      saveRemote(state, (ok) => {
+        setState((s) => {
+          const chats = updateChatStatuses(s.chats, ok ? "sent" : "failed");
+          return chats === s.chats ? s : { ...s, chats };
+        });
+      });
+    }
   }, [state, remoteConfigured]);
 
   // Live-sync shared chats (e.g. Mesa de trabajo) across users: when another
@@ -209,12 +230,24 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
       id: uid("MSG"),
       time: message.time || new Date().toLocaleTimeString("es-PE", { hour: "2-digit", minute: "2-digit" }),
       ...message,
+      ...(message.role === "gg" && !message.status
+        ? { status: remoteConfigured ? "pending" : "sent" }
+        : {}),
     };
     setState((s) => ({ ...s, chats: { ...s.chats, [agentId]: [...(s.chats[agentId] || []), full] } }));
     return full;
-  }, []);
+  }, [remoteConfigured]);
 
   const chatFor = useCallback<StoreActions["chatFor"]>((agentId) => state.chats[agentId] || [], [state.chats]);
+
+  const seedThreadFromLegacy = useCallback<StoreActions["seedThreadFromLegacy"]>((fromKey, toKey) => {
+    setState((s) => {
+      if ((s.chats[toKey] || []).length > 0) return s;
+      const legacy = s.chats[fromKey] || [];
+      if (legacy.length === 0) return s;
+      return { ...s, chats: { ...s.chats, [toKey]: legacy } };
+    });
+  }, []);
 
   const proposeKnowledge = useCallback<StoreActions["proposeKnowledge"]>((note) => {
     const full: KnowledgeNote = {
@@ -286,12 +319,31 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
     }));
   }, []);
 
-  const exportState = useCallback<StoreActions["exportState"]>(() => JSON.stringify(state, null, 2), [state]);
+  // Provider API keys must never leave this browser in plaintext, so they're
+  // redacted to "***redacted***" before export.
+  const exportState = useCallback<StoreActions["exportState"]>(
+    () => JSON.stringify({ ...state, modelConnections: redactProviderKeys(state.modelConnections) }, null, 2),
+    [state]
+  );
 
   const importState = useCallback<StoreActions["importState"]>((raw) => {
     try {
-      const parsed = JSON.parse(raw);
-      setState({ ...seedState(), ...parsed, version: seedState().version });
+      const parsed = JSON.parse(raw) as Partial<AppState>;
+      setState((s) => {
+        const merged: AppState = { ...seedState(), ...parsed, version: seedState().version };
+        // A "***redacted***" apiKey came from a previously-exported file, not
+        // a real key — keep this browser's existing key (if any) instead of
+        // overwriting it with the placeholder.
+        const providers: AppState["modelConnections"]["providers"] = {};
+        for (const [id, connection] of Object.entries(merged.modelConnections.providers)) {
+          if (!connection) continue;
+          const key = id as ModelProviderId;
+          providers[key] = connection.apiKey === "***redacted***"
+            ? { ...connection, apiKey: s.modelConnections.providers[key]?.apiKey ?? "" }
+            : connection;
+        }
+        return { ...merged, modelConnections: { ...merged.modelConnections, providers } };
+      });
       return true;
     } catch {
       return false;
@@ -314,6 +366,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
       addCustomSkill,
       appendChat,
       chatFor,
+      seedThreadFromLegacy,
       proposeKnowledge,
       validateKnowledge,
       upsertProject,
@@ -337,6 +390,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
       addCustomSkill,
       appendChat,
       chatFor,
+      seedThreadFromLegacy,
       proposeKnowledge,
       validateKnowledge,
       upsertProject,

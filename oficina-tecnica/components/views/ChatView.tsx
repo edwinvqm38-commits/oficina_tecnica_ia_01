@@ -143,7 +143,7 @@ function useOnlineMode() {
 }
 
 export function ChatView() {
-  const { state, appendChat, chatFor } = useStore();
+  const { state, appendChat, chatFor, seedThreadFromLegacy, ready } = useStore();
   const { session } = useSession(false);
   const { online, toggle: toggleOnline } = useOnlineMode();
   const [agentId, setAgentId] = useState("ic");
@@ -154,7 +154,12 @@ export function ChatView() {
   const scrollRef = useRef<HTMLDivElement>(null);
   const ollamaModelsRef = useRef<string[]>([]);
 
-  const thread = chatFor(agentId);
+  // "Chat privado" is 1:1 between this user and the agent — namespace the
+  // thread key by user so it never gets mixed with other users' private
+  // chats with the same agent (see lib/store/types.ts SHARED_CHAT_THREADS).
+  const userKey = session?.email || "anonymous";
+  const threadKey = `private:${userKey}:${agentId}`;
+  const thread = chatFor(threadKey);
   const agent = agentById(agentId);
 
   useEffect(() => {
@@ -164,6 +169,19 @@ export function ChatView() {
   useEffect(() => {
     getOllamaModels().then((models) => { ollamaModelsRef.current = models; });
   }, []);
+
+  // One-time migration: copy each agent's old unscoped thread (chats.ic etc,
+  // shared by everyone before this fix) into this user's namespaced thread,
+  // so existing history isn't lost. Runs once per user per agent.
+  useEffect(() => {
+    if (!ready || typeof window === "undefined") return;
+    for (const id of CHAT_AGENTS) {
+      const flag = `ot:migrated-private:${userKey}:${id}`;
+      if (window.localStorage.getItem(flag)) continue;
+      seedThreadFromLegacy(id, `private:${userKey}:${id}`);
+      window.localStorage.setItem(flag, "1");
+    }
+  }, [ready, userKey, seedThreadFromLegacy]);
 
   async function send(text?: string, inputCtx?: ChatCtx) {
     const raw = (text ?? input).trim();
@@ -177,7 +195,7 @@ export function ChatView() {
       return;
     }
 
-    appendChat(agentId, { role: "gg", text: raw });
+    appendChat(threadKey, { role: "gg", text: raw });
     setInput("");
     setBusy(true);
 
@@ -225,7 +243,7 @@ export function ChatView() {
     // Load Supabase memory + local thread for context
     const [supabaseHistory, localHistory] = await Promise.all([
       simple ? Promise.resolve([]) : loadConversationHistory(userId, agentId, undefined, 8),
-      Promise.resolve(chatFor(agentId)),
+      Promise.resolve(chatFor(threadKey)),
     ]);
 
     const contextMessages: ChatMessage[] = simple ? [] : [
@@ -250,11 +268,11 @@ export function ChatView() {
     try {
       const { response, actualConfig } = await sendChatWithFallback(messages, routing.config, ollamaModelsRef.current);
       const label = `${actualConfig.provider}/${response.model}`;
-      appendChat(agentId, { role: "agent", text: response.content, agentId, modelLabel: label });
+      appendChat(threadKey, { role: "agent", text: response.content, agentId, modelLabel: label });
       saveConversation(session?.email ?? "anonymous", agentId, parsed.cleanText, response.content, label, routing.complexity).catch(() => {});
     } catch (err) {
       const msg = err instanceof Error ? err.message : "Error desconocido";
-      appendChat(agentId, { role: "agent", text: `No pude conectar con ningún proveedor de IA. ${msg}\n\nVe a Conexiones para configurar una API key gratuita.`, agentId, isError: true });
+      appendChat(threadKey, { role: "agent", text: `No pude conectar con ningún proveedor de IA. ${msg}\n\nVe a Conexiones para configurar una API key gratuita.`, agentId, isError: true });
     }
 
     setBusy(false);

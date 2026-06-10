@@ -30,6 +30,23 @@ function useOnlineMode() {
   return { online, toggle };
 }
 
+// Commands that explicitly request an AI response in Mesa de trabajo, even
+// when "IA: por mención" is active.
+const AI_COMMAND_RE = /^\/(ia|resumen|pendientes|consulta|rfi)\b/i;
+
+// Whether the AI team should jump into every message (vs. only when
+// explicitly @mentioned or asked via a /command). Off by default so
+// human-to-human conversation in Mesa de trabajo isn't interrupted.
+function useAiAssist() {
+  const [enabled, setEnabled] = useState(() => typeof window !== "undefined" && localStorage.getItem("ot:rt:ai-assist") === "true");
+  function toggle() {
+    const next = !enabled;
+    setEnabled(next);
+    localStorage.setItem("ot:rt:ai-assist", next ? "true" : "false");
+  }
+  return { enabled, toggle };
+}
+
 const ROUNDTABLE_THREAD = "roundtable";
 
 // Mesa de trabajo is a shared room: all users see the same conversation, so
@@ -201,10 +218,10 @@ function AttachmentChip({ a }: { a: { name: string; size: number; type: string; 
   return <span style={sharedStyle}>{content}</span>;
 }
 
-function RTMessage({ role, text, time, agentId, modelLabel, isError, attachments, userEmail, userName, currentUserEmail }: {
+function RTMessage({ role, text, time, agentId, modelLabel, isError, attachments, userEmail, userName, currentUserEmail, status }: {
   role: "gg" | "agent"; text: string; time: string; agentId?: string; modelLabel?: string; isError?: boolean;
   attachments?: { name: string; size: number; type: string; dataUrl?: string }[];
-  userEmail?: string; userName?: string; currentUserEmail?: string;
+  userEmail?: string; userName?: string; currentUserEmail?: string; status?: "pending" | "sent" | "failed";
 }) {
   const isUser = role === "gg";
   const agent = agentId ? agentById(agentId) : null;
@@ -243,6 +260,10 @@ function RTMessage({ role, text, time, agentId, modelLabel, isError, attachments
           {modelLabel && !isUser && (
             <span style={{ background: "var(--bg-subtle)", border: "1px solid var(--border)", borderRadius: 4, padding: "1px 5px", fontFamily: "var(--mono)" }}>{modelLabel}</span>
           )}
+          {isOwn && status === "pending" && <span title="Enviando…">⏳</span>}
+          {isOwn && status === "failed" && (
+            <span title="No se pudo sincronizar con los demás — se reintentará automáticamente" style={{ color: "var(--red-text, #c00)" }}>⚠ no sincronizado</span>
+          )}
         </div>
       </div>
     </div>
@@ -267,6 +288,7 @@ export function RoundtableView() {
   const skills = useSkillsWithOverrides();
   const { session } = useSession(false);
   const { online, toggle: toggleOnline } = useOnlineMode();
+  const { enabled: aiAssist, toggle: toggleAiAssist } = useAiAssist();
   const [input, setInput] = useState("");
   const [busy, setBusy] = useState(false);
   const [hands, setHands] = useState<{ agentId: string; modelLabel?: string }[]>([]);
@@ -315,6 +337,18 @@ export function RoundtableView() {
       userEmail: session?.email, userName: senderName,
     });
     setInput("");
+
+    // Activation gate: the AI team only steps into Mesa de trabajo when
+    // explicitly addressed (@IC/@PM/@IE), asked via a /command, or when the
+    // user has turned on "IA: siempre". Otherwise this is just a message
+    // between people and no agent should respond.
+    const aiCommand = raw.trim().match(AI_COMMAND_RE);
+    const shouldRespond = !!parsed.targetAgentId || !!aiCommand || aiAssist;
+    if (!shouldRespond) return;
+    if (aiCommand) {
+      parsed.cleanText = parsed.cleanText.replace(AI_COMMAND_RE, "").trim() || parsed.cleanText;
+    }
+
     setBusy(true);
 
     const hasAttachments = (inputCtx?.attachments?.length ?? 0) > 0;
@@ -518,6 +552,16 @@ export function RoundtableView() {
               >
                 {online ? "☁ Online" : "🖥 Local+Cloud"}
               </button>
+              <button
+                className="btn btn--ghost btn--sm"
+                style={{ fontSize: 10, color: aiAssist ? "var(--blue)" : "var(--t3)" }}
+                title={aiAssist
+                  ? "La IA responde a cada mensaje — click para que solo responda si la mencionas (@IC/@PM/@IE) o usas /ia, /resumen, /pendientes, /consulta, /rfi"
+                  : "La IA solo responde si la mencionas (@IC/@PM/@IE) o usas /ia, /resumen, /pendientes, /consulta, /rfi — click para que responda siempre"}
+                onClick={toggleAiAssist}
+              >
+                {aiAssist ? "🤖 IA: siempre" : "🤖 IA: por mención"}
+              </button>
               <button className="btn btn--ghost btn--sm" style={{ fontSize: 11 }} onClick={() => setShowHelp((v) => !v)}>
                 /ayuda
               </button>
@@ -549,7 +593,7 @@ export function RoundtableView() {
             )}
 
             {thread.map((m) => (
-              <RTMessage key={m.id} role={m.role} text={m.text} time={m.time} agentId={m.agentId} modelLabel={m.modelLabel} isError={m.isError} attachments={m.attachments} userEmail={m.userEmail} userName={m.userName} currentUserEmail={session?.email} />
+              <RTMessage key={m.id} role={m.role} text={m.text} time={m.time} agentId={m.agentId} modelLabel={m.modelLabel} isError={m.isError} attachments={m.attachments} userEmail={m.userEmail} userName={m.userName} currentUserEmail={session?.email} status={m.status} />
             ))}
             {hands.map((h) => (
               <HandRaise key={h.agentId} agentId={h.agentId} modelLabel={h.modelLabel} />
@@ -576,7 +620,7 @@ export function RoundtableView() {
                 value={input}
                 onChange={setInput}
                 onSubmit={(text, ctx) => send(text, ctx)}
-                placeholder="Escribe… @IC /proyecto /rq /ayuda"
+                placeholder={aiAssist ? "Escribe… @IC /proyecto /rq /ayuda" : "Escribe… usa @IC/@PM/@IE o /ia para que el equipo IA responda"}
                 disabled={busy}
               />
             </div>

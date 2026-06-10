@@ -171,4 +171,9 @@ export type ChatMessage = {
   // other users can tell who wrote what.
   userEmail?: string;
   userName?: string;
+  // Sync status of "gg" messages: "pending" until the persist round-trip to
+  // the shared backend settles, "sent" on success, "failed" if it didn't
+  // sync (still kept locally). Absent for messages created before this field
+  // existed, or when there's nothing to sync.
+  status?: "pending" | "sent" | "failed";
 };

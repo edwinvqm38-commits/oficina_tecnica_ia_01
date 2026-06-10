@@ -10,7 +10,7 @@
 // If Supabase isn't configured, everything still works — it just stays local.
 
 import { getSupabaseClient } from "../supabase/client";
-import { AppState, mergeWithSeed, seedState } from "./types";
+import { AppState, mergeWithSeed, pickSharedChats, redactProviderKeys, seedState } from "./types";
 
 const LOCAL_KEY = "oficina-tecnica:state:v1";
 const WORKSPACE_ID = "default"; // single shared workspace for this deployment
@@ -49,17 +49,31 @@ export async function loadRemote(): Promise<AppState | null> {
 
 let pendingSync: ReturnType<typeof setTimeout> | null = null;
 
-export function saveRemote(state: AppState) {
+/**
+ * Persists state to the shared `workspace_state` row. Before upserting,
+ * `chats` is reduced to only the shared threads (private "Chat privado"
+ * threads and legacy unscoped agent threads stay local-only) and any
+ * provider API keys are redacted — neither should ever leave this browser
+ * via the shared backend. `onSettled` (if given) is called with whether the
+ * write succeeded, once the debounced write actually runs.
+ */
+export function saveRemote(state: AppState, onSettled?: (ok: boolean) => void) {
   const supabase = getSupabaseClient();
   if (!supabase) return;
   if (pendingSync) clearTimeout(pendingSync);
   // Debounce writes so rapid local interactions don't flood the database.
   pendingSync = setTimeout(() => {
+    const syncable: AppState = {
+      ...state,
+      chats: pickSharedChats(state.chats),
+      modelConnections: redactProviderKeys(state.modelConnections),
+    };
     void supabase
       .from("workspace_state")
-      .upsert({ id: WORKSPACE_ID, state, updated_at: new Date().toISOString() })
+      .upsert({ id: WORKSPACE_ID, state: syncable, updated_at: new Date().toISOString() })
       .then(({ error }) => {
         if (error) console.warn("[store] remote sync failed", error.message);
+        onSettled?.(!error);
       });
   }, 800);
 }
