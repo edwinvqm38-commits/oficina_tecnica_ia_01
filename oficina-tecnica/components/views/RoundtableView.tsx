@@ -10,7 +10,7 @@ import { sendChatWithFallback, getOllamaModels } from "../../lib/llm/providers";
 import { routeRequest } from "../../lib/llm/modelRouter";
 import type { ChatMessage } from "../../lib/llm/providers";
 import { parseInput, isSimpleMessage, isTeamMessage, detectDocumentCodes } from "../../lib/chat/messageUtils";
-import { buildContextPrompt, fetchCotizacionByCode, fetchRequirementByCode, cotizacionToProject } from "../../lib/chat/contextQuery";
+import { buildContextPrompt, buildRequirementItemsPrompt, fetchCotizacionByCode, fetchRequirementByCode, fetchRequirementItems, cotizacionToProject } from "../../lib/chat/contextQuery";
 import type { ChatCtx } from "../../lib/chat/contextQuery";
 import { MdText } from "../chat/MdText";
 import { HelpPanel } from "../chat/HelpPanel";
@@ -235,9 +235,18 @@ export function RoundtableView() {
           const rq = await fetchRequirementByCode(dc.code).catch(() => null);
           if (rq) {
             autoCodeCtx += buildContextPrompt({ project: null, requirement: rq });
+            const rqItems = await fetchRequirementItems(rq.id).catch(() => []);
+            autoCodeCtx += buildRequirementItemsPrompt(rqItems);
           }
         }
       }
+    }
+
+    // Item/material-level data for the referenced requirement (Supabase)
+    let requirementItemsCtx = "";
+    if (ctxRequirement && !simple) {
+      const items = await fetchRequirementItems(ctxRequirement.id).catch(() => []);
+      requirementItemsCtx = buildRequirementItemsPrompt(items);
     }
 
     // File attachments from ChatAutoInput
@@ -251,7 +260,7 @@ export function RoundtableView() {
         ? `\n\nProyecto activo: **${activeProject.name}** (${activeProject.id}). Cliente: ${activeProject.client}. Estado: ${activeProject.status}. Avance: ${activeProject.progress}%. ${activeProject.summary}`
         : "";
       const requirementCtx = ctxRequirement && !simple
-        ? buildContextPrompt({ project: null, requirement: ctxRequirement })
+        ? buildContextPrompt({ project: null, requirement: ctxRequirement }) + requirementItemsCtx
         : "";
 
       // Load long-term memory from Supabase for this agent

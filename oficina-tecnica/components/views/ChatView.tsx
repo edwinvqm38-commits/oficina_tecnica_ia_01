@@ -13,7 +13,7 @@ import { parseInput, isSimpleMessage, detectDocumentCodes } from "../../lib/chat
 import { MdText } from "../chat/MdText";
 import { HelpPanel } from "../chat/HelpPanel";
 import { ChatAutoInput } from "../chat/ChatAutoInput";
-import { buildContextPrompt, fetchCotizacionByCode, fetchRequirementByCode, cotizacionToProject } from "../../lib/chat/contextQuery";
+import { buildContextPrompt, buildRequirementItemsPrompt, fetchCotizacionByCode, fetchRequirementByCode, fetchRequirementItems, cotizacionToProject } from "../../lib/chat/contextQuery";
 import type { ChatCtx } from "../../lib/chat/contextQuery";
 import { useSession } from "../../lib/auth/useSession";
 import { saveConversation, loadConversationHistory } from "../../lib/memory/conversationMemory";
@@ -184,7 +184,11 @@ export function ChatView() {
     const routing = routeRequest(parsed.cleanText, ollamaModelsRef.current);
     setTypingModel(routing.modelLabel);
 
-    const ctxPrompt = inputCtx ? buildContextPrompt(inputCtx) : "";
+    let ctxPrompt = inputCtx ? buildContextPrompt(inputCtx) : "";
+    if (inputCtx?.requirement) {
+      const items = await fetchRequirementItems(inputCtx.requirement.id).catch(() => []);
+      ctxPrompt += buildRequirementItemsPrompt(items);
+    }
     // A short message is only "simple" if there's no project/RQ context chip attached —
     // otherwise the user wants that context used even for a brief question.
     const simple = isSimpleMessage(parsed.cleanText) && !inputCtx?.project && !inputCtx?.requirement;
@@ -203,7 +207,11 @@ export function ChatView() {
           }
         } else if (dc.type === "RQ") {
           const rq = await fetchRequirementByCode(dc.code).catch(() => null);
-          if (rq) autoCodeCtx += buildContextPrompt({ project: null, requirement: rq });
+          if (rq) {
+            autoCodeCtx += buildContextPrompt({ project: null, requirement: rq });
+            const rqItems = await fetchRequirementItems(rq.id).catch(() => []);
+            autoCodeCtx += buildRequirementItemsPrompt(rqItems);
+          }
         }
       }
     }

@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState, KeyboardEvent, ReactNode } from "react";
+import { useRouter } from "next/navigation";
 import type {
   ChatCtx, RequirementSummary, CotizacionSummary, FileAttachment,
 } from "../../lib/chat/contextQuery";
@@ -64,7 +65,11 @@ function getSlashMatch(val: string, cur: number): { cmd: string; query: string; 
 }
 
 // Build highlighted overlay nodes for the textarea backdrop
-function renderHighlighted(text: string, ctx: ChatCtx): ReactNode[] {
+function renderHighlighted(
+  text: string,
+  ctx: ChatCtx,
+  onCodeClick: (code: string, kind: "project" | "requirement") => void,
+): ReactNode[] {
   const matches = detectInlineCodes(text);
   const nodes: ReactNode[] = [];
 
@@ -81,10 +86,25 @@ function renderHighlighted(text: string, ctx: ChatCtx): ReactNode[] {
     if (m.start > last) nodes.push(text.slice(last, m.start));
     const codeUpper = m.code.toUpperCase();
     let color = COLOR_OTHER;
-    if (projId && codeUpper === projId) color = COLOR_PROJECT;
-    else if (reqCode && codeUpper === reqCode) color = COLOR_REQ;
+    let kind: "project" | "requirement" | null = null;
+    if (projId && codeUpper === projId) { color = COLOR_PROJECT; kind = "project"; }
+    else if (reqCode && codeUpper === reqCode) { color = COLOR_REQ; kind = "requirement"; }
     nodes.push(
-      <span key={i} style={{ fontWeight: 700, color }}>{m.code}</span>
+      <span
+        key={i}
+        onClick={kind ? (e) => { e.stopPropagation(); onCodeClick(m.code, kind!); } : undefined}
+        title={kind === "project" ? "Abrir cotización/proyecto" : kind === "requirement" ? "Abrir requerimiento" : undefined}
+        style={{
+          fontWeight: 700, color,
+          pointerEvents: kind ? "auto" : "none",
+          cursor: kind ? "pointer" : "default",
+          textDecoration: kind ? "underline" : "none",
+          textDecorationStyle: "dotted",
+          textUnderlineOffset: 2,
+        }}
+      >
+        {m.code}
+      </span>
     );
     last = m.end;
   });
@@ -147,6 +167,7 @@ interface Props {
 }
 
 export function ChatAutoInput({ value, onChange, onSubmit, placeholder, disabled, defaultProjectId }: Props) {
+  const router = useRouter();
   const [cursor, setCursor] = useState(0);
   const [selectedIdx, setSelectedIdx] = useState(0);
   const [ctx, setCtx] = useState<ChatCtx>({ project: null, requirement: null });
@@ -348,6 +369,11 @@ export function ChatAutoInput({ value, onChange, onSubmit, placeholder, disabled
   function removeProject()     { setCtx((c) => ({ ...c, project: null, requirement: null })); setRequirements([]); }
   function removeRequirement() { setCtx((c) => ({ ...c, requirement: null })); }
 
+  function openCode(code: string, kind: "project" | "requirement") {
+    if (kind === "project") router.push(`/cotizaciones?quotationCode=${encodeURIComponent(code)}`);
+    else router.push(`/requerimientos?rqCode=${encodeURIComponent(code)}`);
+  }
+
   const sharedTextStyle: React.CSSProperties = {
     padding: "9px 11px", fontSize: 12.5, fontFamily: "var(--font)",
     lineHeight: 1.5, boxSizing: "border-box", border: "1px solid transparent",
@@ -360,7 +386,11 @@ export function ChatAutoInput({ value, onChange, onSubmit, placeholder, disabled
         <div style={{ display: "flex", flexDirection: "column", gap: 4, padding: "6px 8px", background: "var(--bg-subtle)", border: "1px solid var(--border)", borderRadius: "var(--r)", fontSize: 11 }}>
           {ctx.project && (
             <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
-              <span style={{ fontFamily: "var(--mono)", fontWeight: 700, color: COLOR_PROJECT }}>{ctx.project.id}</span>
+              <span
+                onClick={() => openCode(ctx.project!.id, "project")}
+                title="Abrir cotización/proyecto"
+                style={{ fontFamily: "var(--mono)", fontWeight: 700, color: COLOR_PROJECT, cursor: "pointer", textDecoration: "underline", textDecorationStyle: "dotted", textUnderlineOffset: 2 }}
+              >{ctx.project.id}</span>
               <span style={{ color: "var(--t2)" }}>
                 {ctx.project.name} · Cliente: {ctx.project.client} · Estado: {ctx.project.status} · Avance: {ctx.project.progress}%
                 {ctx.project.summary ? ` · ${ctx.project.summary}` : ""}
@@ -370,7 +400,11 @@ export function ChatAutoInput({ value, onChange, onSubmit, placeholder, disabled
           )}
           {ctx.requirement && (
             <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
-              <span style={{ fontFamily: "var(--mono)", fontWeight: 700, color: COLOR_REQ }}>{ctx.requirement.codigo}</span>
+              <span
+                onClick={() => openCode(ctx.requirement!.codigo, "requirement")}
+                title="Abrir requerimiento"
+                style={{ fontFamily: "var(--mono)", fontWeight: 700, color: COLOR_REQ, cursor: "pointer", textDecoration: "underline", textDecorationStyle: "dotted", textUnderlineOffset: 2 }}
+              >{ctx.requirement.codigo}</span>
               <span style={{ color: "var(--t2)" }}>
                 Estado: {ctx.requirement.estado}{ctx.requirement.avance != null ? ` · Avance: ${ctx.requirement.avance}%` : ""}
                 {ctx.requirement.responsable ? ` · Responsable: ${ctx.requirement.responsable}` : ""}
@@ -446,7 +480,7 @@ export function ChatAutoInput({ value, onChange, onSubmit, placeholder, disabled
               overflow: "hidden", pointerEvents: "none", maxHeight: 120,
             }}
           >
-            {renderHighlighted(value, ctx)}
+            {renderHighlighted(value, ctx, openCode)}
           </div>
           {/* Actual textarea (transparent text, visible caret) */}
           <textarea

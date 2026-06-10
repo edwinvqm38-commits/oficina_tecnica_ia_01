@@ -145,6 +145,77 @@ export async function fetchRequirementsByProject(cotizacionCodigo: string): Prom
   return data as RequirementSummary[];
 }
 
+// ── Items/materiales del requerimiento ──────────────────────────────────────
+export interface RequirementItemSummary {
+  descripcion: string;
+  unidad: string;
+  cantidad: number;
+  precio_unitario: number;
+  moneda: string | null;
+  estado: string | null;
+  proveedor_nombre: string | null;
+  recurso_a_suministrar: string | null;
+  costo_total_presupuestado: number | null;
+}
+
+function readMetaString(obj: Record<string, unknown> | undefined, key: string): string {
+  const v = obj?.[key];
+  return typeof v === "string" && v.trim() ? v.trim() : "";
+}
+
+export async function fetchRequirementItems(requerimientoId: string, limit = 30): Promise<RequirementItemSummary[]> {
+  const { data, error } = await supabase
+    .from("requerimiento_items")
+    .select("recurso_a_suministrar, cantidad, precio_unitario, moneda_codigo, estado, proveedor_nombre, observaciones_item, costo_total_presupuestado, metadata")
+    .eq("requerimiento_id", requerimientoId)
+    .limit(limit);
+  if (error || !data) return [];
+
+  return data.map((row: Record<string, unknown>) => {
+    const metadata = (row.metadata as Record<string, unknown>) ?? {};
+    const historicalImport = (metadata.historical_import as Record<string, unknown>) ?? {};
+    const sourceItem = {
+      ...((metadata.source_item as Record<string, unknown>) ?? {}),
+      ...((historicalImport.source_item as Record<string, unknown>) ?? {}),
+    };
+    const savedItem = (metadata.sgp_lite_item as Record<string, unknown>) ?? {};
+
+    const descripcion =
+      readMetaString(savedItem, "descripcion") ||
+      readMetaString(sourceItem, "descripcion") ||
+      (row.recurso_a_suministrar as string | null) ||
+      "—";
+    const unidad = readMetaString(savedItem, "unidad") || readMetaString(sourceItem, "unidad") || "—";
+
+    return {
+      descripcion,
+      unidad,
+      cantidad: Number(row.cantidad ?? 0),
+      precio_unitario: Number(row.precio_unitario ?? 0),
+      moneda: (row.moneda_codigo as string | null) ?? null,
+      estado: (row.estado as string | null) ?? null,
+      proveedor_nombre: (row.proveedor_nombre as string | null) ?? null,
+      recurso_a_suministrar: (row.recurso_a_suministrar as string | null) ?? null,
+      costo_total_presupuestado: row.costo_total_presupuestado != null ? Number(row.costo_total_presupuestado) : null,
+    };
+  });
+}
+
+export function buildRequirementItemsPrompt(items: RequirementItemSummary[]): string {
+  if (!items.length) return "";
+
+  const max = 25;
+  let prompt = "\n\n**Items/materiales del requerimiento (Supabase):**";
+  for (const it of items.slice(0, max)) {
+    const moneda = it.moneda ?? "PEN";
+    prompt += `\n- ${it.descripcion} · ${it.cantidad} ${it.unidad} · P.U. ${moneda} ${it.precio_unitario.toFixed(2)}`;
+    if (it.estado) prompt += ` · Estado: ${it.estado}`;
+    if (it.proveedor_nombre) prompt += ` · Proveedor: ${it.proveedor_nombre}`;
+  }
+  if (items.length > max) prompt += `\n... y ${items.length - max} ítem(s) más.`;
+  return prompt;
+}
+
 export async function fetchAllRequirements(): Promise<RequirementSummary[]> {
   const { data, error } = await supabase
     .from("requerimientos")
