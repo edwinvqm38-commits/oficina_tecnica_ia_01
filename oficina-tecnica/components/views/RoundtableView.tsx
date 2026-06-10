@@ -286,18 +286,27 @@ export function RoundtableView() {
     // Recent conversation in Mesa de trabajo, shared by everyone in the
     // room — included for every responding agent (not just the ones that
     // answered before) so nobody loses track of the project/topic/files
-    // already discussed by the team or other users.
-    const recentThread: ChatMessage[] = thread.slice(-10).flatMap((m): ChatMessage[] => {
+    // already discussed by the team or other users. Folded into a single
+    // reference block in the system prompt (not as separate chat turns)
+    // so agents don't start mimicking the "Nombre: " label format in
+    // their own replies.
+    const recentLines = thread.slice(-10).flatMap((m): string[] => {
       if (m.role === "gg") {
-        const attNote = m.attachments?.length
-          ? ` [Adjuntó: ${m.attachments.map((a) => a.name).join(", ")}]`
-          : "";
+        const sender = m.userName || m.userEmail || "Usuario";
+        const attNote = m.attachments?.length ? ` [adjuntó: ${m.attachments.map((a) => a.name).join(", ")}]` : "";
         const content = (m.text + attNote).trim();
-        return content ? [{ role: "user", content }] : [];
+        return content ? [`${sender}: ${content}`] : [];
       }
       const agentName = m.agentId ? agentById(m.agentId)?.name || m.agentId.toUpperCase() : "Agente";
-      return m.text ? [{ role: "assistant", content: `[${agentName}] ${m.text}` }] : [];
+      return m.text ? [`${agentName}: ${m.text}`] : [];
     });
+    const recentThreadCtx = recentLines.length
+      ? `\n\nContexto reciente de la conversación en Mesa de trabajo (referencia para que no pierdas el hilo del proyecto/archivo del que se habla; no repitas el formato "Nombre: " en tu respuesta):\n${recentLines.join("\n")}`
+      : "";
+
+    // Encourage natural, human conversation for casual/social messages
+    // (jokes, small talk) while keeping the usual rigor for work topics.
+    const toneCtx = `\n\nTono: si el mensaje del usuario es informal, una broma, comentario o charla casual (no relacionado a costos/cronograma/normas/proyectos), respóndele como lo haría un colega humano cercano: natural, cálido y breve (1-2 líneas), sin forzar negritas, listas ni tu formato técnico habitual. Cuando sí sea una consulta de trabajo, usa tu formato y expertise habitual.`;
 
     // Mesa de trabajo memory is shared across all users in the room (see
     // ROUNDTABLE_MEMORY_ID), so every agent learns from the whole team.
@@ -375,8 +384,7 @@ export function RoundtableView() {
       const supabaseHistory = simple ? [] : await loadConversationHistory(userId, agId, activeProject?.id, 6).catch(() => []);
 
       const messages: ChatMessage[] = [
-        { role: "system", content: sysPrompt + projectCtx + requirementCtx + autoCodeCtx + attachmentCtx + brevityCtx + coordinatorCtx },
-        ...recentThread,
+        { role: "system", content: sysPrompt + projectCtx + requirementCtx + autoCodeCtx + attachmentCtx + recentThreadCtx + toneCtx + brevityCtx + coordinatorCtx },
         ...supabaseHistory.map((m) => ({ role: m.role as "user" | "assistant", content: m.content })),
         { role: "user", content: parsed.cleanText + fileCtx },
       ];
