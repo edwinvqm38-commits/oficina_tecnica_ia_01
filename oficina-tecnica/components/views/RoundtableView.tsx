@@ -606,7 +606,7 @@ export function RoundtableView() {
     // or no usable text (scanned drawings, images, etc.) instead of
     // ignoring the attachment and replying with a generic greeting.
     const attachmentCtx = hasAttachments
-      ? `\n\nEl usuario adjuntó ${attachmentMeta.length === 1 ? "un archivo" : `${attachmentMeta.length} archivos`} a este mensaje. Su contenido (texto extraído) viene al final, en bloques "--- Archivo adjunto: <nombre> ---". Básate en ese contenido para responder a lo que pregunta el usuario sobre el/los archivo(s) — NO respondas con un saludo genérico ni ignores el adjunto. Si el contenido extraído está vacío, es muy corto o dice "sin texto extraíble" (típico de planos/imágenes escaneadas), dilo explícitamente, indica qué archivo es (nombre) y pide al usuario un resumen, las páginas/secciones clave o una versión más legible para poder ayudar.`
+      ? `\n\nEl usuario adjuntó ${attachmentMeta.length === 1 ? "un archivo" : `${attachmentMeta.length} archivos`} a este mensaje. Su contenido (texto extraído) viene al final, en bloques "--- Archivo adjunto: <nombre> ---". Básate en ese contenido para responder a lo que pregunta el usuario sobre el/los archivo(s) — NO respondas con un saludo genérico ni ignores el adjunto. Si el contenido extraído está vacío, es muy corto o dice "sin texto extraíble" (típico de planos/imágenes escaneadas), dilo explícitamente, indica qué archivo es (nombre) y pide al usuario un resumen, las páginas/secciones clave o una versión más legible para poder ayudar. El archivo adjunto de este mensaje es la fuente principal: ignora archivos o documentos mencionados en historial previo salvo que el usuario los nombre explícitamente.`
       : "";
 
     // When several agents respond to the same message, keep replies short
@@ -631,8 +631,10 @@ export function RoundtableView() {
         ? buildContextPrompt({ project: null, requirement: ctxRequirement }) + requirementItemsCtx
         : "";
 
-      // Load long-term memory from Supabase for this agent
-      const supabaseHistory = simple ? [] : await loadConversationHistory(userId, agId, activeProject?.id, 6).catch(() => []);
+      // Load long-term memory from Supabase for this agent — skipped when the
+      // message has a new attachment so old projects/files don't leak into
+      // the context the agent uses to answer about "this" attachment.
+      const supabaseHistory = simple || hasAttachments ? [] : await loadConversationHistory(userId, agId, activeProject?.id, 6).catch(() => []);
 
       const messages: ChatMessage[] = [
         { role: "system", content: sysPrompt + HUMANIZE_CTX + skillsCtx + platformCtx + projectCtx + requirementCtx + autoCodeCtx + attachmentCtx + recentThreadCtx + toneCtx + brevityCtx + coordinatorCtx },

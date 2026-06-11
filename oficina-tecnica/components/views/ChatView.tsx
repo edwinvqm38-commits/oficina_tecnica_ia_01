@@ -219,7 +219,8 @@ export function ChatView() {
     }
     // A short message is only "simple" if there's no project/RQ context chip attached —
     // otherwise the user wants that context used even for a brief question.
-    const simple = isSimpleMessage(parsed.cleanText) && !inputCtx?.project && !inputCtx?.requirement;
+    const hasAttachments = (inputCtx?.attachments?.length ?? 0) > 0;
+    const simple = isSimpleMessage(parsed.cleanText) && !inputCtx?.project && !inputCtx?.requirement && !hasAttachments;
     const userId = session?.email ?? "anonymous";
 
     // Auto-detect COT-xxx / RQ-xxx / OC-xxx codes pasted in the message.
@@ -273,14 +274,21 @@ export function ChatView() {
       `\n\n--- Archivo adjunto: ${f.name} (${Math.round(f.size / 1024)}KB) ---\n${f.content}\n---`
     ).join("");
 
-    const systemPrompt = (AGENT_SYSTEM_PROMPTS[agentId] ?? AGENT_SYSTEM_PROMPTS.ic) + HUMANIZE_CTX + ctxPrompt + autoCodeCtx;
+    // Tell the agent how to read the "Archivo adjunto" block(s) appended to
+    // the user's message, mirroring RoundtableView's attachmentCtx.
+    const attachmentCtx = hasAttachments
+      ? `\n\nEl usuario adjuntó ${(inputCtx?.attachments?.length ?? 0) === 1 ? "un archivo" : `${inputCtx?.attachments?.length} archivos`} a este mensaje. Su contenido (texto extraído) viene al final, en bloques "--- Archivo adjunto: <nombre> ---". Básate en ese contenido para responder a lo que pregunta el usuario sobre el/los archivo(s) — NO respondas con un saludo genérico ni ignores el adjunto. Si el contenido extraído está vacío, es muy corto o dice "sin texto extraíble" (típico de planos/imágenes escaneadas), dilo explícitamente, indica qué archivo es (nombre) y pide al usuario un resumen, las páginas/secciones clave o una versión más legible para poder ayudar. El archivo adjunto de este mensaje es la fuente principal: ignora archivos o documentos mencionados en historial previo salvo que el usuario los nombre explícitamente.`
+      : "";
+
+    const systemPrompt = (AGENT_SYSTEM_PROMPTS[agentId] ?? AGENT_SYSTEM_PROMPTS.ic) + HUMANIZE_CTX + ctxPrompt + autoCodeCtx + attachmentCtx;
 
     // Load Supabase memory (older conversations) only for non-trivial
     // messages, but always read this thread's local history — it's already
     // in memory and is what lets the agent follow up on "ok"/short replies
-    // instead of repeating its opening question.
+    // instead of repeating its opening question. Skipped when this message
+    // has a new attachment so old projects/files don't leak into context.
     const [supabaseHistory, localHistory] = await Promise.all([
-      simple ? Promise.resolve([]) : loadConversationHistory(userId, agentId, undefined, 8),
+      simple || hasAttachments ? Promise.resolve([]) : loadConversationHistory(userId, agentId, undefined, 8),
       Promise.resolve(chatFor(threadKey)),
     ]);
 
