@@ -9,6 +9,10 @@ export type RoutingDecision = {
   complexity: RequestComplexity;
   reason: string;
   modelLabel: string;
+  // Shown as a small hint in the chat UI when the agent's manually
+  // configured model is a "light" tier one for a question that would
+  // benefit from a more capable model (less hallucination/contradiction).
+  suggestion?: string;
 };
 
 const TECHNICAL_KEYWORDS = ["presupuesto", "costo", "metrado", "ingeniería", "estructura", "análisis", "calcul", "plazo", "cronograma", "especificación", "requerimiento", "cotización", "oferta"];
@@ -36,6 +40,36 @@ const SERVER_PROXY_PROVIDERS: Array<{ provider: LLMProvider; modelSimple: string
   { provider: "openrouter", modelSimple: "meta-llama/llama-3.1-8b-instruct:free",   modelDeep: "meta-llama/llama-3.1-70b-instruct:free" },
 ];
 
+// "Light"/"deep" model pairs per free provider, used to auto-upgrade a
+// manually-assigned agent model for log-table questions (cotizaciones/
+// requerimientos) without requiring the user to change their selection.
+const FREE_PROVIDER_TIERS: Partial<Record<LLMProvider, { light: string; deep: string }>> = {
+  gemini:     { light: "gemini-1.5-flash",                       deep: "gemini-1.5-pro" },
+  groq:       { light: "llama-3.1-8b-instant",                   deep: "llama-3.1-70b-versatile" },
+  sambanova:  { light: "Meta-Llama-3.1-70B-Instruct",            deep: "DeepSeek-R1" },
+  openrouter: { light: "meta-llama/llama-3.1-8b-instruct:free",  deep: "meta-llama/llama-3.1-70b-instruct:free" },
+  cerebras:   { light: "llama3.1-8b",                            deep: "llama3.1-70b" },
+  mistral:    { light: "mistral-small-latest",                   deep: "mistral-large-latest" },
+  together:   { light: "meta-llama/Meta-Llama-3.1-8B-Instruct-Turbo", deep: "meta-llama/Meta-Llama-3.1-70B-Instruct-Turbo" },
+};
+
+// Paid providers don't get auto-upgraded (that would silently increase
+// cost) — instead we surface a `suggestion` so the user can decide.
+const PAID_PROVIDER_TIERS: Partial<Record<LLMProvider, { light: string; deepLabel: string }>> = {
+  openai:    { light: "gpt-4o-mini",              deepLabel: "GPT-4o" },
+  anthropic: { light: "claude-haiku-4-5-20251001", deepLabel: "Claude Sonnet" },
+};
+
+const OLLAMA_DEEP_PREFERENCE = ["deepseek-r1:7b", "qwen2.5:7b", "mistral:7b"];
+
+function pickOllama(availableOllamaModels: string[], preferred: string[], fallback: string): string {
+  for (const m of preferred) {
+    const found = availableOllamaModels.find((am) => am.startsWith(m));
+    if (found) return found;
+  }
+  return availableOllamaModels[0] ?? fallback;
+}
+
 export function routeRequest(
   text: string,
   availableOllamaModels: string[],
@@ -56,6 +90,16 @@ export function routeRequest(
   const openaiKey     = getKey("ot:apikey:openai");
   const anthropicKey  = getKey("ot:apikey:anthropic");
 
+  // Meta-questions about the agent's own capabilities/data access ("¿tienes
+  // acceso a la tabla de requerimientos?") need a model that can actually
+  // reason over the HUMANIZE_CTX rules — small/fast models tend to ignore
+  // them and flatly say "no tengo acceso". Same for ANY question about
+  // "la tabla/log de cotizaciones/requerimientos": even when real Supabase
+  // results are injected into context, small models (groq 8B) contradict
+  // themselves or ignore the data and invent codes/projects. Route these
+  // to the bigger model too.
+  const isDeep = complexity === "analytical" || complexity === "generative" || isDataAccessQuestion(text) || isLogTableQuestion(text);
+
   if (agentModelOverride) {
     const prov = agentModelOverride.provider as LLMProvider;
     const keyMap: Record<string, string> = {
@@ -67,24 +111,36 @@ export function routeRequest(
     };
     const key = keyMap[prov];
     if (key || prov === "ollama") {
+      let model = agentModelOverride.model;
+      let reason = "Modelo configurado manualmente";
+      let suggestion: string | undefined;
+
+      if (isDeep) {
+        const freeTier = FREE_PROVIDER_TIERS[prov];
+        const paidTier = PAID_PROVIDER_TIERS[prov];
+        if (freeTier && model === freeTier.light) {
+          model = freeTier.deep;
+          reason = "Modelo configurado manualmente → se usó la versión avanzada de este proveedor para esta consulta (anti-alucinación)";
+        } else if (prov === "ollama" && availableOllamaModels.length > 0) {
+          const upgraded = pickOllama(availableOllamaModels, OLLAMA_DEEP_PREFERENCE, model);
+          if (upgraded !== model) {
+            model = upgraded;
+            reason = "Modelo configurado manualmente → se usó un modelo Ollama de razonamiento para esta consulta (anti-alucinación)";
+          }
+        } else if (paidTier && model === paidTier.light) {
+          suggestion = `Este agente usa "${model}" para preguntas de cotizaciones/requerimientos. Se recomienda cambiarlo a ${paidTier.deepLabel} en Conexiones para reducir el riesgo de alucinaciones.`;
+        }
+      }
+
       return {
-        config: { provider: prov, model: agentModelOverride.model, apiKey: key || undefined, baseUrl: prov === "ollama" ? ollamaBase : undefined },
+        config: { provider: prov, model, apiKey: key || undefined, baseUrl: prov === "ollama" ? ollamaBase : undefined },
         complexity,
-        reason: "Modelo configurado manualmente",
-        modelLabel: agentModelOverride.model,
+        reason,
+        modelLabel: model,
+        suggestion,
       };
     }
   }
-
-  // Meta-questions about the agent's own capabilities/data access ("¿tienes
-  // acceso a la tabla de requerimientos?") need a model that can actually
-  // reason over the HUMANIZE_CTX rules — small/fast models tend to ignore
-  // them and flatly say "no tengo acceso". Same for ANY question about
-  // "la tabla/log de cotizaciones/requerimientos": even when real Supabase
-  // results are injected into context, small models (groq 8B) contradict
-  // themselves or ignore the data and invent codes/projects. Route these
-  // to the bigger model too.
-  const isDeep = complexity === "analytical" || complexity === "generative" || isDataAccessQuestion(text) || isLogTableQuestion(text);
 
   if (geminiKey) {
     const model = isDeep ? "gemini-1.5-pro" : "gemini-1.5-flash";
@@ -126,20 +182,12 @@ export function routeRequest(
   }
 
   if (ollamaEnabled && availableOllamaModels.length > 0) {
-    function pickOllama(preferred: string[], fallback: string): string {
-      for (const m of preferred) {
-        const found = availableOllamaModels.find((am) => am.startsWith(m));
-        if (found) return found;
-      }
-      return availableOllamaModels[0] ?? fallback;
-    }
-
     if (isDeep) {
-      const model = pickOllama(["deepseek-r1:7b", "qwen2.5:7b", "mistral:7b"], "qwen2.5:7b");
+      const model = pickOllama(availableOllamaModels, OLLAMA_DEEP_PREFERENCE, "qwen2.5:7b");
       return { config: { provider: "ollama", model, baseUrl: ollamaBase }, complexity, reason: "Ollama local → modelo de razonamiento", modelLabel: model };
     }
 
-    const model = pickOllama(["qwen2.5:7b", "mistral:7b", "llama3.1:8b"], "qwen2.5:7b");
+    const model = pickOllama(availableOllamaModels, ["qwen2.5:7b", "mistral:7b", "llama3.1:8b"], "qwen2.5:7b");
     return { config: { provider: "ollama", model, baseUrl: ollamaBase }, complexity, reason: "Ollama local → modelo eficiente", modelLabel: model };
   }
 

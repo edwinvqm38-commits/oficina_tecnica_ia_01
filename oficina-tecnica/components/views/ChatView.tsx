@@ -7,6 +7,7 @@ import { agentById } from "../../lib/data";
 import { agentAvatarClass } from "./shared";
 import { sendChatWithFallback, getOllamaModels } from "../../lib/llm/providers";
 import { routeRequest } from "../../lib/llm/modelRouter";
+import { getAgentModelOverride } from "../../lib/llm/agentModels";
 import type { ChatMessage } from "../../lib/llm/providers";
 import { parseInput, isSimpleMessage, detectDocumentCodes, detectOtherCodes, detectRequerimientoSearchIntent, detectCotizacionSearchIntent, HUMANIZE_CTX } from "../../lib/chat/messageUtils";
 import { MdText } from "../chat/MdText";
@@ -76,9 +77,9 @@ Formato:
 };
 
 function MessageBubble({
-  role, text, time, agentId, modelLabel, isError,
+  role, text, time, agentId, modelLabel, modelSuggestion, isError,
 }: {
-  role: "gg" | "agent"; text: string; time: string; agentId: string; modelLabel?: string; isError?: boolean;
+  role: "gg" | "agent"; text: string; time: string; agentId: string; modelLabel?: string; modelSuggestion?: string; isError?: boolean;
 }) {
   const isUser = role === "gg";
   return (
@@ -108,6 +109,11 @@ function MessageBubble({
             <span style={{ background: "var(--bg-subtle)", border: "1px solid var(--border)", borderRadius: 4, padding: "1px 5px", fontFamily: "var(--mono)" }}>{modelLabel}</span>
           )}
         </div>
+        {modelSuggestion && !isUser && (
+          <div style={{ fontSize: 10.5, color: "var(--amber-text)", background: "var(--amber-bg)", border: "1px solid var(--amber-border)", borderRadius: 6, padding: "4px 8px", marginTop: 4, lineHeight: 1.5 }}>
+            💡 {modelSuggestion}
+          </div>
+        )}
       </div>
     </div>
   );
@@ -215,7 +221,7 @@ export function ChatView() {
     setInput("");
     setBusy(true);
 
-    const routing = routeRequest(parsed.cleanText, ollamaModelsRef.current);
+    const routing = routeRequest(parsed.cleanText, ollamaModelsRef.current, getAgentModelOverride(agentId));
     setTypingModel(routing.modelLabel);
 
     let ctxPrompt = inputCtx ? buildContextPrompt(inputCtx) : "";
@@ -343,7 +349,7 @@ export function ChatView() {
     try {
       const { response, actualConfig } = await sendChatWithFallback(messages, routing.config, ollamaModelsRef.current);
       const label = `${actualConfig.provider}/${response.model}`;
-      appendChat(threadKey, { role: "agent", text: response.content, agentId, modelLabel: label });
+      appendChat(threadKey, { role: "agent", text: response.content, agentId, modelLabel: label, modelSuggestion: routing.suggestion });
       saveConversation(session?.email ?? "anonymous", agentId, parsed.cleanText, response.content, label, routing.complexity).catch(() => {});
     } catch (err) {
       const msg = err instanceof Error ? err.message : "Error desconocido";
@@ -449,7 +455,7 @@ export function ChatView() {
               </button>
             )}
             {thread.slice(-visibleCount).map((m) => (
-              <MessageBubble key={m.id} role={m.role} text={m.text} time={m.time} agentId={agentId} modelLabel={(m as { modelLabel?: string }).modelLabel} isError={(m as { isError?: boolean }).isError} />
+              <MessageBubble key={m.id} role={m.role} text={m.text} time={m.time} agentId={agentId} modelLabel={(m as { modelLabel?: string }).modelLabel} modelSuggestion={(m as { modelSuggestion?: string }).modelSuggestion} isError={(m as { isError?: boolean }).isError} />
             ))}
             {busy && <TypingDots agentId={agentId} modelLabel={typingModel} />}
           </div>

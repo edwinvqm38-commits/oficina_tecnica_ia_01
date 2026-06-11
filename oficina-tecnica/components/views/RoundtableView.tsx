@@ -8,6 +8,7 @@ import type { Skill } from "../../lib/types";
 import { agentAvatarClass } from "./shared";
 import { sendChatWithFallback, getOllamaModels } from "../../lib/llm/providers";
 import { routeRequest } from "../../lib/llm/modelRouter";
+import { getAgentModelOverride } from "../../lib/llm/agentModels";
 import type { ChatMessage } from "../../lib/llm/providers";
 import { parseInput, isSimpleMessage, isTeamMessage, hasClearIntent, detectDocumentCodes, detectOtherCodes, detectRequerimientoSearchIntent, detectCotizacionSearchIntent, slugForUser, HUMANIZE_CTX } from "../../lib/chat/messageUtils";
 import type { UserDirectory } from "../../lib/chat/messageUtils";
@@ -256,8 +257,8 @@ function AttachmentChip({ a }: { a: { name: string; size: number; type: string; 
   return <span style={sharedStyle}>{content}</span>;
 }
 
-function RTMessage({ role, text, time, agentId, modelLabel, isError, attachments, userEmail, userName, currentUserEmail, status, userDirectory }: {
-  role: "gg" | "agent"; text: string; time: string; agentId?: string; modelLabel?: string; isError?: boolean;
+function RTMessage({ role, text, time, agentId, modelLabel, modelSuggestion, isError, attachments, userEmail, userName, currentUserEmail, status, userDirectory }: {
+  role: "gg" | "agent"; text: string; time: string; agentId?: string; modelLabel?: string; modelSuggestion?: string; isError?: boolean;
   attachments?: { name: string; size: number; type: string; dataUrl?: string }[];
   userEmail?: string; userName?: string; currentUserEmail?: string; status?: "pending" | "sent" | "failed";
   userDirectory?: UserDirectory;
@@ -304,6 +305,11 @@ function RTMessage({ role, text, time, agentId, modelLabel, isError, attachments
             <span title="No se pudo sincronizar con los demás — se reintentará automáticamente" style={{ color: "var(--red-text, #c00)" }}>⚠ no sincronizado</span>
           )}
         </div>
+        {modelSuggestion && !isUser && (
+          <div style={{ fontSize: 10.5, color: "var(--amber-text)", background: "var(--amber-bg)", border: "1px solid var(--amber-border)", borderRadius: 6, padding: "4px 8px", marginTop: 4, lineHeight: 1.5 }}>
+            💡 {modelSuggestion}
+          </div>
+        )}
       </div>
     </div>
   );
@@ -683,11 +689,13 @@ export function RoundtableView() {
         { role: "user", content: parsed.cleanText + fileCtx },
       ];
 
+      const agRouting = routeRequest(parsed.cleanText, ollamaModelsRef.current, getAgentModelOverride(agId));
+
       try {
-        const { response, actualConfig } = await sendChatWithFallback(messages, routing.config, ollamaModelsRef.current);
+        const { response, actualConfig } = await sendChatWithFallback(messages, agRouting.config, ollamaModelsRef.current);
         const label = `${actualConfig.provider}/${response.model}`;
-        appendChat(ROUNDTABLE_THREAD, { role: "agent", agentId: agId, text: response.content, modelLabel: label });
-        saveConversation(userId, agId, parsed.cleanText + fileCtx, response.content, label, routing.complexity, activeProject?.id).catch(() => {});
+        appendChat(ROUNDTABLE_THREAD, { role: "agent", agentId: agId, text: response.content, modelLabel: label, modelSuggestion: agRouting.suggestion });
+        saveConversation(userId, agId, parsed.cleanText + fileCtx, response.content, label, agRouting.complexity, activeProject?.id).catch(() => {});
       } catch (err) {
         appendChat(ROUNDTABLE_THREAD, {
           role: "agent", agentId: agId,
@@ -811,7 +819,7 @@ export function RoundtableView() {
               </button>
             )}
             {thread.slice(-visibleCount).map((m) => (
-              <RTMessage key={m.id} role={m.role} text={m.text} time={m.time} agentId={m.agentId} modelLabel={m.modelLabel} isError={m.isError} attachments={m.attachments} userEmail={m.userEmail} userName={m.userName} currentUserEmail={session?.email} status={m.status} userDirectory={userDirectory} />
+              <RTMessage key={m.id} role={m.role} text={m.text} time={m.time} agentId={m.agentId} modelLabel={m.modelLabel} modelSuggestion={m.modelSuggestion} isError={m.isError} attachments={m.attachments} userEmail={m.userEmail} userName={m.userName} currentUserEmail={session?.email} status={m.status} userDirectory={userDirectory} />
             ))}
             {hands.map((h) => (
               <HandRaise key={h.agentId} agentId={h.agentId} modelLabel={h.modelLabel} />

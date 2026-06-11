@@ -165,6 +165,9 @@ export type ChatMessage = {
   time: string;
   agentId?: string;
   modelLabel?: string;
+  // Small "switch model" hint shown under the agent's response (see
+  // RoutingDecision.suggestion in lib/llm/modelRouter.ts).
+  modelSuggestion?: string;
   isError?: boolean;
   attachments?: ChatAttachmentMeta[];
   // Sender of "gg" messages in shared threads (e.g. Mesa de trabajo), so

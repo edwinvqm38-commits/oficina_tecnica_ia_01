@@ -65,6 +65,43 @@ export const DEFAULT_AGENT_MODELS: Record<string, { provider: string; model: str
   "project-management": { provider: "gemini", model: "gemini-1.5-flash" },
 };
 
+// Maps chat agent ids (lib/chat/messageUtils.ts AGENT_IDS) to the agent ids
+// used by the "Modelos por agente" assignment UI (ModelConnectionsPage).
+// "ie" (Ingeniera Eléctrica) has no entry in that UI yet, so it keeps using
+// automatic provider/key-based routing.
+export const CHAT_AGENT_TO_SETTINGS_ID: Record<string, string> = {
+  gg: "general-manager",
+  ic: "cost-engineer",
+  pm: "project-management",
+};
+
+const LS_AGENT_MODELS = "ot:agent:models";
+
+export type AgentModelAssignment = { provider: string; model: string };
+
+// Reads the per-agent model assignment configured in Conexiones → "Modelos
+// por agente" (localStorage "ot:agent:models"), falling back to
+// DEFAULT_AGENT_MODELS. Returns null for agents without a settings entry,
+// so they keep using the automatic provider/key-based routing.
+export function getAgentModelOverride(chatAgentId: string): AgentModelAssignment | null {
+  const settingsId = CHAT_AGENT_TO_SETTINGS_ID[chatAgentId];
+  if (!settingsId) return null;
+
+  if (typeof localStorage !== "undefined") {
+    try {
+      const saved = localStorage.getItem(LS_AGENT_MODELS);
+      if (saved) {
+        const parsed = JSON.parse(saved) as Record<string, AgentModelAssignment>;
+        if (parsed[settingsId]) return parsed[settingsId];
+      }
+    } catch {
+      // Ignore malformed localStorage value, fall back to defaults below.
+    }
+  }
+
+  return DEFAULT_AGENT_MODELS[settingsId] ?? null;
+}
+
 export const OLLAMA_SETUP_STEPS = [
   { step: 1, title: "Descargar Ollama", description: "Ve a ollama.com y descarga el instalador para tu sistema operativo (Windows/Mac/Linux).", link: "https://ollama.com/download" },
   { step: 2, title: "Instalar Ollama",  description: "Ejecuta el instalador. Ollama correrá automáticamente en segundo plano en el puerto 11434." },
