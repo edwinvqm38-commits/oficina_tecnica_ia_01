@@ -345,6 +345,15 @@ const COT_NOUN_RE = /\bcotizaci[oó]n(?:es)?\b|\bcots?\b/i;
 const RECENT_RE = /\b(últim[oa]s?|reci[eé]n(?:temente)?|recientes?|nuevos?|m[aá]s\s+nuevas?)\b/i;
 const RECENT_COUNT_RE = /\b(\d{1,2})\b/;
 
+// "primera/primero/más antigua" → oldest-first (ascending by created_at).
+const OLDEST_RE = /\b(primer[ao]s?|m[aá]s\s+antigu[oa]s?|m[aá]s\s+vieja?s?)\b/i;
+
+// Free-text fragment search ("que cotizaciones terminan en 256", "busca
+// requerimientos que contengan PRO-3", "código que empiece con FOR-EKA") →
+// extract the fragment and use it as an ilike filter (q) so the agent gets
+// real matches instead of guessing/inventing codes.
+const FRAGMENT_RE = /\b(?:termin[ae]n?|acab[ae]n?)\s+(?:en|con)\s+([A-Za-z0-9._-]+)|\b(?:empiez[ae]n?|comienz[ae]n?|inici[ae]n?)\s+(?:en|con|por)\s+([A-Za-z0-9._-]+)|\b(?:contien[ea]n?|incluy[ea]n?)\s+([A-Za-z0-9._-]+)/i;
+
 const ESTADO_KEYWORDS: Array<[RegExp, string]> = [
   [/\bpendientes?\b/i, "Pendiente"],
   [/\ben\s+proceso\b|\ben\s+curso\b/i, "En proceso"],
@@ -356,22 +365,26 @@ export interface RequerimientoSearchIntent {
   responsable?: string;
   q?: string;
   recent?: boolean;
+  oldest?: boolean;
   limit?: number;
 }
 
 /**
  * Detects "search/list/filter requerimientos" intent in free text and
- * extracts simple filters (estado, responsable). Also detects recency
- * questions ("últimos N requerimientos registrados/actualizados") even
- * without a search verb. Returns null when the message isn't a search
- * request — callers should fall back to the usual exact-code lookups.
+ * extracts simple filters (estado, responsable, code fragments). Also
+ * detects recency questions ("últimos N requerimientos registrados") and
+ * "primera/más antigua" (oldest-first) even without a search verb. Returns
+ * null when the message isn't a search request — callers should fall back
+ * to the usual exact-code lookups.
  */
 export function detectRequerimientoSearchIntent(cleanText: string): RequerimientoSearchIntent | null {
   const t = cleanText.trim();
   if (!t || !REQ_NOUN_RE.test(t)) return null;
 
   const isRecent = RECENT_RE.test(t);
-  if (!isRecent && !SEARCH_VERB_RE.test(t)) return null;
+  const isOldest = OLDEST_RE.test(t);
+  const fragMatch = t.match(FRAGMENT_RE);
+  if (!isRecent && !isOldest && !fragMatch && !SEARCH_VERB_RE.test(t)) return null;
 
   const intent: RequerimientoSearchIntent = {};
   for (const [re, estado] of ESTADO_KEYWORDS) {
@@ -382,7 +395,15 @@ export function detectRequerimientoSearchIntent(cleanText: string): Requerimient
     ?? t.match(/\bde\s+([A-ZÀ-Ý][A-Za-zÀ-ÿ.]+(?:\s+[A-ZÀ-Ý][A-Za-zÀ-ÿ.]+){0,2})\b/);
   if (respMatch) intent.responsable = respMatch[1].trim();
 
-  if (isRecent) {
+  if (fragMatch) {
+    intent.q = (fragMatch[1] ?? fragMatch[2] ?? fragMatch[3]).trim();
+  }
+
+  if (isOldest) {
+    intent.oldest = true;
+    const numMatch = t.match(RECENT_COUNT_RE);
+    intent.limit = numMatch ? Math.min(Math.max(parseInt(numMatch[1], 10), 1), 20) : 5;
+  } else if (isRecent) {
     intent.recent = true;
     const numMatch = t.match(RECENT_COUNT_RE);
     intent.limit = numMatch ? Math.min(Math.max(parseInt(numMatch[1], 10), 1), 20) : 5;
@@ -391,30 +412,52 @@ export function detectRequerimientoSearchIntent(cleanText: string): Requerimient
   return intent;
 }
 
+// Small/fast models (e.g. groq/llama-3.1-8b-instant) repeatedly contradict
+// themselves or ignore the real Supabase data when the question is about
+// "la tabla/log de cotizaciones/requerimientos" — even when the search
+// blocks above ARE present in context. Used by modelRouter to force these
+// questions to a more capable model.
+export function isLogTableQuestion(cleanText: string): boolean {
+  const t = cleanText.trim();
+  return REQ_NOUN_RE.test(t) || COT_NOUN_RE.test(t);
+}
+
 export interface CotizacionSearchIntent {
   estado?: string;
   q?: string;
   recent?: boolean;
+  oldest?: boolean;
   limit?: number;
 }
 
 /**
  * Same as detectRequerimientoSearchIntent but for "cotizaciones"
- * ("últimas cotizaciones registradas", "lista cotizaciones pendientes").
+ * ("últimas cotizaciones registradas", "lista cotizaciones pendientes",
+ * "qué cotizaciones terminan en 256", "primera cotización registrada").
  */
 export function detectCotizacionSearchIntent(cleanText: string): CotizacionSearchIntent | null {
   const t = cleanText.trim();
   if (!t || !COT_NOUN_RE.test(t)) return null;
 
   const isRecent = RECENT_RE.test(t);
-  if (!isRecent && !SEARCH_VERB_RE.test(t)) return null;
+  const isOldest = OLDEST_RE.test(t);
+  const fragMatch = t.match(FRAGMENT_RE);
+  if (!isRecent && !isOldest && !fragMatch && !SEARCH_VERB_RE.test(t)) return null;
 
   const intent: CotizacionSearchIntent = {};
   for (const [re, estado] of ESTADO_KEYWORDS) {
     if (re.test(t)) { intent.estado = estado; break; }
   }
 
-  if (isRecent) {
+  if (fragMatch) {
+    intent.q = (fragMatch[1] ?? fragMatch[2] ?? fragMatch[3]).trim();
+  }
+
+  if (isOldest) {
+    intent.oldest = true;
+    const numMatch = t.match(RECENT_COUNT_RE);
+    intent.limit = numMatch ? Math.min(Math.max(parseInt(numMatch[1], 10), 1), 20) : 5;
+  } else if (isRecent) {
     intent.recent = true;
     const numMatch = t.match(RECENT_COUNT_RE);
     intent.limit = numMatch ? Math.min(Math.max(parseInt(numMatch[1], 10), 1), 20) : 5;

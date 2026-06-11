@@ -1,6 +1,6 @@
 import type { ModelConfig, LLMProvider } from "./providers";
 import { isOllamaEnabled } from "./providers";
-import { isDataAccessQuestion } from "../chat/messageUtils";
+import { isDataAccessQuestion, isLogTableQuestion } from "../chat/messageUtils";
 
 export type RequestComplexity = "simple" | "technical" | "analytical" | "generative";
 
@@ -79,8 +79,12 @@ export function routeRequest(
   // Meta-questions about the agent's own capabilities/data access ("¿tienes
   // acceso a la tabla de requerimientos?") need a model that can actually
   // reason over the HUMANIZE_CTX rules — small/fast models tend to ignore
-  // them and flatly say "no tengo acceso". Route these to the bigger model.
-  const isDeep = complexity === "analytical" || complexity === "generative" || isDataAccessQuestion(text);
+  // them and flatly say "no tengo acceso". Same for ANY question about
+  // "la tabla/log de cotizaciones/requerimientos": even when real Supabase
+  // results are injected into context, small models (groq 8B) contradict
+  // themselves or ignore the data and invent codes/projects. Route these
+  // to the bigger model too.
+  const isDeep = complexity === "analytical" || complexity === "generative" || isDataAccessQuestion(text) || isLogTableQuestion(text);
 
   if (geminiKey) {
     const model = isDeep ? "gemini-1.5-pro" : "gemini-1.5-flash";

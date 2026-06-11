@@ -227,6 +227,7 @@ export interface RequerimientoSearchFilters {
   estado?: string;
   responsable?: string;
   recent?: boolean;
+  oldest?: boolean;
 }
 
 export interface RequerimientoSearchResult {
@@ -237,10 +238,11 @@ export interface RequerimientoSearchResult {
 const REQUIREMENT_SELECT = "id, codigo, estado, responsable, avance, solicitante_rq, tipo_servicio_nombre, fecha_requerida, cotizacion_codigo, observaciones, created_at";
 
 export async function searchRequerimientos(filters: RequerimientoSearchFilters, limit = 20): Promise<RequerimientoSearchResult> {
+  const orderByCreated = filters.recent || filters.oldest;
   let query = supabase
     .from("requerimientos")
     .select(REQUIREMENT_SELECT, { count: "exact" })
-    .order(filters.recent ? "created_at" : "codigo", { ascending: !filters.recent })
+    .order(orderByCreated ? "created_at" : "codigo", { ascending: filters.oldest ? true : !orderByCreated })
     .limit(limit);
 
   const q = filters.q?.trim();
@@ -258,9 +260,10 @@ export async function searchRequerimientos(filters: RequerimientoSearchFilters, 
 export function buildRequerimientoSearchPrompt(filters: RequerimientoSearchFilters, result: RequerimientoSearchResult): string {
   const filterDesc = [
     filters.recent ? "más recientes (por fecha de registro)" : "",
+    filters.oldest ? "más antiguos (por fecha de registro)" : "",
     filters.estado ? `estado: ${filters.estado}` : "",
     filters.responsable ? `responsable: ${filters.responsable}` : "",
-    filters.q ? `texto: "${filters.q}"` : "",
+    filters.q ? `código/texto contiene: "${filters.q}"` : "",
   ].filter(Boolean).join(", ") || "sin filtros";
 
   if (result.items.length === 0) {
@@ -272,12 +275,16 @@ export function buildRequerimientoSearchPrompt(filters: RequerimientoSearchFilte
     prompt += `\n- **${rq.codigo}** · Estado: ${rq.estado} · Avance: ${rq.avance ?? "—"}%`;
     if (rq.responsable) prompt += ` · Responsable: ${rq.responsable}`;
     if (rq.cotizacion_codigo) prompt += ` · Cotización: ${rq.cotizacion_codigo}`;
-    if (filters.recent && rq.created_at) prompt += ` · Registrado: ${new Date(rq.created_at).toLocaleDateString("es-PE")}`;
+    if (orderByCreatedFlag(filters) && rq.created_at) prompt += ` · Registrado: ${new Date(rq.created_at).toLocaleDateString("es-PE")}`;
   }
   if (result.total > result.items.length) {
     prompt += `\n\nHay ${result.total - result.items.length} resultado(s) adicionales no mostrados aquí. Si el usuario los necesita, pídele un filtro más específico (estado, responsable o parte del código) para acotar la búsqueda.`;
   }
   return prompt;
+}
+
+function orderByCreatedFlag(filters: { recent?: boolean; oldest?: boolean }): boolean {
+  return Boolean(filters.recent || filters.oldest);
 }
 
 export async function fetchAllRequirements(): Promise<RequirementSummary[]> {
@@ -297,6 +304,7 @@ export interface CotizacionSearchFilters {
   q?: string;
   estado?: string;
   recent?: boolean;
+  oldest?: boolean;
 }
 
 export interface CotizacionSearchResult {
@@ -307,10 +315,11 @@ export interface CotizacionSearchResult {
 const COTIZACION_SELECT = "id, codigo, oc, cliente_nombre, proyecto, estado, avance, monto, responsable_tecnico, tipo_servicio_nombre, prioridad, created_at";
 
 export async function searchCotizacionesByFilters(filters: CotizacionSearchFilters, limit = 20): Promise<CotizacionSearchResult> {
+  const orderByCreated = filters.recent || filters.oldest;
   let query = supabase
     .from("cotizaciones")
     .select(COTIZACION_SELECT, { count: "exact" })
-    .order(filters.recent ? "created_at" : "codigo", { ascending: !filters.recent })
+    .order(orderByCreated ? "created_at" : "codigo", { ascending: filters.oldest ? true : !orderByCreated })
     .limit(limit);
 
   const q = filters.q?.trim();
@@ -327,20 +336,22 @@ export async function searchCotizacionesByFilters(filters: CotizacionSearchFilte
 export function buildCotizacionSearchPrompt(filters: CotizacionSearchFilters, result: CotizacionSearchResult): string {
   const filterDesc = [
     filters.recent ? "más recientes (por fecha de registro)" : "",
+    filters.oldest ? "más antiguas (por fecha de registro)" : "",
     filters.estado ? `estado: ${filters.estado}` : "",
-    filters.q ? `texto: "${filters.q}"` : "",
+    filters.q ? `código/texto contiene: "${filters.q}"` : "",
   ].filter(Boolean).join(", ") || "sin filtros";
 
   if (result.items.length === 0) {
     return `\n\nBúsqueda en cotizaciones (${filterDesc}): no se encontraron resultados en la tabla real de Supabase. Dile al usuario que no hay cotizaciones que coincidan con esos criterios — no inventes códigos ni proyectos.`;
   }
 
+  const orderByCreated = filters.recent || filters.oldest;
   let prompt = `\n\nResultados de búsqueda en cotizaciones (tabla real de Supabase, ${filterDesc}) — mostrando ${result.items.length} de ${result.total}:`;
   for (const cot of result.items) {
     prompt += `\n- **${cot.codigo}** · Estado: ${cot.estado ?? "—"} · Avance: ${cot.avance ?? "—"}%`;
     if (cot.cliente_nombre) prompt += ` · Cliente: ${cot.cliente_nombre}`;
     if (cot.proyecto) prompt += ` · Proyecto: ${cot.proyecto}`;
-    if (filters.recent && cot.created_at) prompt += ` · Registrado: ${new Date(cot.created_at).toLocaleDateString("es-PE")}`;
+    if (orderByCreated && cot.created_at) prompt += ` · Registrado: ${new Date(cot.created_at).toLocaleDateString("es-PE")}`;
   }
   if (result.total > result.items.length) {
     prompt += `\n\nHay ${result.total - result.items.length} resultado(s) adicionales no mostrados aquí. Si el usuario los necesita, pídele un filtro más específico (estado, cliente o parte del código) para acotar la búsqueda.`;
