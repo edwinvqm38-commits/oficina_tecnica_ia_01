@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { aiAgentsMock } from "@/lib/ai-office/aiAgentsMock";
 import { checkOllamaConnectivity, getOllamaModels, isOllamaEnabled } from "@/lib/llm/providers";
-import { DEFAULT_AGENT_MODELS, OLLAMA_SETUP_STEPS, RECOMMENDED_MODELS } from "@/lib/llm/agentModels";
+import { DEFAULT_AGENT_MODELS, OLLAMA_SETUP_STEPS, RECOMMENDED_MODELS, normalizeAgentModel } from "@/lib/llm/agentModels";
 
 type OllamaStatus = "checking" | "connected" | "disconnected" | "disabled";
 
@@ -185,7 +185,7 @@ function AgentModelAssignments({ assignments, onChange, ollamaModels }: {
 
       <div style={{ display: "flex", flexDirection: "column" }}>
         {aiAgentsMock.map((agent, idx) => {
-          const asgn: AgentModelAssignment = (assignments[agent.id] as AgentModelAssignment | undefined) ?? (DEFAULT_AGENT_MODELS[agent.id] as AgentModelAssignment | undefined) ?? { provider: "gemini", model: "gemini-1.5-flash" };
+          const asgn: AgentModelAssignment = (assignments[agent.id] as AgentModelAssignment | undefined) ?? (DEFAULT_AGENT_MODELS[agent.id] as AgentModelAssignment | undefined) ?? { provider: "gemini", model: "gemini-flash-latest" };
           const models =
             asgn.provider === "ollama"
               ? [
@@ -380,7 +380,11 @@ export function ModelConnectionsPage() {
     setOllamaUrl(savedUrl);
     const savedModels = getLS(LS_AGENT_MODELS, "");
     if (savedModels) {
-      try { setAssignments(JSON.parse(savedModels)); } catch { setAssignments(DEFAULT_AGENT_MODELS as Record<string, AgentModelAssignment>); }
+      try {
+        const parsed = JSON.parse(savedModels) as Record<string, AgentModelAssignment>;
+        const normalized = Object.fromEntries(Object.entries(parsed).map(([id, asgn]) => [id, normalizeAgentModel(asgn)]));
+        setAssignments(normalized as Record<string, AgentModelAssignment>);
+      } catch { setAssignments(DEFAULT_AGENT_MODELS as Record<string, AgentModelAssignment>); }
     } else {
       setAssignments(DEFAULT_AGENT_MODELS as Record<string, AgentModelAssignment>);
     }

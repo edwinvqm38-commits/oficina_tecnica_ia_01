@@ -7,9 +7,10 @@ export const RECOMMENDED_MODELS = {
     { model: "mistral:7b",      label: "Mistral 7B",        description: "Tareas de ingeniería, rápido",           size: "4.1 GB", recommended: false },
   ],
   gemini: [
-    { model: "gemini-1.5-flash", label: "Gemini 1.5 Flash", description: "Gratis · rápido · uso general y técnico",       recommended: true },
-    { model: "gemini-1.5-pro",   label: "Gemini 1.5 Pro",   description: "Gratis · análisis profundo · límite menor/día", recommended: false },
-    { model: "gemini-2.0-flash", label: "Gemini 2.0 Flash", description: "Gratis · última versión · multimodal",           recommended: false },
+    // Google retira versiones fechadas (1.5/2.0) periódicamente — usamos los
+    // alias "latest", que Google redirige automáticamente al modelo vigente.
+    { model: "gemini-flash-latest", label: "Gemini Flash (latest)", description: "Gratis · rápido · uso general y técnico · siempre vigente", recommended: true },
+    { model: "gemini-pro-latest",   label: "Gemini Pro (latest)",   description: "Análisis profundo · siempre vigente · puede requerir facturación", recommended: false },
   ],
   groq: [
     { model: "llama-3.1-8b-instant",    label: "Llama 3.1 8B Instant", description: "Gratis · ultrarrápido · respuestas simples", recommended: true },
@@ -60,9 +61,9 @@ export const RECOMMENDED_MODELS = {
 };
 
 export const DEFAULT_AGENT_MODELS: Record<string, { provider: string; model: string }> = {
-  "general-manager":    { provider: "gemini", model: "gemini-1.5-flash" },
-  "cost-engineer":      { provider: "gemini", model: "gemini-1.5-flash" },
-  "project-management": { provider: "gemini", model: "gemini-1.5-flash" },
+  "general-manager":    { provider: "gemini", model: "gemini-flash-latest" },
+  "cost-engineer":      { provider: "gemini", model: "gemini-flash-latest" },
+  "project-management": { provider: "gemini", model: "gemini-flash-latest" },
 };
 
 // Maps chat agent ids (lib/chat/messageUtils.ts AGENT_IDS) to the agent ids
@@ -79,6 +80,22 @@ const LS_AGENT_MODELS = "ot:agent:models";
 
 export type AgentModelAssignment = { provider: string; model: string };
 
+// Google periodically shuts down dated Gemini model versions (1.5.x, 2.0.x
+// were retired in 2026). Assignments saved before that switch would silently
+// fail and fall back to other providers — remap them to the "latest" aliases,
+// which Google keeps pointed at a working model.
+const LEGACY_GEMINI_MODEL_MAP: Record<string, string> = {
+  "gemini-1.5-flash": "gemini-flash-latest",
+  "gemini-1.5-pro":   "gemini-pro-latest",
+  "gemini-2.0-flash": "gemini-flash-latest",
+};
+
+export function normalizeAgentModel(assignment: AgentModelAssignment): AgentModelAssignment {
+  if (assignment.provider !== "gemini") return assignment;
+  const remapped = LEGACY_GEMINI_MODEL_MAP[assignment.model];
+  return remapped ? { ...assignment, model: remapped } : assignment;
+}
+
 // Reads the per-agent model assignment configured in Conexiones → "Modelos
 // por agente" (localStorage "ot:agent:models"), falling back to
 // DEFAULT_AGENT_MODELS. Returns null for agents without a settings entry,
@@ -92,7 +109,7 @@ export function getAgentModelOverride(chatAgentId: string): AgentModelAssignment
       const saved = localStorage.getItem(LS_AGENT_MODELS);
       if (saved) {
         const parsed = JSON.parse(saved) as Record<string, AgentModelAssignment>;
-        if (parsed[settingsId]) return parsed[settingsId];
+        if (parsed[settingsId]) return normalizeAgentModel(parsed[settingsId]);
       }
     } catch {
       // Ignore malformed localStorage value, fall back to defaults below.

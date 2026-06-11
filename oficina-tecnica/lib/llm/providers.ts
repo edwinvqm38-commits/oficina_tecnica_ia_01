@@ -219,7 +219,7 @@ export async function sendChatWithFallback(
 
   // Cloud providers: try server proxy (Vercel env vars) first, then localStorage key as fallback
   const CLOUD_FALLBACKS: Array<{ provider: LLMProvider; lsKey: string; model: string }> = [
-    { provider: "gemini",      lsKey: "ot:apikey:gemini",      model: "gemini-1.5-flash" },
+    { provider: "gemini",      lsKey: "ot:apikey:gemini",      model: "gemini-flash-latest" },
     { provider: "groq",        lsKey: "ot:apikey:groq",        model: "llama-3.1-8b-instant" },
     { provider: "sambanova",   lsKey: "ot:apikey:sambanova",   model: "Meta-Llama-3.1-70B-Instruct" },
     { provider: "openrouter",  lsKey: "ot:apikey:openrouter",  model: "meta-llama/llama-3.1-8b-instruct:free" },

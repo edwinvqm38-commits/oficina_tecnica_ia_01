@@ -34,7 +34,7 @@ function getKey(key: string): string {
 
 // Cloud providers we always try via server proxy even without a local key
 const SERVER_PROXY_PROVIDERS: Array<{ provider: LLMProvider; modelSimple: string; modelDeep: string }> = [
-  { provider: "gemini",     modelSimple: "gemini-1.5-flash",                        modelDeep: "gemini-1.5-pro" },
+  { provider: "gemini",     modelSimple: "gemini-flash-latest",                     modelDeep: "gemini-pro-latest" },
   { provider: "groq",       modelSimple: "llama-3.1-8b-instant",                    modelDeep: "llama-3.1-70b-versatile" },
   { provider: "sambanova",  modelSimple: "Meta-Llama-3.1-70B-Instruct",             modelDeep: "DeepSeek-R1" },
   { provider: "openrouter", modelSimple: "meta-llama/llama-3.1-8b-instruct:free",   modelDeep: "meta-llama/llama-3.1-70b-instruct:free" },
@@ -44,7 +44,7 @@ const SERVER_PROXY_PROVIDERS: Array<{ provider: LLMProvider; modelSimple: string
 // manually-assigned agent model for log-table questions (cotizaciones/
 // requerimientos) without requiring the user to change their selection.
 const FREE_PROVIDER_TIERS: Partial<Record<LLMProvider, { light: string; deep: string }>> = {
-  gemini:     { light: "gemini-1.5-flash",                       deep: "gemini-1.5-pro" },
+  gemini:     { light: "gemini-flash-latest",                    deep: "gemini-pro-latest" },
   groq:       { light: "llama-3.1-8b-instant",                   deep: "llama-3.1-70b-versatile" },
   sambanova:  { light: "Meta-Llama-3.1-70B-Instruct",            deep: "DeepSeek-R1" },
   openrouter: { light: "meta-llama/llama-3.1-8b-instruct:free",  deep: "meta-llama/llama-3.1-70b-instruct:free" },
@@ -149,7 +149,7 @@ export function routeRequest(
   }
 
   if (geminiKey) {
-    const model = isDeep ? "gemini-1.5-pro" : "gemini-1.5-flash";
+    const model = isDeep ? "gemini-pro-latest" : "gemini-flash-latest";
     return { config: { provider: "gemini", model, apiKey: geminiKey }, complexity, reason: isDeep ? "Gemini Pro → análisis profundo (gratis)" : "Gemini Flash → rápido (gratis)", modelLabel: model };
   }
 
