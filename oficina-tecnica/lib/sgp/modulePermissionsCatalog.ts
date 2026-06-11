@@ -10,7 +10,6 @@ export type PermissionModuleKey =
   | "chat"
   | "inbox"
   | "approvals"
-  | "projects"
   | "agents"
   | "org"
   | "skills"
@@ -500,16 +499,6 @@ export const MODULE_PERMISSIONS_CATALOG: ModulePermissionCatalogItem[] = [
     group: MODULE_GROUP_PLATAFORMA,
     label: "Aprobaciones",
     description: "Controla el acceso a la sección Aprobaciones.",
-    enabled: true,
-    standardPermissions: ["can_view"],
-    sensitivePermissions: [],
-    columns: [],
-  },
-  {
-    module_key: "projects",
-    group: MODULE_GROUP_PLATAFORMA,
-    label: "Proyectos",
-    description: "Controla el acceso a la sección Proyectos.",
     enabled: true,
     standardPermissions: ["can_view"],
     sensitivePermissions: [],

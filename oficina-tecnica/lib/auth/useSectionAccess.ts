@@ -17,7 +17,6 @@ export const ROUTE_MODULE_KEYS: Partial<Record<RouteId, string>> = {
   chat: "chat",
   inbox: "inbox",
   approvals: "approvals",
-  projects: "projects",
   cotizaciones: "cotizaciones",
   requerimientos: "requerimientos",
   recursos: "recursos",

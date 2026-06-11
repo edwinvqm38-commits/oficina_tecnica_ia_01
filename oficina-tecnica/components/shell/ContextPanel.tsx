@@ -198,52 +198,6 @@ function ApprovalsContext() {
   );
 }
 
-function ProjectsContext() {
-  const { state } = useStore();
-  const all = [...PROJECTS, ...state.customProjects];
-  const atRisk = all.filter((p) => p.status === "at-risk" || p.status === "delayed").length;
-  const active = all[0];
-  return (
-    <>
-      <CtxCard title="Portafolio activo">
-        <CtxMetric2 a={{ label: "Proyectos", value: String(all.length) }} b={{ label: "En riesgo", value: String(atRisk) }} />
-        <CtxMetric2 a={{ label: "Costo total", value: "S/ 4.83 M" }} b={{ label: "Disciplinas", value: "Eléctrica" }} />
-      </CtxCard>
-
-      {active && (
-        <CtxCard title={`Foco: ${active.id}`}>
-          <div style={{ fontSize: 12, fontWeight: 600, color: "var(--t1)", marginBottom: 4 }}>{active.name}</div>
-          <div style={{ fontSize: 11, color: "var(--t2)", lineHeight: 1.4, marginBottom: 8 }}>{active.summary}</div>
-          <div className="info-row">
-            <span className="info-row-label">Próximo hito</span>
-            <span className="info-row-value">{active.nextMilestone}</span>
-          </div>
-          <div className="info-row">
-            <span className="info-row-label">Vencimiento</span>
-            <span className="info-row-value">{active.due}</span>
-          </div>
-          <div className="info-row">
-            <span className="info-row-label">Avance</span>
-            <span className="info-row-value">{active.progress}%</span>
-          </div>
-        </CtxCard>
-      )}
-
-      {active && (
-        <CtxCard title="Agentes asignados">
-          <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
-            {active.agents.map((a) => (
-              <span key={a} className="badge badge--blue">
-                {a}
-              </span>
-            ))}
-          </div>
-        </CtxCard>
-      )}
-    </>
-  );
-}
-
 function SkillsContext() {
   const skills = useSkillsWithOverrides();
   const active = skills.filter((s) => s.status === "active").length;
@@ -294,11 +248,10 @@ const CONTEXT_MAP: Partial<Record<RouteId, ReactNode>> = {
   office: <OfficeContext />,
   inbox: <InboxContext />,
   approvals: <ApprovalsContext />,
-  projects: <ProjectsContext />,
   skills: <SkillsContext />,
 };
 
-export const CONTEXT_ROUTES: RouteId[] = ["dashboard", "office", "inbox", "approvals", "projects", "skills"];
+export const CONTEXT_ROUTES: RouteId[] = ["dashboard", "office", "inbox", "approvals", "skills"];
 
 export function ContextPanel({ route }: { route: RouteId }) {
   const content = CONTEXT_MAP[route];

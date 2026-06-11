@@ -23,6 +23,7 @@ export interface RequirementSummary {
   fecha_requerida: string | null;
   cotizacion_codigo: string | null;
   observaciones: string | null;
+  created_at?: string;
 }
 
 // ── Cotización ───────────────────────────────────────────────────────────────
@@ -38,6 +39,7 @@ export interface CotizacionSummary {
   responsable_tecnico: string | null;
   tipo_servicio_nombre: string | null;
   prioridad: string | null;
+  created_at?: string;
 }
 
 // ── Chat context ─────────────────────────────────────────────────────────────
@@ -224,6 +226,7 @@ export interface RequerimientoSearchFilters {
   q?: string;
   estado?: string;
   responsable?: string;
+  recent?: boolean;
 }
 
 export interface RequerimientoSearchResult {
@@ -231,13 +234,13 @@ export interface RequerimientoSearchResult {
   total: number;
 }
 
-const REQUIREMENT_SELECT = "id, codigo, estado, responsable, avance, solicitante_rq, tipo_servicio_nombre, fecha_requerida, cotizacion_codigo, observaciones";
+const REQUIREMENT_SELECT = "id, codigo, estado, responsable, avance, solicitante_rq, tipo_servicio_nombre, fecha_requerida, cotizacion_codigo, observaciones, created_at";
 
 export async function searchRequerimientos(filters: RequerimientoSearchFilters, limit = 20): Promise<RequerimientoSearchResult> {
   let query = supabase
     .from("requerimientos")
     .select(REQUIREMENT_SELECT, { count: "exact" })
-    .order("codigo", { ascending: true })
+    .order(filters.recent ? "created_at" : "codigo", { ascending: !filters.recent })
     .limit(limit);
 
   const q = filters.q?.trim();
@@ -254,20 +257,22 @@ export async function searchRequerimientos(filters: RequerimientoSearchFilters, 
 
 export function buildRequerimientoSearchPrompt(filters: RequerimientoSearchFilters, result: RequerimientoSearchResult): string {
   const filterDesc = [
+    filters.recent ? "más recientes (por fecha de registro)" : "",
     filters.estado ? `estado: ${filters.estado}` : "",
     filters.responsable ? `responsable: ${filters.responsable}` : "",
     filters.q ? `texto: "${filters.q}"` : "",
   ].filter(Boolean).join(", ") || "sin filtros";
 
   if (result.items.length === 0) {
-    return `\n\nBúsqueda en requerimientos (${filterDesc}): no se encontraron resultados. Dile al usuario que no hay requerimientos que coincidan con esos criterios y sugiérele revisar el código, estado o nombre del responsable.`;
+    return `\n\nBúsqueda en requerimientos (${filterDesc}): no se encontraron resultados en la tabla real de Supabase. Dile al usuario que no hay requerimientos que coincidan con esos criterios — no inventes códigos ni proyectos.`;
   }
 
-  let prompt = `\n\nResultados de búsqueda en requerimientos (${filterDesc}) — mostrando ${result.items.length} de ${result.total}:`;
+  let prompt = `\n\nResultados de búsqueda en requerimientos (tabla real de Supabase, ${filterDesc}) — mostrando ${result.items.length} de ${result.total}:`;
   for (const rq of result.items) {
     prompt += `\n- **${rq.codigo}** · Estado: ${rq.estado} · Avance: ${rq.avance ?? "—"}%`;
     if (rq.responsable) prompt += ` · Responsable: ${rq.responsable}`;
     if (rq.cotizacion_codigo) prompt += ` · Cotización: ${rq.cotizacion_codigo}`;
+    if (filters.recent && rq.created_at) prompt += ` · Registrado: ${new Date(rq.created_at).toLocaleDateString("es-PE")}`;
   }
   if (result.total > result.items.length) {
     prompt += `\n\nHay ${result.total - result.items.length} resultado(s) adicionales no mostrados aquí. Si el usuario los necesita, pídele un filtro más específico (estado, responsable o parte del código) para acotar la búsqueda.`;
@@ -284,6 +289,63 @@ export async function fetchAllRequirements(): Promise<RequirementSummary[]> {
 
   if (error || !data) return [];
   return data as RequirementSummary[];
+}
+
+// ── Flexible search across cotizaciones (filter by status/free text,
+// recency-ordered) ───────────────────────────────────────────────────────────
+export interface CotizacionSearchFilters {
+  q?: string;
+  estado?: string;
+  recent?: boolean;
+}
+
+export interface CotizacionSearchResult {
+  items: CotizacionSummary[];
+  total: number;
+}
+
+const COTIZACION_SELECT = "id, codigo, oc, cliente_nombre, proyecto, estado, avance, monto, responsable_tecnico, tipo_servicio_nombre, prioridad, created_at";
+
+export async function searchCotizacionesByFilters(filters: CotizacionSearchFilters, limit = 20): Promise<CotizacionSearchResult> {
+  let query = supabase
+    .from("cotizaciones")
+    .select(COTIZACION_SELECT, { count: "exact" })
+    .order(filters.recent ? "created_at" : "codigo", { ascending: !filters.recent })
+    .limit(limit);
+
+  const q = filters.q?.trim();
+  if (q) {
+    query = query.or(`codigo.ilike.%${q}%,proyecto.ilike.%${q}%,cliente_nombre.ilike.%${q}%,responsable_tecnico.ilike.%${q}%`);
+  }
+  if (filters.estado?.trim()) query = query.ilike("estado", `%${filters.estado.trim()}%`);
+
+  const { data, error, count } = await query;
+  if (error || !data) return { items: [], total: 0 };
+  return { items: data as CotizacionSummary[], total: count ?? data.length };
+}
+
+export function buildCotizacionSearchPrompt(filters: CotizacionSearchFilters, result: CotizacionSearchResult): string {
+  const filterDesc = [
+    filters.recent ? "más recientes (por fecha de registro)" : "",
+    filters.estado ? `estado: ${filters.estado}` : "",
+    filters.q ? `texto: "${filters.q}"` : "",
+  ].filter(Boolean).join(", ") || "sin filtros";
+
+  if (result.items.length === 0) {
+    return `\n\nBúsqueda en cotizaciones (${filterDesc}): no se encontraron resultados en la tabla real de Supabase. Dile al usuario que no hay cotizaciones que coincidan con esos criterios — no inventes códigos ni proyectos.`;
+  }
+
+  let prompt = `\n\nResultados de búsqueda en cotizaciones (tabla real de Supabase, ${filterDesc}) — mostrando ${result.items.length} de ${result.total}:`;
+  for (const cot of result.items) {
+    prompt += `\n- **${cot.codigo}** · Estado: ${cot.estado ?? "—"} · Avance: ${cot.avance ?? "—"}%`;
+    if (cot.cliente_nombre) prompt += ` · Cliente: ${cot.cliente_nombre}`;
+    if (cot.proyecto) prompt += ` · Proyecto: ${cot.proyecto}`;
+    if (filters.recent && cot.created_at) prompt += ` · Registrado: ${new Date(cot.created_at).toLocaleDateString("es-PE")}`;
+  }
+  if (result.total > result.items.length) {
+    prompt += `\n\nHay ${result.total - result.items.length} resultado(s) adicionales no mostrados aquí. Si el usuario los necesita, pídele un filtro más específico (estado, cliente o parte del código) para acotar la búsqueda.`;
+  }
+  return prompt;
 }
 
 // ── Generic project/code reference lookup (with historical-import fallback) ─

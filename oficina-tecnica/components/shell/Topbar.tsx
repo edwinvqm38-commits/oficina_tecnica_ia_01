@@ -29,7 +29,7 @@ export function Topbar({
   return (
     <header className="ig-topbar">
       <div className="ig-topbar-left">
-        <div className="tb-project" onClick={() => navigate("projects")}>
+        <div className="tb-project" onClick={() => navigate("dashboard")}>
           <div className="tb-project-icon">
             <Icons.folder width={12} height={12} />
           </div>

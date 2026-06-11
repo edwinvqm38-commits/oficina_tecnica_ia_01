@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Icons } from "../../lib/icons";
 import { useStore } from "../../lib/store/StoreProvider";
-import { AGENTS, APPROVALS, PROJECTS, SKILLS } from "../../lib/data";
+import { AGENTS, APPROVALS, SKILLS } from "../../lib/data";
 import { ROUTES } from "../../lib/routes";
 
 type SearchResult = { kind: string; route: string; title: string; sub: string; text: string };
@@ -24,9 +24,6 @@ export function GlobalSearch({
 
   const index = useMemo<SearchResult[]>(() => {
     const items: SearchResult[] = [];
-    [...PROJECTS, ...state.customProjects].forEach((p) =>
-      items.push({ kind: "Proyecto", route: "projects", title: p.name, sub: `${p.id} · ${p.client}`, text: `${p.name} ${p.client} ${p.id} ${p.summary || ""}` })
-    );
     [...SKILLS, ...state.customSkills].forEach((s) =>
       items.push({ kind: "Skill", route: "skills", title: s.name, sub: `${s.agent} · ${s.version}`, text: `${s.name} ${s.agent} ${s.trigger || ""}` })
     );
@@ -40,7 +37,7 @@ export function GlobalSearch({
       items.push({ kind: "Agente", route: "chat", title: a.name, sub: a.role, text: `${a.name} ${a.role} ${a.focus}` })
     );
     return items;
-  }, [state.customProjects, state.customSkills, state.knowledge]);
+  }, [state.customSkills, state.knowledge]);
 
   const results = q.trim() ? index.filter((i) => i.text.toLowerCase().includes(q.toLowerCase())).slice(0, 12) : index.slice(0, 8);
 

@@ -238,9 +238,11 @@ Reglas sobre permisos y disponibilidad de datos (usa la frase EXACTA que corresp
 - Si encontraste el registro pero le faltan datos para responder completamente, dilo explícitamente (ej: "el ítem X no tiene precio unitario registrado") en vez de decir solo "está pendiente" o "no se puede".
 
 Sobre tu acceso real a las bases de datos (Supabase):
-- SÍ tienes acceso real, en este mismo turno, a las tablas \`cotizaciones\`, \`requerimientos\` y \`requerimiento_items\`. Cuando arriba aparecen bloques como "Cotización detectada", "Requerimiento:", "Items/materiales del requerimiento (Supabase)", "Resultados de búsqueda en requerimientos", "Proyecto activo" o "Requerimientos relacionados al código", esos datos se acaban de consultar en vivo desde esas tablas — son reales, no inventados por ti ni por el usuario.
-- Si te preguntan si tienes acceso a la tabla/log de requerimientos o cotizaciones, responde que SÍ: consultas esos datos automáticamente cuando el mensaje incluye un código (COT-/RQ-/OC-/PRY-...) o pide una búsqueda/lista (p. ej. "lista los requerimientos pendientes de Juan", "busca RQ en proceso").
-- Si en este turno no aparece ninguno de esos bloques de datos, significa que no se detectó ningún código ni intención de búsqueda en el mensaje — en ese caso pide al usuario el código exacto o que reformule como una búsqueda (ej. "lista/busca/filtra requerimientos..."), en vez de decir que no tienes acceso al sistema.`;
+- SÍ tienes acceso real, en este mismo turno, a las tablas \`cotizaciones\`, \`requerimientos\` y \`requerimiento_items\`. Cuando arriba aparecen bloques como "Cotización detectada", "Requerimiento:", "Items/materiales del requerimiento (Supabase)", "Resultados de búsqueda en requerimientos", "Resultados de búsqueda en cotizaciones", "Proyecto activo" o "Requerimientos relacionados al código", esos datos se acaban de consultar en vivo desde esas tablas — son reales, no inventados por ti ni por el usuario.
+- Si te preguntan si tienes acceso a la tabla/log de requerimientos o cotizaciones, responde que SÍ: consultas esos datos automáticamente cuando el mensaje incluye un código (COT-/RQ-/OC-...) o pide una búsqueda/lista/recuento (p. ej. "lista los requerimientos pendientes de Juan", "busca RQ en proceso", "cuáles son los últimos requerimientos registrados", "dame las 5 cotizaciones más recientes").
+- Si en este turno no aparece ninguno de esos bloques de datos, significa que no se detectó ningún código ni intención de búsqueda en el mensaje — en ese caso pide al usuario el código exacto o que reformule como una búsqueda (ej. "lista/busca/filtra/últimos requerimientos..."), en vez de decir que no tienes acceso al sistema.
+- REGLA CRÍTICA ANTI-INVENCIÓN: si la pregunta es sobre "la tabla/log de requerimientos" o "la tabla/log de cotizaciones" (códigos, listados, últimos registros, estados, clientes, proyectos, etc.) y en este turno NO aparece un bloque "Resultados de búsqueda en requerimientos/cotizaciones" ni un bloque de cotización/requerimiento detectado, NO debes inventar códigos, proyectos, clientes, fechas ni cifras (nunca generes códigos como "RQ-001", "COT-EKA-2026-001", proyectos como "NEXA", etc. si no vienen en estos bloques). En ese caso, dile al usuario que no recibiste resultados de la base de datos para esa consulta y pídele que la reformule (ej. "lista los requerimientos...", "busca cotizaciones de...", "últimos 5 requerimientos registrados") para poder consultarla.
+- Cualquier "Resumen general de la oficina" o "Proyectos personalizados" que aparezca arriba es solo contexto del tablero interno del usuario — NUNCA es lo mismo que "la tabla log de requerimientos" o "la tabla log de cotizaciones" de Supabase, y no debes usarlo para responder preguntas sobre esas tablas.`;
 
 // ── "Do you have access to the data?" meta-questions ────────────────────────
 // Small/fast models (e.g. groq/llama-3.1-8b-instant) tend to ignore the
@@ -333,8 +335,15 @@ export function detectDocumentCodes(text: string): DocumentCode[] {
 // de Juan", "filtra RQ en proceso") ─────────────────────────────────────────
 // Lets agents query the requerimientos table by status/responsible/free
 // text instead of only matching an exact code pasted in the message.
-const SEARCH_VERB_RE = /\b(busca|buscar|busco|busc[aá]me|lista|listar|list[aá]me|mu[eé]stra|mu[eé]strame|mu[eé]stranos|filtra|filtrar|encuentra|encontrar|enc[uú]entrame)\b/i;
+const SEARCH_VERB_RE = /\b(busca|buscar|busco|busc[aá]me|lista|listar|list[aá]me|mu[eé]stra|mu[eé]strame|mu[eé]stranos|filtra|filtrar|encuentra|encontrar|enc[uú]entrame|dame|dime|cu[aá]l(?:es)?\s+(?:es|son))\b/i;
 const REQ_NOUN_RE = /\brequerimientos?\b|\brqs?\b/i;
+const COT_NOUN_RE = /\bcotizaci[oó]n(?:es)?\b|\bcots?\b/i;
+
+// "últimos/recientes/recién registrados" → trigger a recency-ordered query
+// even without a search verb (e.g. "¿cuáles son los últimos requerimientos
+// registrados?", "dame las 5 cotizaciones más recientes").
+const RECENT_RE = /\b(últim[oa]s?|reci[eé]n(?:temente)?|recientes?|nuevos?|m[aá]s\s+nuevas?)\b/i;
+const RECENT_COUNT_RE = /\b(\d{1,2})\b/;
 
 const ESTADO_KEYWORDS: Array<[RegExp, string]> = [
   [/\bpendientes?\b/i, "Pendiente"],
@@ -346,17 +355,23 @@ export interface RequerimientoSearchIntent {
   estado?: string;
   responsable?: string;
   q?: string;
+  recent?: boolean;
+  limit?: number;
 }
 
 /**
  * Detects "search/list/filter requerimientos" intent in free text and
- * extracts simple filters (estado, responsable). Returns null when the
- * message isn't a search request — callers should fall back to the usual
- * exact-code lookups in that case.
+ * extracts simple filters (estado, responsable). Also detects recency
+ * questions ("últimos N requerimientos registrados/actualizados") even
+ * without a search verb. Returns null when the message isn't a search
+ * request — callers should fall back to the usual exact-code lookups.
  */
 export function detectRequerimientoSearchIntent(cleanText: string): RequerimientoSearchIntent | null {
   const t = cleanText.trim();
-  if (!t || !SEARCH_VERB_RE.test(t) || !REQ_NOUN_RE.test(t)) return null;
+  if (!t || !REQ_NOUN_RE.test(t)) return null;
+
+  const isRecent = RECENT_RE.test(t);
+  if (!isRecent && !SEARCH_VERB_RE.test(t)) return null;
 
   const intent: RequerimientoSearchIntent = {};
   for (const [re, estado] of ESTADO_KEYWORDS) {
@@ -366,6 +381,44 @@ export function detectRequerimientoSearchIntent(cleanText: string): Requerimient
   const respMatch = t.match(/responsable\s+(?:es\s+|de\s+)?([A-Za-zÀ-ÿ.]+(?:\s+[A-Za-zÀ-ÿ.]+){0,2})/i)
     ?? t.match(/\bde\s+([A-ZÀ-Ý][A-Za-zÀ-ÿ.]+(?:\s+[A-ZÀ-Ý][A-Za-zÀ-ÿ.]+){0,2})\b/);
   if (respMatch) intent.responsable = respMatch[1].trim();
+
+  if (isRecent) {
+    intent.recent = true;
+    const numMatch = t.match(RECENT_COUNT_RE);
+    intent.limit = numMatch ? Math.min(Math.max(parseInt(numMatch[1], 10), 1), 20) : 5;
+  }
+
+  return intent;
+}
+
+export interface CotizacionSearchIntent {
+  estado?: string;
+  q?: string;
+  recent?: boolean;
+  limit?: number;
+}
+
+/**
+ * Same as detectRequerimientoSearchIntent but for "cotizaciones"
+ * ("últimas cotizaciones registradas", "lista cotizaciones pendientes").
+ */
+export function detectCotizacionSearchIntent(cleanText: string): CotizacionSearchIntent | null {
+  const t = cleanText.trim();
+  if (!t || !COT_NOUN_RE.test(t)) return null;
+
+  const isRecent = RECENT_RE.test(t);
+  if (!isRecent && !SEARCH_VERB_RE.test(t)) return null;
+
+  const intent: CotizacionSearchIntent = {};
+  for (const [re, estado] of ESTADO_KEYWORDS) {
+    if (re.test(t)) { intent.estado = estado; break; }
+  }
+
+  if (isRecent) {
+    intent.recent = true;
+    const numMatch = t.match(RECENT_COUNT_RE);
+    intent.limit = numMatch ? Math.min(Math.max(parseInt(numMatch[1], 10), 1), 20) : 5;
+  }
 
   return intent;
 }

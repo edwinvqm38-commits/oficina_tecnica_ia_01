@@ -7,7 +7,6 @@ export type RouteId =
   | "chat"
   | "inbox"
   | "approvals"
-  | "projects"
   | "operaciones"
   | "cotizaciones"
   | "requerimientos"
@@ -57,7 +56,6 @@ export const ROUTE_GROUPS: SidebarGroup[] = [
   {
     label: "Gestión de Proyectos",
     items: [
-      { id: "projects", label: "Proyectos", path: "/proyectos", icon: "projects" },
       {
         id: "operaciones",
         label: "Operaciones SGP",

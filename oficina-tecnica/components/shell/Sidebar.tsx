@@ -5,7 +5,7 @@ import Link from "next/link";
 import { Icons } from "../../lib/icons";
 import { ROUTE_GROUPS, type RouteDef } from "../../lib/routes";
 import { useStore, useSkillsWithOverrides, usePendingApprovalsCount } from "../../lib/store/StoreProvider";
-import { KNOWLEDGE, PROJECTS } from "../../lib/data";
+import { KNOWLEDGE } from "../../lib/data";
 import { useSession } from "../../lib/auth/useSession";
 import { usePendingUsersCount } from "../../lib/auth/usePendingUsersCount";
 import { useSectionAccess } from "../../lib/auth/useSectionAccess";
@@ -109,11 +109,9 @@ export function Sidebar({ activeRoute }: { activeRoute: string }) {
   const pendingUsers = usePendingUsersCount(isAdmin);
   const skills = useSkillsWithOverrides();
   const proposedKB = [...KNOWLEDGE, ...state.knowledge].filter((k) => k.status === "proposed").length;
-  const totalProjects = PROJECTS.length + state.customProjects.length;
 
   const badges: Partial<Record<string, number | null>> = {
     approvals: pendingApprovals || null,
-    projects: totalProjects || null,
     skills: skills.length || null,
     memory: proposedKB || null,
     "admin-users": pendingUsers || null,

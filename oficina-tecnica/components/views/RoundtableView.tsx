@@ -3,15 +3,15 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { PageHeader } from "../shell/PageHeader";
 import { useStore, useSkillsWithOverrides } from "../../lib/store/StoreProvider";
-import { agentById, AGENTS, PROJECTS, APPROVALS, ALERTS } from "../../lib/data";
+import { agentById, AGENTS, PROJECTS } from "../../lib/data";
 import type { Skill } from "../../lib/types";
 import { agentAvatarClass } from "./shared";
 import { sendChatWithFallback, getOllamaModels } from "../../lib/llm/providers";
 import { routeRequest } from "../../lib/llm/modelRouter";
 import type { ChatMessage } from "../../lib/llm/providers";
-import { parseInput, isSimpleMessage, isTeamMessage, hasClearIntent, detectDocumentCodes, detectOtherCodes, detectRequerimientoSearchIntent, slugForUser, HUMANIZE_CTX } from "../../lib/chat/messageUtils";
+import { parseInput, isSimpleMessage, isTeamMessage, hasClearIntent, detectDocumentCodes, detectOtherCodes, detectRequerimientoSearchIntent, detectCotizacionSearchIntent, slugForUser, HUMANIZE_CTX } from "../../lib/chat/messageUtils";
 import type { UserDirectory } from "../../lib/chat/messageUtils";
-import { buildContextPrompt, buildRequirementItemsPrompt, fetchCotizacionByCode, fetchRequirementByCode, fetchRequirementItems, fetchProjectContextByCode, buildProjectReferencePrompt, cotizacionToProject, searchRequerimientos, buildRequerimientoSearchPrompt } from "../../lib/chat/contextQuery";
+import { buildContextPrompt, buildRequirementItemsPrompt, fetchCotizacionByCode, fetchRequirementByCode, fetchRequirementItems, fetchProjectContextByCode, buildProjectReferencePrompt, cotizacionToProject, searchRequerimientos, buildRequerimientoSearchPrompt, searchCotizacionesByFilters, buildCotizacionSearchPrompt } from "../../lib/chat/contextQuery";
 import type { ChatCtx } from "../../lib/chat/contextQuery";
 import { MdText } from "../chat/MdText";
 import { HelpPanel } from "../chat/HelpPanel";
@@ -202,27 +202,25 @@ function buildSkillsCtx(agId: string, skills: Skill[]): string {
   return `\n\nSkills activas que debes seguir cuando el tema lo amerite:\n${blocks.join("\n")}`;
 }
 
-// Always-on, short snapshot of the office's current state (portfolio,
-// pending approvals, alerts) so any agent can place a question in context
-// even if the user doesn't mention a specific project/code.
+// Always-on, short snapshot of office-level context so any agent can place
+// a question in context even if the user doesn't mention a specific
+// project/code. IMPORTANT: this must NEVER include the demo/mock portfolio
+// from lib/data.ts (PROJECTS/APPROVALS/ALERTS) — those are fictional sample
+// records and agents were conflating them with the real Supabase tables
+// (cotizaciones/requerimientos), fabricating codes and project names that
+// don't exist. Only real, user-created projects (state.customProjects) are
+// summarized here.
 function buildPlatformSummary(
-  projects: { id: string; name: string; client: string; status: string; progress: number; nextMilestone: string; due: string }[],
-  pendingApprovals: { id: string; title: string; agent: string; project: string }[],
-  alerts: { level: string; title: string; message: string }[]
+  customProjects: { id: string; name: string; client: string; status: string; progress: number; nextMilestone: string; due: string }[]
 ): string {
-  const projectLines = projects.slice(0, 6).map((p) =>
+  if (customProjects.length === 0) return "";
+
+  const projectLines = customProjects.slice(0, 6).map((p) =>
     `- ${p.id} ${p.name} (${p.client}): ${p.status}, avance ${p.progress}%, próximo hito "${p.nextMilestone}" (${p.due})`
   );
-  const approvalLines = pendingApprovals.slice(0, 3).map((a) => `- ${a.title} (${a.agent}, ${a.project})`);
-  const alertLines = alerts.slice(0, 3).map((a) => `- [${a.level}] ${a.title}: ${a.message}`);
 
-  return `\n\nResumen general de la oficina (referencia de contexto; no lo repitas a menos que el usuario lo pida):
-Portafolio de proyectos:
-${projectLines.join("\n")}
-Aprobaciones pendientes (${pendingApprovals.length}):
-${approvalLines.length ? approvalLines.join("\n") : "- ninguna"}
-Alertas activas:
-${alertLines.length ? alertLines.join("\n") : "- ninguna"}`;
+  return `\n\nProyectos personalizados registrados por el usuario (referencia de contexto; no lo repitas a menos que el usuario lo pida):
+${projectLines.join("\n")}`;
 }
 
 function fileIcon(type: string, name: string): string {
@@ -363,7 +361,7 @@ function HandRaise({ agentId, modelLabel }: { agentId: string; modelLabel?: stri
 }
 
 export function RoundtableView() {
-  const { state, appendChat, chatFor, approvalStatus, notify } = useStore();
+  const { state, appendChat, chatFor, notify } = useStore();
   const skills = useSkillsWithOverrides();
   const { session } = useSession(false);
   const { online, toggle: toggleOnline } = useOnlineMode();
@@ -547,13 +545,11 @@ export function RoundtableView() {
     // (jokes, small talk) while keeping the usual rigor for work topics.
     const toneCtx = `\n\nTono: si el mensaje del usuario es informal, una broma, comentario o charla casual (no relacionado a costos/cronograma/normas/proyectos), respóndele como lo haría un colega humano cercano: natural, cálido y breve (1-2 líneas), sin forzar negritas, listas ni tu formato técnico habitual. Cuando sí sea una consulta de trabajo, usa tu formato y expertise habitual.`;
 
-    // Always-on snapshot of projects/approvals/alerts, so any agent has
-    // office-wide context even without an explicit project reference.
-    const platformCtx = buildPlatformSummary(
-      allProjects,
-      APPROVALS.filter((a) => approvalStatus(a.id) === "pending"),
-      ALERTS
-    );
+    // Always-on snapshot of the user's own custom projects (if any), so any
+    // agent has that context without an explicit project reference. Demo
+    // data (PROJECTS/APPROVALS/ALERTS from lib/data.ts) is intentionally
+    // excluded — see buildPlatformSummary for why.
+    const platformCtx = buildPlatformSummary(state.customProjects);
 
     // Mesa de trabajo memory is shared across all users in the room (see
     // ROUNDTABLE_MEMORY_ID), so every agent learns from the whole team.
@@ -612,8 +608,16 @@ export function RoundtableView() {
         // exact code pasted in the message.
         const searchIntent = detectRequerimientoSearchIntent(parsed.cleanText);
         if (searchIntent) {
-          const searchResult = await searchRequerimientos(searchIntent, 20).catch(() => ({ items: [], total: 0 }));
+          const searchResult = await searchRequerimientos(searchIntent, searchIntent.limit ?? 20).catch(() => ({ items: [], total: 0 }));
           autoCodeCtx += buildRequerimientoSearchPrompt(searchIntent, searchResult);
+        }
+
+        // Same idea, but for "últimas cotizaciones registradas/recientes"
+        // and "busca/lista cotizaciones ..." over the real cotizaciones table.
+        const cotSearchIntent = detectCotizacionSearchIntent(parsed.cleanText);
+        if (cotSearchIntent) {
+          const cotSearchResult = await searchCotizacionesByFilters(cotSearchIntent, cotSearchIntent.limit ?? 20).catch(() => ({ items: [], total: 0 }));
+          autoCodeCtx += buildCotizacionSearchPrompt(cotSearchIntent, cotSearchResult);
         }
       } catch (err) {
         if (process.env.NODE_ENV !== "production") console.debug("[RoundtableView] autoCodeCtx error", err);

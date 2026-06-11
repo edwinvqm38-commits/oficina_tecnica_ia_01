@@ -8,11 +8,11 @@ import { agentAvatarClass } from "./shared";
 import { sendChatWithFallback, getOllamaModels } from "../../lib/llm/providers";
 import { routeRequest } from "../../lib/llm/modelRouter";
 import type { ChatMessage } from "../../lib/llm/providers";
-import { parseInput, isSimpleMessage, detectDocumentCodes, detectOtherCodes, detectRequerimientoSearchIntent, HUMANIZE_CTX } from "../../lib/chat/messageUtils";
+import { parseInput, isSimpleMessage, detectDocumentCodes, detectOtherCodes, detectRequerimientoSearchIntent, detectCotizacionSearchIntent, HUMANIZE_CTX } from "../../lib/chat/messageUtils";
 import { MdText } from "../chat/MdText";
 import { HelpPanel } from "../chat/HelpPanel";
 import { ChatAutoInput } from "../chat/ChatAutoInput";
-import { buildContextPrompt, buildRequirementItemsPrompt, fetchCotizacionByCode, fetchRequirementByCode, fetchRequirementItems, fetchProjectContextByCode, buildProjectReferencePrompt, cotizacionToProject, searchRequerimientos, buildRequerimientoSearchPrompt } from "../../lib/chat/contextQuery";
+import { buildContextPrompt, buildRequirementItemsPrompt, fetchCotizacionByCode, fetchRequirementByCode, fetchRequirementItems, fetchProjectContextByCode, buildProjectReferencePrompt, cotizacionToProject, searchRequerimientos, buildRequerimientoSearchPrompt, searchCotizacionesByFilters, buildCotizacionSearchPrompt } from "../../lib/chat/contextQuery";
 import type { ChatCtx } from "../../lib/chat/contextQuery";
 import { useSession } from "../../lib/auth/useSession";
 import { saveConversation, loadConversationHistory } from "../../lib/memory/conversationMemory";
@@ -277,8 +277,16 @@ export function ChatView() {
         // exact code pasted in the message.
         const searchIntent = detectRequerimientoSearchIntent(parsed.cleanText);
         if (searchIntent) {
-          const searchResult = await searchRequerimientos(searchIntent, 20).catch(() => ({ items: [], total: 0 }));
+          const searchResult = await searchRequerimientos(searchIntent, searchIntent.limit ?? 20).catch(() => ({ items: [], total: 0 }));
           autoCodeCtx += buildRequerimientoSearchPrompt(searchIntent, searchResult);
+        }
+
+        // Same idea, but for "últimas cotizaciones registradas/recientes"
+        // and "busca/lista cotizaciones ..." over the real cotizaciones table.
+        const cotSearchIntent = detectCotizacionSearchIntent(parsed.cleanText);
+        if (cotSearchIntent) {
+          const cotSearchResult = await searchCotizacionesByFilters(cotSearchIntent, cotSearchIntent.limit ?? 20).catch(() => ({ items: [], total: 0 }));
+          autoCodeCtx += buildCotizacionSearchPrompt(cotSearchIntent, cotSearchResult);
         }
       } catch (err) {
         if (process.env.NODE_ENV !== "production") console.debug("[ChatView] autoCodeCtx error", err);
