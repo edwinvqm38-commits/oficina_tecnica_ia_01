@@ -1,5 +1,6 @@
 import type { ModelConfig, LLMProvider } from "./providers";
 import { isOllamaEnabled } from "./providers";
+import { isDataAccessQuestion } from "../chat/messageUtils";
 
 export type RequestComplexity = "simple" | "technical" | "analytical" | "generative";
 
@@ -75,7 +76,11 @@ export function routeRequest(
     }
   }
 
-  const isDeep = complexity === "analytical" || complexity === "generative";
+  // Meta-questions about the agent's own capabilities/data access ("¿tienes
+  // acceso a la tabla de requerimientos?") need a model that can actually
+  // reason over the HUMANIZE_CTX rules — small/fast models tend to ignore
+  // them and flatly say "no tengo acceso". Route these to the bigger model.
+  const isDeep = complexity === "analytical" || complexity === "generative" || isDataAccessQuestion(text);
 
   if (geminiKey) {
     const model = isDeep ? "gemini-1.5-pro" : "gemini-1.5-flash";

@@ -246,21 +246,13 @@ Sobre tu acceso real a las bases de datos (Supabase):
 // Small/fast models (e.g. groq/llama-3.1-8b-instant) tend to ignore the
 // nuanced HUMANIZE_CTX rules above and flatly answer "no tengo acceso" when
 // asked about their own capabilities — even right after using real Supabase
-// data. Answer these meta-questions deterministically (no LLM call) so the
-// answer is always correct and consistent regardless of model quality.
+// data. modelRouter routes these meta-questions to a more capable model
+// (the "deep" tier) so the answer reflects HUMANIZE_CTX correctly.
 const DATA_ACCESS_QUESTION_RE = /\b(tienes?|tienen|ten[ée]s)\s+acceso\b[^?.]*\b(tabla|tablas|base\s+de\s+datos|bd|log|datos)\b|\bacceso\s+a\s+(la\s+|las\s+)?(tabla|tablas|base\s+de\s+datos|bd|log)\b|\bqu[eé]\s+(tablas|bases\s+de\s+datos)\s+(puedes|pueden|tienes|tienen)\b/i;
 
 export function isDataAccessQuestion(cleanText: string): boolean {
   return DATA_ACCESS_QUESTION_RE.test(cleanText.trim());
 }
-
-export const DATA_ACCESS_ANSWER = `Sí: consulto en tiempo real las tablas **Cotizaciones**, **Requerimientos** y los ítems/materiales de cada requerimiento (Supabase).
-
-Te traigo esos datos automáticamente cuando:
-- Mencionas un código (ej. **COT-...**, **RQ-...**, **OC-...**, **PRY-...**), o
-- Pides una búsqueda/lista, ej. "lista los requerimientos pendientes de Juan" o "busca RQ en proceso".
-
-Si en una respuesta anterior no incluí esos datos, es porque no detecté ningún código ni pedido de búsqueda en ese mensaje — dame el código exacto o reformula como una búsqueda y lo consulto.`;
 
 // ── Document code detection ──────────────────────────────────────────────────
 // Detects codes like COT-EKA-2026-001, RQ-001, OC-123 pasted in chat

@@ -9,7 +9,7 @@ import { agentAvatarClass } from "./shared";
 import { sendChatWithFallback, getOllamaModels } from "../../lib/llm/providers";
 import { routeRequest } from "../../lib/llm/modelRouter";
 import type { ChatMessage } from "../../lib/llm/providers";
-import { parseInput, isSimpleMessage, isTeamMessage, hasClearIntent, detectDocumentCodes, detectOtherCodes, detectRequerimientoSearchIntent, isDataAccessQuestion, DATA_ACCESS_ANSWER, slugForUser, HUMANIZE_CTX } from "../../lib/chat/messageUtils";
+import { parseInput, isSimpleMessage, isTeamMessage, hasClearIntent, detectDocumentCodes, detectOtherCodes, detectRequerimientoSearchIntent, slugForUser, HUMANIZE_CTX } from "../../lib/chat/messageUtils";
 import type { UserDirectory } from "../../lib/chat/messageUtils";
 import { buildContextPrompt, buildRequirementItemsPrompt, fetchCotizacionByCode, fetchRequirementByCode, fetchRequirementItems, fetchProjectContextByCode, buildProjectReferencePrompt, cotizacionToProject, searchRequerimientos, buildRequerimientoSearchPrompt } from "../../lib/chat/contextQuery";
 import type { ChatCtx } from "../../lib/chat/contextQuery";
@@ -509,19 +509,6 @@ export function RoundtableView() {
 
     const hasAttachments = (inputCtx?.attachments?.length ?? 0) > 0;
     const responders = agentsForMessage(parsed.cleanText, parsed.targetAgentIds, hasAttachments);
-
-    // "¿Tienes acceso a la tabla de requerimientos/cotizaciones?" — answer
-    // deterministically (no LLM call), since small/fast models tend to
-    // contradict the system-prompt rules and flatly say "no tengo acceso"
-    // even right after using real Supabase data.
-    if (isDataAccessQuestion(parsed.cleanText)) {
-      for (const agId of responders) {
-        appendChat(ROUNDTABLE_THREAD, { role: "agent", agentId: agId, text: DATA_ACCESS_ANSWER, modelLabel: "sistema" });
-      }
-      setBusy(false);
-      return;
-    }
-
     const routing = routeRequest(parsed.cleanText, ollamaModelsRef.current);
 
     // True when the message had no specific target/topic and routed solely

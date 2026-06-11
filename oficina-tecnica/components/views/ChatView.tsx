@@ -8,7 +8,7 @@ import { agentAvatarClass } from "./shared";
 import { sendChatWithFallback, getOllamaModels } from "../../lib/llm/providers";
 import { routeRequest } from "../../lib/llm/modelRouter";
 import type { ChatMessage } from "../../lib/llm/providers";
-import { parseInput, isSimpleMessage, detectDocumentCodes, detectOtherCodes, detectRequerimientoSearchIntent, isDataAccessQuestion, DATA_ACCESS_ANSWER, HUMANIZE_CTX } from "../../lib/chat/messageUtils";
+import { parseInput, isSimpleMessage, detectDocumentCodes, detectOtherCodes, detectRequerimientoSearchIntent, HUMANIZE_CTX } from "../../lib/chat/messageUtils";
 import { MdText } from "../chat/MdText";
 import { HelpPanel } from "../chat/HelpPanel";
 import { ChatAutoInput } from "../chat/ChatAutoInput";
@@ -214,16 +214,6 @@ export function ChatView() {
     appendChat(threadKey, { role: "gg", text: raw });
     setInput("");
     setBusy(true);
-
-    // "¿Tienes acceso a la tabla de requerimientos/cotizaciones?" — answer
-    // deterministically (no LLM call), since small/fast models tend to
-    // contradict the system-prompt rules and flatly say "no tengo acceso"
-    // even right after using real Supabase data.
-    if (isDataAccessQuestion(parsed.cleanText)) {
-      appendChat(threadKey, { role: "agent", text: DATA_ACCESS_ANSWER, agentId, modelLabel: "sistema" });
-      setBusy(false);
-      return;
-    }
 
     const routing = routeRequest(parsed.cleanText, ollamaModelsRef.current);
     setTypingModel(routing.modelLabel);
