@@ -9,7 +9,7 @@ import { agentAvatarClass } from "./shared";
 import { sendChatWithFallback, getOllamaModels } from "../../lib/llm/providers";
 import { routeRequest } from "../../lib/llm/modelRouter";
 import type { ChatMessage } from "../../lib/llm/providers";
-import { parseInput, isSimpleMessage, isTeamMessage, hasClearIntent, detectDocumentCodes, detectOtherCodes, slugForUser, HUMANIZE_CTX } from "../../lib/chat/messageUtils";
+import { parseInput, isSimpleMessage, isTeamMessage, detectDocumentCodes, detectOtherCodes, slugForUser, HUMANIZE_CTX } from "../../lib/chat/messageUtils";
 import type { UserDirectory } from "../../lib/chat/messageUtils";
 import { buildContextPrompt, buildRequirementItemsPrompt, fetchCotizacionByCode, fetchRequirementByCode, fetchRequirementItems, fetchProjectContextByCode, buildProjectReferencePrompt, cotizacionToProject } from "../../lib/chat/contextQuery";
 import type { ChatCtx } from "../../lib/chat/contextQuery";
@@ -143,11 +143,17 @@ export const AGENT_TOPICS: Record<string, string> = {
 // @mención según corresponda. Evita que se llene el chat con saludos repetidos.
 const TEAM_COORDINATOR = "pm";
 
-function agentsForMessage(text: string, targetId: string | null, hasAttachments = false): string[] {
+function agentsForMessage(text: string, targetIds: string[], hasAttachments = false): string[] {
   const allActive = AGENTS.filter((a) => a.type === "agent" && a.status === "active").map((a) => a.id);
 
-  // If user directed to specific agent
-  if (targetId && allActive.includes(targetId)) return [targetId];
+  // If user directed to one or more specific (active AI) agents, those
+  // respond — in the order mentioned. Falls through to the generic logic
+  // below if none of the mentioned ids are active AI agents (e.g. @GG,
+  // which is the human Gerente General and doesn't get an AI reply).
+  if (targetIds.length > 0) {
+    const targeted = targetIds.filter((id) => allActive.includes(id));
+    if (targeted.length > 0) return targeted;
+  }
 
   // "buenos días a todos" / team messages → only the coordinator responds
   // briefly and points to the right specialist via @mención.
@@ -478,7 +484,10 @@ export function RoundtableView() {
     // ("Buenos días @gg", "Gracias @ic", "@gg estamos revisando esto") only
     // shows the visual mention — no agent reply.
     const aiCommand = raw.trim().match(AI_COMMAND_RE);
-    const mentionWithIntent = !!parsed.targetAgentId && hasClearIntent(parsed.cleanText);
+    // Any direct @mention of an agent (with some message content beyond the
+    // mention itself) activates that agent — "IA: por mención" means
+    // mentioning @IC/@PM/@IE is enough, regardless of phrasing/punctuation.
+    const mentionWithIntent = parsed.targetAgentIds.length > 0 && parsed.cleanText.trim().length > 0;
     const shouldRespond = !!aiCommand || mentionWithIntent || aiAssist;
     if (!shouldRespond) return;
     if (aiCommand) {
@@ -488,13 +497,13 @@ export function RoundtableView() {
     setBusy(true);
 
     const hasAttachments = (inputCtx?.attachments?.length ?? 0) > 0;
-    const responders = agentsForMessage(parsed.cleanText, parsed.targetAgentId, hasAttachments);
+    const responders = agentsForMessage(parsed.cleanText, parsed.targetAgentIds, hasAttachments);
     const routing = routeRequest(parsed.cleanText, ollamaModelsRef.current);
 
     // True when the message had no specific target/topic and routed solely
     // to the team coordinator — it should briefly point to the right
     // specialist instead of trying to cover every domain.
-    const isCoordinatorRouting = !parsed.targetAgentId
+    const isCoordinatorRouting = parsed.targetAgentIds.length === 0
       && responders.length === 1 && responders[0] === TEAM_COORDINATOR
       && (isTeamMessage(parsed.cleanText) || isSimpleMessage(parsed.cleanText));
 
