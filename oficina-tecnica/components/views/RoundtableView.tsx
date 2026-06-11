@@ -9,7 +9,7 @@ import { agentAvatarClass } from "./shared";
 import { sendChatWithFallback, getOllamaModels } from "../../lib/llm/providers";
 import { routeRequest } from "../../lib/llm/modelRouter";
 import type { ChatMessage } from "../../lib/llm/providers";
-import { parseInput, isSimpleMessage, isTeamMessage, detectDocumentCodes, detectOtherCodes, slugForUser, HUMANIZE_CTX } from "../../lib/chat/messageUtils";
+import { parseInput, isSimpleMessage, isTeamMessage, hasClearIntent, detectDocumentCodes, detectOtherCodes, slugForUser, HUMANIZE_CTX } from "../../lib/chat/messageUtils";
 import type { UserDirectory } from "../../lib/chat/messageUtils";
 import { buildContextPrompt, buildRequirementItemsPrompt, fetchCotizacionByCode, fetchRequirementByCode, fetchRequirementItems, fetchProjectContextByCode, buildProjectReferencePrompt, cotizacionToProject } from "../../lib/chat/contextQuery";
 import type { ChatCtx } from "../../lib/chat/contextQuery";
@@ -488,7 +488,12 @@ export function RoundtableView() {
     // mention itself) activates that agent — "IA: por mención" means
     // mentioning @IC/@PM/@IE is enough, regardless of phrasing/punctuation.
     const mentionWithIntent = parsed.targetAgentIds.length > 0 && parsed.cleanText.trim().length > 0;
-    const shouldRespond = !!aiCommand || mentionWithIntent || aiAssist;
+    // "@todos" / "@equipo" with a real question or instruction (not just a
+    // greeting) is answered by the team coordinator — a bare "@todos hola"
+    // still doesn't trigger an AI reply, only the human notification.
+    const teamWithIntent = parsed.targetAgentIds.length === 0
+      && isTeamMessage(raw) && hasClearIntent(parsed.cleanText);
+    const shouldRespond = !!aiCommand || mentionWithIntent || teamWithIntent || aiAssist;
     if (!shouldRespond) return;
     if (aiCommand) {
       parsed.cleanText = parsed.cleanText.replace(AI_COMMAND_RE, "").trim() || parsed.cleanText;

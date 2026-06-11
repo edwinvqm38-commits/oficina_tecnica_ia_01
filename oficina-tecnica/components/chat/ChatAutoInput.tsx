@@ -271,7 +271,10 @@ export function ChatAutoInput({ value, onChange, onSubmit, placeholder, disabled
         }));
       }
     } else {
-      options = SLASH_COMMANDS.filter((c) => c.id.startsWith(cmd) || cmd === "");
+      // Once the command is fully typed (e.g. "/ayuda"), drop it from the
+      // suggestions so Enter submits the message instead of re-inserting
+      // the same text and leaving the user stuck unable to send "/ayuda".
+      options = SLASH_COMMANDS.filter((c) => cmd === "" || (c.id.startsWith(cmd) && c.id !== cmd));
     }
   }
 
