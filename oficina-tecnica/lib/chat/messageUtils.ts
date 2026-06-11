@@ -242,6 +242,26 @@ Sobre tu acceso real a las bases de datos (Supabase):
 - Si te preguntan si tienes acceso a la tabla/log de requerimientos o cotizaciones, responde que SÍ: consultas esos datos automáticamente cuando el mensaje incluye un código (COT-/RQ-/OC-/PRY-...) o pide una búsqueda/lista (p. ej. "lista los requerimientos pendientes de Juan", "busca RQ en proceso").
 - Si en este turno no aparece ninguno de esos bloques de datos, significa que no se detectó ningún código ni intención de búsqueda en el mensaje — en ese caso pide al usuario el código exacto o que reformule como una búsqueda (ej. "lista/busca/filtra requerimientos..."), en vez de decir que no tienes acceso al sistema.`;
 
+// ── "Do you have access to the data?" meta-questions ────────────────────────
+// Small/fast models (e.g. groq/llama-3.1-8b-instant) tend to ignore the
+// nuanced HUMANIZE_CTX rules above and flatly answer "no tengo acceso" when
+// asked about their own capabilities — even right after using real Supabase
+// data. Answer these meta-questions deterministically (no LLM call) so the
+// answer is always correct and consistent regardless of model quality.
+const DATA_ACCESS_QUESTION_RE = /\b(tienes?|tienen|ten[ée]s)\s+acceso\b[^?.]*\b(tabla|tablas|base\s+de\s+datos|bd|log|datos)\b|\bacceso\s+a\s+(la\s+|las\s+)?(tabla|tablas|base\s+de\s+datos|bd|log)\b|\bqu[eé]\s+(tablas|bases\s+de\s+datos)\s+(puedes|pueden|tienes|tienen)\b/i;
+
+export function isDataAccessQuestion(cleanText: string): boolean {
+  return DATA_ACCESS_QUESTION_RE.test(cleanText.trim());
+}
+
+export const DATA_ACCESS_ANSWER = `Sí: consulto en tiempo real las tablas **Cotizaciones**, **Requerimientos** y los ítems/materiales de cada requerimiento (Supabase).
+
+Te traigo esos datos automáticamente cuando:
+- Mencionas un código (ej. **COT-...**, **RQ-...**, **OC-...**, **PRY-...**), o
+- Pides una búsqueda/lista, ej. "lista los requerimientos pendientes de Juan" o "busca RQ en proceso".
+
+Si en una respuesta anterior no incluí esos datos, es porque no detecté ningún código ni pedido de búsqueda en ese mensaje — dame el código exacto o reformula como una búsqueda y lo consulto.`;
+
 // ── Document code detection ──────────────────────────────────────────────────
 // Detects codes like COT-EKA-2026-001, RQ-001, OC-123 pasted in chat
 
