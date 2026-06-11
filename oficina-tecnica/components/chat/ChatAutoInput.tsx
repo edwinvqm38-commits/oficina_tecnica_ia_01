@@ -128,6 +128,8 @@ async function readFileAsDataUrl(file: File): Promise<string | undefined> {
   });
 }
 
+export type Mentionable = { slug: string; displayName: string; email: string };
+
 interface Props {
   value: string;
   onChange: (v: string) => void;
@@ -135,9 +137,17 @@ interface Props {
   placeholder?: string;
   disabled?: boolean;
   defaultProjectId?: string;
+  mentionables?: Mentionable[];
 }
 
-export function ChatAutoInput({ value, onChange, onSubmit, placeholder, disabled, defaultProjectId }: Props) {
+const TEAM_OPTION: DropdownOption = {
+  id: "team-todos", label: "@todos", desc: "Mencionar a todo el equipo",
+  color: "#b91c1c", bg: "#fef2f2", border: "#fecaca", insert: "@todos ",
+};
+
+const MAX_USER_OPTIONS = 8;
+
+export function ChatAutoInput({ value, onChange, onSubmit, placeholder, disabled, defaultProjectId, mentionables = [] }: Props) {
   const router = useRouter();
   const [cursor, setCursor] = useState(0);
   const [selectedIdx, setSelectedIdx] = useState(0);
@@ -209,7 +219,15 @@ export function ChatAutoInput({ value, onChange, onSubmit, placeholder, disabled
     replaceLen = cursor - atMatch.from;
     const q = atMatch.query;
     const agentOpts = AGENT_OPTIONS.filter((o) => o.id.startsWith(q) || q === "");
-    options = agentOpts;
+    const teamOpts = "todos".startsWith(q) || q === "" ? [TEAM_OPTION] : [];
+    const userOpts: DropdownOption[] = mentionables
+      .filter((u) => q === "" || u.slug.toLowerCase().startsWith(q) || u.displayName.toLowerCase().startsWith(q))
+      .slice(0, MAX_USER_OPTIONS)
+      .map((u) => ({
+        id: `user-${u.email}`, label: `@${u.displayName}`, desc: u.email,
+        color: "#334155", bg: "#f1f5f9", border: "#cbd5e1", insert: `@${u.slug} `,
+      }));
+    options = [...agentOpts, ...teamOpts, ...userOpts];
   } else if (slashMatch) {
     replaceFrom = slashMatch.from;
     replaceLen = cursor - slashMatch.from;

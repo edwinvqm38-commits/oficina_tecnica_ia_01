@@ -1,7 +1,7 @@
 "use client";
 import { useMemo } from "react";
 import type { CSSProperties } from "react";
-import { parseMd, AGENT_FULL_LABELS } from "../../lib/chat/messageUtils";
+import { parseMd, AGENT_FULL_LABELS, type UserDirectory } from "../../lib/chat/messageUtils";
 
 // Texts longer than this render as plain text (no markdown/mention parsing)
 // to keep parseMd's per-line work bounded for very long messages.
@@ -23,13 +23,13 @@ const INVERTED_CHIP: CSSProperties = {
   fontWeight: 700, lineHeight: 1.6, margin: "0 1px",
 };
 
-export function MdText({ text, variant = "default" }: { text: string; variant?: "default" | "inverted" }) {
+export function MdText({ text, variant = "default", userDirectory }: { text: string; variant?: "default" | "inverted"; userDirectory?: UserDirectory }) {
   const segments = useMemo(() => {
     if (text.length > MAX_PARSE_LENGTH) {
       return [{ type: "text" as const, value: text }];
     }
-    return parseMd(text);
-  }, [text]);
+    return parseMd(text, userDirectory);
+  }, [text, userDirectory]);
   const inverted = variant === "inverted";
 
   return (
@@ -60,6 +60,26 @@ export function MdText({ text, variant = "default" }: { text: string; variant?: 
           return (
             <span key={i} style={{ display: "inline-flex", alignItems: "center", background: "#f0fdf4", color: "#166534", border: "1px solid #bbf7d0", borderRadius: 4, padding: "0 5px", fontSize: "0.9em", fontWeight: 700, fontFamily: "var(--mono)", lineHeight: 1.6, margin: "0 1px" }}>
               @{seg.projectId}
+            </span>
+          );
+        }
+        if (seg.type === "user-mention") {
+          if (inverted) {
+            return <span key={i} title={seg.email} style={INVERTED_CHIP}>@{seg.displayName}</span>;
+          }
+          return (
+            <span key={i} title={seg.email} style={{ display: "inline-flex", alignItems: "center", background: "#f1f5f9", color: "#334155", border: "1px solid #cbd5e1", borderRadius: 4, padding: "0 5px", fontSize: "0.9em", fontWeight: 700, lineHeight: 1.6, margin: "0 1px" }}>
+              @{seg.displayName}
+            </span>
+          );
+        }
+        if (seg.type === "team-mention") {
+          if (inverted) {
+            return <span key={i} style={{ ...INVERTED_CHIP, fontWeight: 800 }}>@Todos</span>;
+          }
+          return (
+            <span key={i} style={{ display: "inline-flex", alignItems: "center", background: "#fef2f2", color: "#b91c1c", border: "1px solid #fecaca", borderRadius: 4, padding: "0 5px", fontSize: "0.9em", fontWeight: 800, lineHeight: 1.6, margin: "0 1px" }}>
+              @Todos
             </span>
           );
         }

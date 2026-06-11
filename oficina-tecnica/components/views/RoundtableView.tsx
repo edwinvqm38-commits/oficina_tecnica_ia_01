@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { PageHeader } from "../shell/PageHeader";
 import { useStore, useSkillsWithOverrides } from "../../lib/store/StoreProvider";
 import { agentById, AGENTS, PROJECTS, APPROVALS, ALERTS } from "../../lib/data";
@@ -9,7 +9,8 @@ import { agentAvatarClass } from "./shared";
 import { sendChatWithFallback, getOllamaModels } from "../../lib/llm/providers";
 import { routeRequest } from "../../lib/llm/modelRouter";
 import type { ChatMessage } from "../../lib/llm/providers";
-import { parseInput, isSimpleMessage, isTeamMessage, hasClearIntent, detectDocumentCodes, detectOtherCodes, HUMANIZE_CTX } from "../../lib/chat/messageUtils";
+import { parseInput, isSimpleMessage, isTeamMessage, hasClearIntent, detectDocumentCodes, detectOtherCodes, slugForUser, HUMANIZE_CTX } from "../../lib/chat/messageUtils";
+import type { UserDirectory } from "../../lib/chat/messageUtils";
 import { buildContextPrompt, buildRequirementItemsPrompt, fetchCotizacionByCode, fetchRequirementByCode, fetchRequirementItems, fetchProjectContextByCode, buildProjectReferencePrompt, cotizacionToProject } from "../../lib/chat/contextQuery";
 import type { ChatCtx } from "../../lib/chat/contextQuery";
 import { MdText } from "../chat/MdText";
@@ -18,6 +19,8 @@ import { ChatAutoInput } from "../chat/ChatAutoInput";
 import { useSession } from "../../lib/auth/useSession";
 import { saveConversation, loadConversationHistory } from "../../lib/memory/conversationMemory";
 import { colorForEmail, initialsFor } from "../../lib/presence/avatar";
+import { useApprovedUsers, type ApprovedUser } from "../../lib/presence/useApprovedUsers";
+import { useRoomPresence, presenceStatus, type RoomPresenceEntry } from "../../lib/presence/useRoomPresence";
 
 function useOnlineMode() {
   const [online, setOnline] = useState(true);
@@ -57,6 +60,36 @@ const VISIBLE_MESSAGES_STEP = 50;
 // the agents' long-term memory for it is stored under one shared id instead
 // of being split per user — agents learn from everyone in the room.
 const ROUNDTABLE_MEMORY_ID = "roundtable-shared";
+
+// Dedicated presence channel for "Usuarios en la mesa" — separate from the
+// global "presence:app" channel (PresenceBar) to avoid double-subscribing
+// to the same channel topic.
+const ROOM_PRESENCE_CHANNEL = "presence:roundtable";
+
+// Below this width, the "Usuarios en la mesa" column collapses into a
+// toggleable drawer (Req 5 — responsive layout).
+const NARROW_BREAKPOINT = 1100;
+
+// localStorage key for mention-notification dedup, so reloading the page
+// doesn't re-notify for messages already seen.
+const NOTIFIED_MENTIONS_KEY = "ot:rt:notifiedMentions";
+
+function loadNotifiedMentions(): Set<string> {
+  try {
+    const raw = localStorage.getItem(NOTIFIED_MENTIONS_KEY);
+    return raw ? new Set(JSON.parse(raw)) : new Set();
+  } catch {
+    return new Set();
+  }
+}
+
+function saveNotifiedMentions(ids: Set<string>) {
+  try {
+    localStorage.setItem(NOTIFIED_MENTIONS_KEY, JSON.stringify([...ids].slice(-200)));
+  } catch {
+    // ignore (private browsing / quota)
+  }
+}
 
 const RT_SYSTEM_PROMPTS: Record<string, string> = {
   ic: `Eres Arturo, el Ingeniero de Costos (IC) de EKA Ingeniería, empresa eléctrica peruana.
@@ -219,10 +252,11 @@ function AttachmentChip({ a }: { a: { name: string; size: number; type: string; 
   return <span style={sharedStyle}>{content}</span>;
 }
 
-function RTMessage({ role, text, time, agentId, modelLabel, isError, attachments, userEmail, userName, currentUserEmail, status }: {
+function RTMessage({ role, text, time, agentId, modelLabel, isError, attachments, userEmail, userName, currentUserEmail, status, userDirectory }: {
   role: "gg" | "agent"; text: string; time: string; agentId?: string; modelLabel?: string; isError?: boolean;
   attachments?: { name: string; size: number; type: string; dataUrl?: string }[];
   userEmail?: string; userName?: string; currentUserEmail?: string; status?: "pending" | "sent" | "failed";
+  userDirectory?: UserDirectory;
 }) {
   const isUser = role === "gg";
   const agent = agentId ? agentById(agentId) : null;
@@ -254,7 +288,7 @@ function RTMessage({ role, text, time, agentId, modelLabel, isError, attachments
               {attachments.map((a) => <AttachmentChip key={a.name} a={a} />)}
             </div>
           )}
-          <MdText text={text} variant={isOwn ? "inverted" : "default"} />
+          <MdText text={text} variant={isOwn ? "inverted" : "default"} userDirectory={userDirectory} />
         </div>
         <div style={{ fontSize: 10, color: "var(--t3)", marginTop: 3, display: "flex", gap: 6, alignItems: "center", justifyContent: isOwn ? "flex-end" : "flex-start" }}>
           <span>{time}</span>
@@ -267,6 +301,44 @@ function RTMessage({ role, text, time, agentId, modelLabel, isError, attachments
           )}
         </div>
       </div>
+    </div>
+  );
+}
+
+// "Usuarios en la mesa": lightweight directory of approved users with
+// online/away/offline status derived from the dedicated presence channel.
+function UsersPanel({ users, presence, now, currentUserEmail }: {
+  users: ApprovedUser[];
+  presence: Map<string, RoomPresenceEntry>;
+  now: number;
+  currentUserEmail?: string;
+}) {
+  if (users.length === 0) {
+    return <div style={{ fontSize: 11, color: "var(--t3)" }}>Sin usuarios aprobados.</div>;
+  }
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+      {users.map((u) => {
+        const status = presenceStatus(presence.get(u.email)?.lastActive, now);
+        const dotColor = status === "online" ? "#16a34a" : status === "away" ? "#d97706" : "var(--t3)";
+        const statusLabel = status === "online" ? "En línea" : status === "away" ? "Ausente" : "Desconectado";
+        return (
+          <div key={u.id} style={{ display: "flex", alignItems: "center", gap: 8 }}>
+            <div className="agent-avatar" style={{ width: 24, height: 24, fontSize: 9, background: colorForEmail(u.email), color: "#fff" }}>
+              {initialsFor(u.fullName, u.email)}
+            </div>
+            <div style={{ minWidth: 0, flex: 1 }}>
+              <div style={{ fontSize: 11.5, fontWeight: 600, color: "var(--t1)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                {u.fullName}{u.email === currentUserEmail ? " (tú)" : ""}
+              </div>
+              <div style={{ fontSize: 10, color: "var(--t3)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                {u.role || u.email}
+              </div>
+            </div>
+            <span title={statusLabel} aria-label={statusLabel} style={{ width: 8, height: 8, borderRadius: "50%", background: dotColor, flexShrink: 0 }} />
+          </div>
+        );
+      })}
     </div>
   );
 }
@@ -285,7 +357,7 @@ function HandRaise({ agentId, modelLabel }: { agentId: string; modelLabel?: stri
 }
 
 export function RoundtableView() {
-  const { state, appendChat, chatFor, approvalStatus } = useStore();
+  const { state, appendChat, chatFor, approvalStatus, notify } = useStore();
   const skills = useSkillsWithOverrides();
   const { session } = useSession(false);
   const { online, toggle: toggleOnline } = useOnlineMode();
@@ -295,11 +367,40 @@ export function RoundtableView() {
   const [hands, setHands] = useState<{ agentId: string; modelLabel?: string }[]>([]);
   const [showHelp, setShowHelp] = useState(false);
   const [visibleCount, setVisibleCount] = useState(VISIBLE_MESSAGES_STEP);
+  const [narrow, setNarrow] = useState(false);
+  const [usersDrawerOpen, setUsersDrawerOpen] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
   const ollamaModelsRef = useRef<string[]>([]);
 
   const thread = chatFor(ROUNDTABLE_THREAD);
   const allProjects = [...PROJECTS, ...state.customProjects];
+
+  const senderName = (session?.user.user_metadata?.full_name as string | undefined)
+    || (session?.user.user_metadata?.name as string | undefined)
+    || session?.email;
+
+  const approvedUsers = useApprovedUsers();
+  const { presence, now } = useRoomPresence(ROOM_PRESENCE_CHANNEL, session?.email, senderName);
+
+  // Directory used by parseMd/MdText to render "@FullName" mentions as chips.
+  const userDirectory: UserDirectory = useMemo(() => {
+    const map: UserDirectory = new Map();
+    for (const u of approvedUsers) {
+      if (!u.fullName) continue;
+      map.set(slugForUser(u.fullName).toLowerCase(), { email: u.email, displayName: u.fullName });
+    }
+    return map;
+  }, [approvedUsers]);
+
+  // Suggestions for the @mention dropdown (excluding the current user).
+  const mentionables = useMemo(() =>
+    approvedUsers
+      .filter((u) => u.fullName && u.email !== session?.email)
+      .map((u) => ({ slug: slugForUser(u.fullName), displayName: u.fullName, email: u.email })),
+    [approvedUsers, session?.email]
+  );
+
+  const currentUserSlug = useMemo(() => (senderName ? slugForUser(senderName).toLowerCase() : null), [senderName]);
 
   useEffect(() => {
     if (scrollRef.current) scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
@@ -308,6 +409,39 @@ export function RoundtableView() {
   useEffect(() => {
     getOllamaModels().then((m) => { ollamaModelsRef.current = m; });
   }, []);
+
+  useEffect(() => {
+    function onResize() { setNarrow(window.innerWidth < NARROW_BREAKPOINT); }
+    onResize();
+    window.addEventListener("resize", onResize);
+    return () => window.removeEventListener("resize", onResize);
+  }, []);
+
+  // Mention notifications (Req 4): scan synced messages for "@todos" or
+  // "@<MyFullName>" not sent by the current user, and notify locally —
+  // dedup persisted in localStorage so reloads don't re-notify.
+  useEffect(() => {
+    if (!session?.email || !currentUserSlug) return;
+    const seen = loadNotifiedMentions();
+    let changed = false;
+    for (const m of thread) {
+      if (m.role !== "gg" || m.userEmail === session.email) continue;
+      if (seen.has(m.id)) continue;
+      seen.add(m.id);
+      changed = true;
+      const lower = (m.text || "").toLowerCase();
+      const mentioned = lower.includes("@todos") || lower.includes(`@${currentUserSlug}`);
+      if (mentioned) {
+        notify({
+          kind: "info",
+          title: `${m.userName || m.userEmail || "Alguien"} te mencionó en Mesa de trabajo`,
+          body: m.text.slice(0, 140),
+          route: "/mesa-trabajo",
+        });
+      }
+    }
+    if (changed) saveNotifiedMentions(seen);
+  }, [thread, session?.email, currentUserSlug, notify]);
 
   async function send(rawText?: string, inputCtx?: ChatCtx) {
     const raw = (rawText ?? input).trim();
@@ -330,9 +464,6 @@ export function RoundtableView() {
       ?? (parsed.targetProjectId ? allProjects.find((p) => p.id === parsed.targetProjectId) ?? null : null);
     const userDisplay = raw;
     const attachmentMeta = (inputCtx?.attachments ?? []).map((f) => ({ name: f.name, size: f.size, type: f.type, dataUrl: f.dataUrl }));
-    const senderName = (session?.user.user_metadata?.full_name as string | undefined)
-      || (session?.user.user_metadata?.name as string | undefined)
-      || session?.email;
 
     appendChat(ROUNDTABLE_THREAD, {
       role: "gg", text: userDisplay, attachments: attachmentMeta.length ? attachmentMeta : undefined,
@@ -538,7 +669,7 @@ export function RoundtableView() {
         actions={<span className="badge badge--green badge--dot">IA activa</span>}
       />
 
-      <div style={{ display: "grid", gridTemplateColumns: "230px 1fr", gap: 10, alignItems: "start" }}>
+      <div style={{ display: "grid", gridTemplateColumns: narrow ? "230px 1fr" : "230px 1fr 230px", gap: 10, alignItems: "start" }}>
         <div className="space-y-2">
           <div className="card" style={{ padding: "10px 12px" }}>
             <div style={{ fontSize: 11, fontWeight: 600, color: "var(--t1)", marginBottom: 6 }}>Equipo en la mesa</div>
@@ -595,6 +726,11 @@ export function RoundtableView() {
               <button className="btn btn--ghost btn--sm" style={{ fontSize: 11 }} onClick={() => setShowHelp((v) => !v)}>
                 /ayuda
               </button>
+              {narrow && (
+                <button className="btn btn--ghost btn--sm" style={{ fontSize: 11 }} onClick={() => setUsersDrawerOpen(true)}>
+                  👥 Usuarios
+                </button>
+              )}
             </div>
           </div>
 
@@ -632,7 +768,7 @@ export function RoundtableView() {
               </button>
             )}
             {thread.slice(-visibleCount).map((m) => (
-              <RTMessage key={m.id} role={m.role} text={m.text} time={m.time} agentId={m.agentId} modelLabel={m.modelLabel} isError={m.isError} attachments={m.attachments} userEmail={m.userEmail} userName={m.userName} currentUserEmail={session?.email} status={m.status} />
+              <RTMessage key={m.id} role={m.role} text={m.text} time={m.time} agentId={m.agentId} modelLabel={m.modelLabel} isError={m.isError} attachments={m.attachments} userEmail={m.userEmail} userName={m.userName} currentUserEmail={session?.email} status={m.status} userDirectory={userDirectory} />
             ))}
             {hands.map((h) => (
               <HandRaise key={h.agentId} agentId={h.agentId} modelLabel={h.modelLabel} />
@@ -661,11 +797,38 @@ export function RoundtableView() {
                 onSubmit={(text, ctx) => send(text, ctx)}
                 placeholder={aiAssist ? "Escribe… @IC /proyecto /rq /ayuda" : "Escribe… usa @IC/@PM/@IE o /ia para que el equipo IA responda"}
                 disabled={busy}
+                mentionables={mentionables}
               />
             </div>
           </div>
         </div>
+
+        {!narrow && (
+          <div className="card" style={{ padding: "10px 12px" }}>
+            <div style={{ fontSize: 11, fontWeight: 600, color: "var(--t1)", marginBottom: 6 }}>Usuarios en la mesa</div>
+            <UsersPanel users={approvedUsers} presence={presence} now={now} currentUserEmail={session?.email} />
+          </div>
+        )}
       </div>
+
+      {narrow && usersDrawerOpen && (
+        <div
+          style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,.3)", zIndex: 200, display: "flex", justifyContent: "flex-end" }}
+          onClick={() => setUsersDrawerOpen(false)}
+        >
+          <div
+            className="card"
+            style={{ width: 260, maxWidth: "85vw", height: "100%", borderRadius: 0, padding: 12, overflowY: "auto" }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
+              <div style={{ fontSize: 11, fontWeight: 600, color: "var(--t1)" }}>Usuarios en la mesa</div>
+              <button className="btn btn--ghost btn--sm" onClick={() => setUsersDrawerOpen(false)}>×</button>
+            </div>
+            <UsersPanel users={approvedUsers} presence={presence} now={now} currentUserEmail={session?.email} />
+          </div>
+        </div>
+      )}
     </>
   );
 }

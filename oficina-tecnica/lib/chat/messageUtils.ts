@@ -100,9 +100,19 @@ export type MdSegment =
   | { type: "italic"; value: string }
   | { type: "agent-mention"; agentId: string }
   | { type: "project-mention"; projectId: string }
+  | { type: "user-mention"; email: string; displayName: string }
+  | { type: "team-mention" }
   | { type: "break" };
 
-export function parseMd(text: string): MdSegment[] {
+/** Mention key (lowercased, no spaces) -> directory entry, used to render @UserSlug as a chip. */
+export type UserDirectory = Map<string, { email: string; displayName: string }>;
+
+/** Mention slug for a user's full name — spaces removed (e.g. "Luis Limaylla" -> "LuisLimaylla"). */
+export function slugForUser(fullName: string): string {
+  return fullName.replace(/\s+/g, "");
+}
+
+export function parseMd(text: string, userDirectory?: UserDirectory): MdSegment[] {
   const segments: MdSegment[] = [];
   const lines = text.split("\n");
 
@@ -137,12 +147,33 @@ export function parseMd(text: string): MdSegment[] {
           i += m[0].length;
           continue;
         }
+        // @todos — mentions everyone connected/approved; always rendered as
+        // a chip (independent of userDirectory) so it never falls through
+        // to the unmatched-"@" plain-text path.
+        const teamM = line.slice(i).match(/^@todos\b/i);
+        if (teamM) {
+          segments.push({ type: "team-mention" });
+          i += teamM[0].length;
+          continue;
+        }
         // @PRY-xxx
         const pm2 = line.slice(i).match(/^@(PRY-[\w\d-]+)/i);
         if (pm2) {
           segments.push({ type: "project-mention", projectId: pm2[1].toUpperCase() });
           i += pm2[0].length;
           continue;
+        }
+        // @UserSlug — looked up against the approved-users directory
+        if (userDirectory && userDirectory.size > 0) {
+          const um = line.slice(i).match(/^@([A-Za-z][A-Za-z0-9._'-]*)/);
+          if (um) {
+            const entry = userDirectory.get(um[1].toLowerCase());
+            if (entry) {
+              segments.push({ type: "user-mention", email: entry.email, displayName: entry.displayName });
+              i += um[0].length;
+              continue;
+            }
+          }
         }
       }
       // accumulate plain text
