@@ -110,7 +110,13 @@ export function routeRequest(
       together: togetherKey, huggingface: huggingfaceKey,
     };
     const key = keyMap[prov];
-    if (key || prov === "ollama") {
+    // The server proxy (/api/llm/chat, configured via Vercel env vars) can
+    // serve these providers even without a per-browser API key — so a
+    // manual model assignment for them should be honored regardless of
+    // whether the user has a local key. Anthropic has no server proxy and
+    // needs a local key; Ollama needs availableOllamaModels/baseUrl only.
+    const usableWithoutLocalKey = prov !== "anthropic" && prov !== "ollama";
+    if (key || prov === "ollama" || usableWithoutLocalKey) {
       let model = agentModelOverride.model;
       let reason = "Modelo configurado manualmente";
       let suggestion: string | undefined;
