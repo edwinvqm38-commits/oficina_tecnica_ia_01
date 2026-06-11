@@ -1,5 +1,7 @@
 "use client";
 
+import Link from "next/link";
+
 export function HelpPanel({ onClose }: { onClose: () => void }) {
   const agentChip = (id: string, color: string, border: string, bg: string) => (
     <span style={{ background: bg, color, border: `1px solid ${border}`, borderRadius: 4, padding: "1px 7px", fontFamily: "var(--mono)", fontSize: 11, fontWeight: 700 }}>
@@ -23,7 +25,10 @@ export function HelpPanel({ onClose }: { onClose: () => void }) {
     <div style={{ background: "var(--bg-card)", border: "1px solid var(--blue-border)", borderRadius: "var(--r)", padding: "14px 16px", fontSize: 12, color: "var(--t2)", lineHeight: 1.7 }}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
         <span style={{ fontSize: 13, fontWeight: 700, color: "var(--t1)" }}>Guía de comandos del chat</span>
-        <button className="btn btn--ghost btn--sm" onClick={onClose} style={{ fontSize: 11 }}>Cerrar ✕</button>
+        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+          <Link href="/wiki-agentes" className="btn btn--ghost btn--sm" style={{ fontSize: 11 }}>Ver guía completa →</Link>
+          <button className="btn btn--ghost btn--sm" onClick={onClose} style={{ fontSize: 11 }}>Cerrar ✕</button>
+        </div>
       </div>
 
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>

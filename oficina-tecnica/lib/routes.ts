@@ -23,6 +23,7 @@ export type RouteId =
   | "memory"
   | "timeline"
   | "connections"
+  | "wiki-agentes"
   | "wiki-ia"
   | "admin-users"
   | "settings";
@@ -83,6 +84,7 @@ export const ROUTE_GROUPS: SidebarGroup[] = [
       { id: "memory", label: "Conocimiento", path: "/conocimiento", icon: "memory" },
       { id: "timeline", label: "Línea de tiempo", path: "/linea-tiempo", icon: "clock" },
       { id: "connections", label: "Conexiones de modelos", path: "/conexiones", icon: "link" },
+      { id: "wiki-agentes", label: "Wiki de Agentes IA", path: "/wiki-agentes", icon: "sparkle" },
       { id: "wiki-ia", label: "Wiki IA · Proveedores", path: "/wiki-ia", icon: "memory" },
       { id: "admin-users", label: "Usuarios · Acceso", path: "/admin-usuarios", icon: "user" },
     ],
