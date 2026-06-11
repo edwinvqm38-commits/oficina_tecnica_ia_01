@@ -2,7 +2,6 @@
 
 import { useEffect, useRef, useState } from "react";
 import { PageHeader } from "../shell/PageHeader";
-import { Icons } from "../../lib/icons";
 import { useStore } from "../../lib/store/StoreProvider";
 import { agentById } from "../../lib/data";
 import { agentAvatarClass } from "./shared";
@@ -426,9 +425,6 @@ export function ChatView() {
               placeholder={`Escribe a ${agent.name}… /proyecto /rq /ayuda`}
               disabled={busy}
             />
-            <button className="btn btn--primary" style={{ padding: "9px 14px" }} onClick={() => send()} disabled={busy}>
-              <Icons.arrowRight width={15} height={15} />
-            </button>
           </div>
         </div>
       </div>
