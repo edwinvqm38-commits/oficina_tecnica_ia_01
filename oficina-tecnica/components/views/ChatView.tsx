@@ -165,7 +165,13 @@ export function ChatView() {
 
   useEffect(() => {
     if (scrollRef.current) scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
-  }, [thread.length, busy, showHelp]);
+  }, [thread.length, busy]);
+
+  // The help panel renders at the top of the scroll container — scroll up to
+  // reveal it instead of staying scrolled to the bottom of the thread.
+  useEffect(() => {
+    if (showHelp && scrollRef.current) scrollRef.current.scrollTop = 0;
+  }, [showHelp]);
 
   // Reset to "show last N" whenever the active thread changes (agent switch).
   // Adjusting state during render (React's documented pattern for resetting
