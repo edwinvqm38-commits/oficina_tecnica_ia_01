@@ -293,8 +293,13 @@ export function ChatView() {
     // in memory and is what lets the agent follow up on "ok"/short replies
     // instead of repeating its opening question. Skipped when this message
     // has a new attachment so old projects/files don't leak into context.
+    // Long-term memory from Supabase: only loaded when there's an active
+    // project (chip), and scoped to it — otherwise it tends to surface old,
+    // unrelated conversations right before the current message, confusing
+    // the model into anchoring on stale context instead of the live thread.
+    const ctxProjectId = inputCtx?.project?.id;
     const [supabaseHistory, localHistory] = await Promise.all([
-      simple || hasAttachments ? Promise.resolve([]) : loadConversationHistory(userId, agentId, undefined, 8),
+      simple || hasAttachments || !ctxProjectId ? Promise.resolve([]) : loadConversationHistory(userId, agentId, ctxProjectId, 8),
       Promise.resolve(chatFor(threadKey)),
     ]);
 

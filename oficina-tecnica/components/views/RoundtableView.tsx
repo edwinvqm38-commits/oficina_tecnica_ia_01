@@ -521,25 +521,27 @@ export function RoundtableView() {
     setHands(responders.map((id) => ({ agentId: id, modelLabel: routing.modelLabel })));
 
     // Recent conversation in Mesa de trabajo, shared by everyone in the
-    // room — included for every responding agent (not just the ones that
-    // answered before) so nobody loses track of the project/topic/files
-    // already discussed by the team or other users. Folded into a single
-    // reference block in the system prompt (not as separate chat turns)
-    // so agents don't start mimicking the "Nombre: " label format in
-    // their own replies.
-    const recentLines = thread.slice(-10).flatMap((m): string[] => {
-      if (m.role === "gg") {
-        const sender = m.userName || m.userEmail || "Usuario";
-        const attNote = m.attachments?.length ? ` [adjuntó: ${m.attachments.map((a) => a.name).join(", ")}]` : "";
-        const content = (m.text + attNote).trim();
-        return content ? [`${sender}: ${content}`] : [];
-      }
-      const agentName = m.agentId ? agentById(m.agentId)?.name || m.agentId.toUpperCase() : "Agente";
-      return m.text ? [`${agentName}: ${m.text}`] : [];
-    });
-    const recentThreadCtx = recentLines.length
-      ? `\n\nContexto reciente de la conversación en Mesa de trabajo (referencia para que no pierdas el hilo del proyecto/archivo del que se habla; no repitas el formato "Nombre: " en tu respuesta):\n${recentLines.join("\n")}`
-      : "";
+    // room. Passed as REAL chat turns (not flattened into the system
+    // prompt) so the model treats it as the actual recent exchange when
+    // resolving references like "a qué te refieres" — mirroring how
+    // ChatGPT/Claude carry the live conversation in the message array.
+    // Messages from other agents are included as "user" turns prefixed
+    // with their name, so the responding agent can see what its
+    // teammates said without mistaking it for its own prior replies.
+    function buildThreadHistory(forAgentId: string): ChatMessage[] {
+      return thread.slice(-10).flatMap((m): ChatMessage[] => {
+        if (m.role === "gg") {
+          const sender = m.userName || m.userEmail || "Usuario";
+          const attNote = m.attachments?.length ? ` [adjuntó: ${m.attachments.map((a) => a.name).join(", ")}]` : "";
+          const content = (m.text + attNote).trim();
+          return content ? [{ role: "user", content: `${sender}: ${content}` }] : [];
+        }
+        if (!m.text) return [];
+        if (m.agentId === forAgentId) return [{ role: "assistant", content: m.text }];
+        const agentName = m.agentId ? agentById(m.agentId)?.name || m.agentId.toUpperCase() : "Agente";
+        return [{ role: "user", content: `[${agentName} dijo]: ${m.text}` }];
+      });
+    }
 
     // Encourage natural, human conversation for casual/social messages
     // (jokes, small talk) while keeping the usual rigor for work topics.
@@ -651,14 +653,19 @@ export function RoundtableView() {
         ? buildContextPrompt({ project: null, requirement: ctxRequirement }) + requirementItemsCtx
         : "";
 
-      // Load long-term memory from Supabase for this agent — skipped when the
-      // message has a new attachment so old projects/files don't leak into
-      // the context the agent uses to answer about "this" attachment.
-      const supabaseHistory = simple || hasAttachments ? [] : await loadConversationHistory(userId, agId, activeProject?.id, 6).catch(() => []);
+      // Long-term memory from Supabase for this agent: only loaded when
+      // there's an active project, and scoped to it — otherwise it tends
+      // to surface old, unrelated conversations (different topic/project)
+      // right before the current message, confusing the model into
+      // anchoring on stale context instead of the live conversation.
+      const supabaseHistory = simple || hasAttachments || !activeProject?.id
+        ? []
+        : await loadConversationHistory(userId, agId, activeProject.id, 6).catch(() => []);
 
       const messages: ChatMessage[] = [
-        { role: "system", content: sysPrompt + HUMANIZE_CTX + skillsCtx + platformCtx + projectCtx + requirementCtx + autoCodeCtx + attachmentCtx + recentThreadCtx + toneCtx + brevityCtx + coordinatorCtx },
+        { role: "system", content: sysPrompt + HUMANIZE_CTX + skillsCtx + platformCtx + projectCtx + requirementCtx + autoCodeCtx + attachmentCtx + toneCtx + brevityCtx + coordinatorCtx },
         ...supabaseHistory.map((m) => ({ role: m.role as "user" | "assistant", content: m.content })),
+        ...buildThreadHistory(agId),
         { role: "user", content: parsed.cleanText + fileCtx },
       ];
 
