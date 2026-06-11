@@ -311,3 +311,44 @@ export function detectDocumentCodes(text: string): DocumentCode[] {
 
   return results;
 }
+
+// ── Free-form search intent ("busca/lista los requerimientos pendientes
+// de Juan", "filtra RQ en proceso") ─────────────────────────────────────────
+// Lets agents query the requerimientos table by status/responsible/free
+// text instead of only matching an exact code pasted in the message.
+const SEARCH_VERB_RE = /\b(busca|buscar|busco|busc[aá]me|lista|listar|list[aá]me|mu[eé]stra|mu[eé]strame|mu[eé]stranos|filtra|filtrar|encuentra|encontrar|enc[uú]entrame)\b/i;
+const REQ_NOUN_RE = /\brequerimientos?\b|\brqs?\b/i;
+
+const ESTADO_KEYWORDS: Array<[RegExp, string]> = [
+  [/\bpendientes?\b/i, "Pendiente"],
+  [/\ben\s+proceso\b|\ben\s+curso\b/i, "En proceso"],
+  [/\batendidos?\b|\bcompletados?\b|\bfinalizados?\b|\bculminados?\b/i, "Atendido"],
+];
+
+export interface RequerimientoSearchIntent {
+  estado?: string;
+  responsable?: string;
+  q?: string;
+}
+
+/**
+ * Detects "search/list/filter requerimientos" intent in free text and
+ * extracts simple filters (estado, responsable). Returns null when the
+ * message isn't a search request — callers should fall back to the usual
+ * exact-code lookups in that case.
+ */
+export function detectRequerimientoSearchIntent(cleanText: string): RequerimientoSearchIntent | null {
+  const t = cleanText.trim();
+  if (!t || !SEARCH_VERB_RE.test(t) || !REQ_NOUN_RE.test(t)) return null;
+
+  const intent: RequerimientoSearchIntent = {};
+  for (const [re, estado] of ESTADO_KEYWORDS) {
+    if (re.test(t)) { intent.estado = estado; break; }
+  }
+
+  const respMatch = t.match(/responsable\s+(?:es\s+|de\s+)?([A-Za-zÀ-ÿ.]+(?:\s+[A-Za-zÀ-ÿ.]+){0,2})/i)
+    ?? t.match(/\bde\s+([A-ZÀ-Ý][A-Za-zÀ-ÿ.]+(?:\s+[A-ZÀ-Ý][A-Za-zÀ-ÿ.]+){0,2})\b/);
+  if (respMatch) intent.responsable = respMatch[1].trim();
+
+  return intent;
+}

@@ -218,6 +218,63 @@ export function buildRequirementItemsPrompt(items: RequirementItemSummary[]): st
   return prompt;
 }
 
+// ── Flexible search across requerimientos (filter by status/responsible/
+// free text, paginated) ─────────────────────────────────────────────────────
+export interface RequerimientoSearchFilters {
+  q?: string;
+  estado?: string;
+  responsable?: string;
+}
+
+export interface RequerimientoSearchResult {
+  items: RequirementSummary[];
+  total: number;
+}
+
+const REQUIREMENT_SELECT = "id, codigo, estado, responsable, avance, solicitante_rq, tipo_servicio_nombre, fecha_requerida, cotizacion_codigo, observaciones";
+
+export async function searchRequerimientos(filters: RequerimientoSearchFilters, limit = 20): Promise<RequerimientoSearchResult> {
+  let query = supabase
+    .from("requerimientos")
+    .select(REQUIREMENT_SELECT, { count: "exact" })
+    .order("codigo", { ascending: true })
+    .limit(limit);
+
+  const q = filters.q?.trim();
+  if (q) {
+    query = query.or(`codigo.ilike.%${q}%,cotizacion_codigo.ilike.%${q}%,responsable.ilike.%${q}%,solicitante_rq.ilike.%${q}%,observaciones.ilike.%${q}%`);
+  }
+  if (filters.estado?.trim()) query = query.ilike("estado", `%${filters.estado.trim()}%`);
+  if (filters.responsable?.trim()) query = query.ilike("responsable", `%${filters.responsable.trim()}%`);
+
+  const { data, error, count } = await query;
+  if (error || !data) return { items: [], total: 0 };
+  return { items: data as RequirementSummary[], total: count ?? data.length };
+}
+
+export function buildRequerimientoSearchPrompt(filters: RequerimientoSearchFilters, result: RequerimientoSearchResult): string {
+  const filterDesc = [
+    filters.estado ? `estado: ${filters.estado}` : "",
+    filters.responsable ? `responsable: ${filters.responsable}` : "",
+    filters.q ? `texto: "${filters.q}"` : "",
+  ].filter(Boolean).join(", ") || "sin filtros";
+
+  if (result.items.length === 0) {
+    return `\n\nBúsqueda en requerimientos (${filterDesc}): no se encontraron resultados. Dile al usuario que no hay requerimientos que coincidan con esos criterios y sugiérele revisar el código, estado o nombre del responsable.`;
+  }
+
+  let prompt = `\n\nResultados de búsqueda en requerimientos (${filterDesc}) — mostrando ${result.items.length} de ${result.total}:`;
+  for (const rq of result.items) {
+    prompt += `\n- **${rq.codigo}** · Estado: ${rq.estado} · Avance: ${rq.avance ?? "—"}%`;
+    if (rq.responsable) prompt += ` · Responsable: ${rq.responsable}`;
+    if (rq.cotizacion_codigo) prompt += ` · Cotización: ${rq.cotizacion_codigo}`;
+  }
+  if (result.total > result.items.length) {
+    prompt += `\n\nHay ${result.total - result.items.length} resultado(s) adicionales no mostrados aquí. Si el usuario los necesita, pídele un filtro más específico (estado, responsable o parte del código) para acotar la búsqueda.`;
+  }
+  return prompt;
+}
+
 export async function fetchAllRequirements(): Promise<RequirementSummary[]> {
   const { data, error } = await supabase
     .from("requerimientos")
@@ -240,7 +297,7 @@ function debugLog(...args: unknown[]) {
   if (process.env.NODE_ENV !== "production") console.debug("[contextQuery]", ...args);
 }
 
-export type ProjectReferenceSource = "cotizacion" | "requerimiento" | "technical_proposal" | "historical_import" | "none";
+export type ProjectReferenceSource = "cotizacion" | "requerimiento" | "technical_proposal" | "historical_import" | "similar" | "none";
 
 // Compact aggregate for historical-import matches that can fan out to many
 // requerimientos (e.g. "FOR-EKA-PRO-3_2025-143" -> 122 RQs). We never send
@@ -257,6 +314,8 @@ export interface ProjectReferenceResult {
   cotizacion?: CotizacionSummary;
   requirements?: RequirementSummary[];
   historicalSummary?: HistoricalSummary;
+  similarRequerimientos?: RequirementSummary[];
+  similarCotizaciones?: CotizacionSummary[];
 }
 
 const HISTORICAL_SAMPLE_LIMIT = 20;
@@ -352,6 +411,19 @@ export async function fetchProjectContextByCode(rawCode: string): Promise<Projec
     }
   }
 
+  // 5) Fuzzy fallback: no exact match anywhere. Try a partial search so the
+  // agent can suggest close matches instead of giving up — e.g. the user
+  // wrote "RQ-CJM075-001_2025" but the real code ends in "_2026".
+  const fuzzyBase = code.replace(/_\d{4}$/, "");
+  const [reqMatches, cotMatches] = await Promise.all([
+    searchRequerimientos({ q: fuzzyBase }, 5),
+    searchCotizaciones(fuzzyBase, 5),
+  ]);
+  if (reqMatches.items.length > 0 || cotMatches.length > 0) {
+    debugLog(`'${code}' sin match exacto; ${reqMatches.items.length} requerimiento(s) y ${cotMatches.length} cotización(es) similares`);
+    return { source: "similar", similarRequerimientos: reqMatches.items, similarCotizaciones: cotMatches };
+  }
+
   debugLog(`'${code}' no encontrado en cotizaciones, requerimientos, technical_proposals ni historical_import`);
   return { source: "none" };
 }
@@ -359,6 +431,17 @@ export async function fetchProjectContextByCode(rawCode: string): Promise<Projec
 export function buildProjectReferencePrompt(code: string, result: ProjectReferenceResult): string {
   if (result.source === "none") {
     return `\n\nSe detectó el código **${code}** en el mensaje, pero no se encontró en cotizaciones, requerimientos, propuestas técnicas ni en datos históricos importados. Dile al usuario claramente que no encontraste ese código (no es un problema de permisos) y pídele que confirme el código o el nombre del proyecto.`;
+  }
+  if (result.source === "similar") {
+    let prompt = `\n\nNo se encontró el código exacto **${code}**, pero hay coincidencias parecidas en Supabase:`;
+    for (const rq of result.similarRequerimientos ?? []) {
+      prompt += `\n- Requerimiento **${rq.codigo}** · Estado: ${rq.estado} · Avance: ${rq.avance ?? "—"}%${rq.responsable ? ` · Responsable: ${rq.responsable}` : ""}`;
+    }
+    for (const cot of result.similarCotizaciones ?? []) {
+      prompt += `\n- Cotización **${cot.codigo}**: ${cot.proyecto ?? "—"} · Cliente: ${cot.cliente_nombre ?? "—"} · Estado: ${cot.estado ?? "—"}`;
+    }
+    prompt += `\n\nDile al usuario que el código exacto **${code}** no existe, pero muéstrale estas coincidencias y pregúntale si se refería a alguna de ellas — no inventes datos de ${code} ni asumas cuál es la correcta.`;
+    return prompt;
   }
   if (result.source === "cotizacion" || result.source === "technical_proposal") {
     if (!result.cotizacion) return "";

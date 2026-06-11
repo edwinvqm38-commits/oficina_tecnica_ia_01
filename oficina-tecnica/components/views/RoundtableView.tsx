@@ -9,9 +9,9 @@ import { agentAvatarClass } from "./shared";
 import { sendChatWithFallback, getOllamaModels } from "../../lib/llm/providers";
 import { routeRequest } from "../../lib/llm/modelRouter";
 import type { ChatMessage } from "../../lib/llm/providers";
-import { parseInput, isSimpleMessage, isTeamMessage, hasClearIntent, detectDocumentCodes, detectOtherCodes, slugForUser, HUMANIZE_CTX } from "../../lib/chat/messageUtils";
+import { parseInput, isSimpleMessage, isTeamMessage, hasClearIntent, detectDocumentCodes, detectOtherCodes, detectRequerimientoSearchIntent, slugForUser, HUMANIZE_CTX } from "../../lib/chat/messageUtils";
 import type { UserDirectory } from "../../lib/chat/messageUtils";
-import { buildContextPrompt, buildRequirementItemsPrompt, fetchCotizacionByCode, fetchRequirementByCode, fetchRequirementItems, fetchProjectContextByCode, buildProjectReferencePrompt, cotizacionToProject } from "../../lib/chat/contextQuery";
+import { buildContextPrompt, buildRequirementItemsPrompt, fetchCotizacionByCode, fetchRequirementByCode, fetchRequirementItems, fetchProjectContextByCode, buildProjectReferencePrompt, cotizacionToProject, searchRequerimientos, buildRequerimientoSearchPrompt } from "../../lib/chat/contextQuery";
 import type { ChatCtx } from "../../lib/chat/contextQuery";
 import { MdText } from "../chat/MdText";
 import { HelpPanel } from "../chat/HelpPanel";
@@ -604,6 +604,16 @@ export function RoundtableView() {
             const items = await fetchRequirementItems(result.requirements[0].id).catch(() => []);
             autoCodeCtx += buildRequirementItemsPrompt(items);
           }
+        }
+
+        // Free-form search ("busca/lista los requerimientos pendientes de
+        // Juan", "filtra RQ en proceso") — lets agents query the
+        // requerimientos table by status/responsible/text, not just by an
+        // exact code pasted in the message.
+        const searchIntent = detectRequerimientoSearchIntent(parsed.cleanText);
+        if (searchIntent) {
+          const searchResult = await searchRequerimientos(searchIntent, 20).catch(() => ({ items: [], total: 0 }));
+          autoCodeCtx += buildRequerimientoSearchPrompt(searchIntent, searchResult);
         }
       } catch (err) {
         if (process.env.NODE_ENV !== "production") console.debug("[RoundtableView] autoCodeCtx error", err);
