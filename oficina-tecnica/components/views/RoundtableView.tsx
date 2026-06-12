@@ -16,7 +16,7 @@ import { buildContextPrompt, buildRequirementItemsPrompt, fetchRequirementItems 
 import type { ChatCtx } from "../../lib/chat/contextQuery";
 import { runContextPipeline, type ContextPipelineResult } from "../../lib/chat/contextRouter";
 import { validateLlmAnswer, buildBlockedAnswer } from "../../lib/chat/contextValidation";
-import { getDatasetMemory, recordDisplayedDataset } from "../../lib/chat/datasetMemory";
+import { getDatasetMemory, recordDisplayedDataset, updateDatasetMemory } from "../../lib/chat/datasetMemory";
 import { MdText } from "../chat/MdText";
 import { HelpPanel } from "../chat/HelpPanel";
 import { ChatAutoInput } from "../chat/ChatAutoInput";
@@ -570,6 +570,9 @@ export function RoundtableView() {
         memory: getDatasetMemory(ROUNDTABLE_THREAD),
       });
       autoCodeCtx = pipeline.block;
+
+      // Aclaración pendiente: guardar si se pidió, limpiar si se resolvió/avanzó.
+      updateDatasetMemory(ROUNDTABLE_THREAD, { pendingClarification: pipeline.pendingClarification });
     }
 
     // Anti-alucinación: una consulta de datos se responde UNA sola vez con datos
@@ -582,11 +585,17 @@ export function RoundtableView() {
         : pipeline.fallbackAnswer;
       if (text) {
         const primary = responders[0] ?? TEAM_COORDINATOR;
-        appendChat(ROUNDTABLE_THREAD, { role: "agent", agentId: primary, text, modelLabel: "datos/Supabase" });
+        // Las aclaraciones salen como `datos/Sistema`; los datos reales como
+        // `datos/Supabase`. Ambos se persisten para que se vean al recargar.
+        const isClarif = Boolean(pipeline.isClarification || pipeline.clarificationResolved);
+        const label = isClarif ? "datos/Sistema" : "datos/Supabase";
+        appendChat(ROUNDTABLE_THREAD, { role: "agent", agentId: primary, text, modelLabel: label });
         if (pipeline.shouldUseDeterministicAnswer) {
           // Memoria del dataset mostrado (solo desde datos reales / determinístico).
           recordDisplayedDataset(ROUNDTABLE_THREAD, pipeline.results, pipeline.intent);
-          saveConversation(userId, primary, parsed.cleanText, text, "datos/Supabase", routing.complexity, activeProject?.id).catch(() => {});
+          saveConversation(userId, primary, parsed.cleanText, text, label, routing.complexity, activeProject?.id).catch(() => {});
+        } else if (isClarif) {
+          saveConversation(userId, primary, parsed.cleanText, text, label, routing.complexity, activeProject?.id).catch(() => {});
         }
         setHands([]);
         setBusy(false);

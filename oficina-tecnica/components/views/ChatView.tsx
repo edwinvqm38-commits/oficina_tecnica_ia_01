@@ -17,7 +17,7 @@ import { buildContextPrompt, buildRequirementItemsPrompt, fetchRequirementItems 
 import type { ChatCtx } from "../../lib/chat/contextQuery";
 import { runContextPipeline, type ContextPipelineResult } from "../../lib/chat/contextRouter";
 import { validateLlmAnswer, buildBlockedAnswer } from "../../lib/chat/contextValidation";
-import { getDatasetMemory, recordDisplayedDataset } from "../../lib/chat/datasetMemory";
+import { getDatasetMemory, recordDisplayedDataset, updateDatasetMemory } from "../../lib/chat/datasetMemory";
 import { useSession } from "../../lib/auth/useSession";
 import { saveConversation, loadConversationHistory } from "../../lib/memory/conversationMemory";
 
@@ -239,6 +239,11 @@ export function ChatView() {
         memory: getDatasetMemory(threadKey),
       });
       autoCodeCtx = pipeline.block;
+
+      // Aclaración pendiente: si el pipeline pidió aclaración, la guardamos para
+      // que el próximo mensaje pueda elegir una opción; si la resolvió o respondió
+      // otra cosa, la limpiamos (el usuario siguió adelante).
+      updateDatasetMemory(threadKey, { pendingClarification: pipeline.pendingClarification });
     }
 
     // Anti-alucinación: para preguntas de datos la app responde directamente —
@@ -254,7 +259,15 @@ export function ChatView() {
       return;
     }
     if (pipeline?.shouldBlockModelAnswer && pipeline.fallbackAnswer) {
-      appendChat(threadKey, { role: "agent", text: pipeline.fallbackAnswer, agentId, modelLabel: "datos/Supabase" });
+      // Las aclaraciones (tabla de opciones o respuesta a una opción) salen como
+      // `datos/Sistema`, no como un proveedor LLM. Se persisten para que la tabla
+      // de opciones siga visible al recargar.
+      const isClarif = Boolean(pipeline.isClarification || pipeline.clarificationResolved);
+      const label = isClarif ? "datos/Sistema" : "datos/Supabase";
+      appendChat(threadKey, { role: "agent", text: pipeline.fallbackAnswer, agentId, modelLabel: label });
+      if (isClarif) {
+        saveConversation(session?.email ?? "anonymous", agentId, parsed.cleanText, pipeline.fallbackAnswer, label, routing.complexity).catch(() => {});
+      }
       setBusy(false);
       setTypingModel(undefined);
       return;

@@ -15,6 +15,7 @@
 // intencional: es un caché de contexto conversacional, no una fuente de verdad.
 
 import type { ContextToolResult } from "@/lib/chat/contextTools";
+import type { PendingClarification } from "@/lib/chat/clarification";
 
 export type DisplayedDataset = "recursos" | "requerimientos" | "requirement_items" | "cotizaciones";
 export type DisplayedSource = "Supabase" | "archivo" | "none";
@@ -28,6 +29,8 @@ export interface DatasetMemory {
   lastDisplayedTotal?: number;
   lastDisplayedSource?: DisplayedSource;
   lastDisplayedIntent?: string;
+  /** Aclaración pendiente: si el siguiente mensaje elige una opción, se resuelve. */
+  pendingClarification?: PendingClarification;
 }
 
 const store = new Map<string, DatasetMemory>();
@@ -43,6 +46,16 @@ export function updateDatasetMemory(threadKey: string, patch: Partial<DatasetMem
 
 export function clearDatasetMemory(threadKey: string): void {
   store.delete(threadKey);
+}
+
+/** Guarda una aclaración pendiente para el hilo (la elige el siguiente mensaje). */
+export function setPendingClarification(threadKey: string, pending: PendingClarification): void {
+  updateDatasetMemory(threadKey, { pendingClarification: pending });
+}
+
+/** Limpia la aclaración pendiente del hilo (resuelta o abandonada). */
+export function clearPendingClarification(threadKey: string): void {
+  updateDatasetMemory(threadKey, { pendingClarification: undefined });
 }
 
 /**

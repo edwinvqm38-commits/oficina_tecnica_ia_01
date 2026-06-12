@@ -22,6 +22,13 @@ import {
 } from "@/lib/chat/messageUtils";
 import type { DatasetMemory } from "@/lib/chat/datasetMemory";
 import {
+  shouldAskClarification,
+  resolveClarificationChoice,
+  buildClarificationMessage,
+  type PendingClarification,
+  type ClarificationOption,
+} from "@/lib/chat/clarification";
+import {
   buscarCotizaciones,
   buscarCotizacionPorCodigo,
   buscarRequerimientos,
@@ -258,6 +265,15 @@ export interface ContextPipelineResult {
   /** True → NO llamar al LLM; responder con `deterministicAnswer`. */
   shouldUseDeterministicAnswer: boolean;
   deterministicAnswer?: string;
+  // ── Aclaración inteligente ──────────────────────────────────────────────────
+  /** True → la respuesta es una tabla de opciones de interpretación (no LLM). */
+  isClarification?: boolean;
+  /** Aclaración a guardar en memoria (el próximo mensaje puede elegir una opción). */
+  pendingClarification?: PendingClarification;
+  /** True → se resolvió una aclaración pendiente (la vista debe limpiarla). */
+  clarificationResolved?: boolean;
+  /** Opciones de aclaración (para una eventual UI de chips). */
+  clarificationOptions?: ClarificationOption[];
 }
 
 export interface ContextPipelineOptions {
@@ -265,10 +281,37 @@ export interface ContextPipelineOptions {
   isValidationQuestion?: boolean;
   /** Memoria del último dataset mostrado en el hilo (para seguimientos). */
   memory?: DatasetMemory;
+  /** Interno: evita re-evaluar aclaración al resolver una opción (anti-recursión). */
+  skipClarification?: boolean;
 }
 
 function summarize(results: ContextToolResult[]): ContextResultSummary[] {
   return results.map((r) => ({ source: r.source, status: r.status, total: r.total, message: r.message }));
+}
+
+// Resultado de pipeline para una aclaración (pregunta de opciones o respuesta a
+// una opción no ejecutable): bloquea el LLM y responde con `answer`. No es una
+// respuesta de Supabase, así que la vista la etiqueta como `datos/Sistema`.
+function buildClarificationOutcome(
+  decision: ContextRoutingDecision,
+  answer: string,
+  extra: Partial<ContextPipelineResult>,
+): ContextPipelineResult {
+  return {
+    block: "",
+    decision,
+    results: [],
+    hasData: false,
+    intent: decision.intent,
+    confidence: decision.confidence,
+    isDataQuestion: true,
+    toolsCalled: [],
+    resultsSummary: [],
+    shouldBlockModelAnswer: true,
+    fallbackAnswer: answer,
+    shouldUseDeterministicAnswer: false,
+    ...extra,
+  };
 }
 
 // Construye el resultado completo del pipeline aplicando la estrategia de
@@ -334,7 +377,56 @@ export async function runContextPipeline(
   cleanText: string,
   opts: ContextPipelineOptions = {},
 ): Promise<ContextPipelineResult> {
-  const decision = detectContextIntent(cleanText, opts.memory ?? {});
+  const memory = opts.memory ?? {};
+
+  // ── (A) Resolver una aclaración pendiente ──────────────────────────────────
+  // Si hay una aclaración pendiente y el mensaje elige una opción ("1",
+  // "la de recursos"), resolvemos y ejecutamos esa consulta — sin mandar "1" al
+  // LLM. Las opciones no ejecutables (fuente no implementada) responden con una
+  // nota honesta en vez de inventar.
+  if (!opts.skipClarification && memory.pendingClarification) {
+    const choice = resolveClarificationChoice(stripAgentLabelsForRouting(cleanText), memory.pendingClarification);
+    if (choice) {
+      if (choice.resolvedQuery && choice.source !== "not_implemented") {
+        const resolved = await runContextPipeline(choice.resolvedQuery, {
+          ...opts,
+          skipClarification: true,
+          isValidationQuestion: choice.validation ?? opts.isValidationQuestion,
+          memory: { ...memory, pendingClarification: undefined },
+        });
+        return { ...resolved, clarificationResolved: true };
+      }
+      const note =
+        choice.notImplementedNote ??
+        "Esa interpretación aún no está conectada al contexto IA. No voy a inventar datos.";
+      return buildClarificationOutcome(
+        { intent: "clarification_resolved", toolsToCall: [], confidence: 0.5, reason: "Opción de aclaración no ejecutable." },
+        note,
+        { clarificationResolved: true },
+      );
+    }
+    // No fue una elección: seguimos el flujo normal (la vista limpiará el pending).
+  }
+
+  // ── (B) Pedir aclaración ante ambigüedad/baja confianza ────────────────────
+  if (!opts.skipClarification) {
+    const cla = shouldAskClarification(cleanText, memory);
+    if (cla.ask) {
+      const pending: PendingClarification = {
+        question: cla.question,
+        options: cla.options,
+        createdAt: new Date().toISOString(),
+        topic: cla.topic,
+      };
+      return buildClarificationOutcome(
+        { intent: "needs_clarification_ambiguous", toolsToCall: [], confidence: 0.2, reason: "Consulta ambigua: se ofrecen interpretaciones en vez de adivinar la tabla." },
+        buildClarificationMessage(cla.question, cla.options),
+        { isClarification: true, pendingClarification: pending, clarificationOptions: cla.options },
+      );
+    }
+  }
+
+  const decision = detectContextIntent(cleanText, memory);
 
   // Sin herramientas que ejecutar: o no es pregunta de datos, o es una pregunta
   // de tabla sin filtro (needs_clarification). finalizePipeline decide si se
