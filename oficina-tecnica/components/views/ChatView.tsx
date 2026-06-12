@@ -15,7 +15,8 @@ import { HelpPanel } from "../chat/HelpPanel";
 import { ChatAutoInput } from "../chat/ChatAutoInput";
 import { buildContextPrompt, buildRequirementItemsPrompt, fetchRequirementItems } from "../../lib/chat/contextQuery";
 import type { ChatCtx } from "../../lib/chat/contextQuery";
-import { runContextPipeline } from "../../lib/chat/contextRouter";
+import { runContextPipeline, type ContextPipelineResult } from "../../lib/chat/contextRouter";
+import { validateLlmAnswer, buildBlockedAnswer } from "../../lib/chat/contextValidation";
 import { useSession } from "../../lib/auth/useSession";
 import { saveConversation, loadConversationHistory } from "../../lib/memory/conversationMemory";
 
@@ -225,8 +226,27 @@ export function ChatView() {
     // cotización searches, recursos, propuestas técnicas). The pipeline never
     // throws — on a temporary error it returns a soft note instead of data.
     let autoCodeCtx = "";
+    let pipeline: ContextPipelineResult | null = null;
     if (!simple) {
-      autoCodeCtx = (await runContextPipeline(parsed.cleanText)).block;
+      pipeline = await runContextPipeline(parsed.cleanText);
+      autoCodeCtx = pipeline.block;
+    }
+
+    // Anti-alucinación: para preguntas de datos la app responde directamente —
+    // con datos reales (determinístico) o rechazando sin inventar (fallback) —
+    // SIN llamar al LLM. Así garantizamos exactitud aunque el modelo sea pequeño.
+    if (pipeline?.shouldUseDeterministicAnswer && pipeline.deterministicAnswer) {
+      appendChat(threadKey, { role: "agent", text: pipeline.deterministicAnswer, agentId, modelLabel: "datos/Supabase" });
+      saveConversation(session?.email ?? "anonymous", agentId, parsed.cleanText, pipeline.deterministicAnswer, "datos/Supabase", routing.complexity).catch(() => {});
+      setBusy(false);
+      setTypingModel(undefined);
+      return;
+    }
+    if (pipeline?.shouldBlockModelAnswer && pipeline.fallbackAnswer) {
+      appendChat(threadKey, { role: "agent", text: pipeline.fallbackAnswer, agentId, modelLabel: "datos/Supabase" });
+      setBusy(false);
+      setTypingModel(undefined);
+      return;
     }
 
     const fileCtx = (inputCtx?.attachments ?? []).map((f) =>
@@ -278,8 +298,18 @@ export function ChatView() {
     try {
       const { response, actualConfig } = await sendChatWithFallback(messages, routing.config);
       const label = `${actualConfig.provider}/${response.model}`;
-      appendChat(threadKey, { role: "agent", text: response.content, agentId, modelLabel: label, modelSuggestion: routing.suggestion });
-      saveConversation(session?.email ?? "anonymous", agentId, parsed.cleanText, response.content, label, routing.complexity).catch(() => {});
+      // Post-validación: si el LLM inventó códigos/montos/fechas/clientes que no
+      // están en el contexto real recuperado, se bloquea y se responde seguro.
+      let finalText = response.content;
+      if (pipeline && pipeline.results.length > 0) {
+        const v = validateLlmAnswer(finalText, pipeline.results);
+        if (!v.ok) {
+          if (process.env.NODE_ENV !== "production") console.debug("[AI_CONTEXT_VALIDATION] blocked", v.violations);
+          finalText = buildBlockedAnswer(pipeline.deterministicAnswer ?? null);
+        }
+      }
+      appendChat(threadKey, { role: "agent", text: finalText, agentId, modelLabel: label, modelSuggestion: routing.suggestion });
+      saveConversation(session?.email ?? "anonymous", agentId, parsed.cleanText, finalText, label, routing.complexity).catch(() => {});
     } catch (err) {
       const msg = err instanceof Error ? err.message : "Error desconocido";
       appendChat(threadKey, { role: "agent", text: `No pude conectar con ningún proveedor de IA. ${msg}\n\nVe a Conexiones para configurar una API key gratuita.`, agentId, isError: true });

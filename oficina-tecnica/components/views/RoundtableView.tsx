@@ -14,7 +14,8 @@ import { parseInput, isSimpleMessage, isTeamMessage, hasClearIntent, slugForUser
 import type { UserDirectory } from "../../lib/chat/messageUtils";
 import { buildContextPrompt, buildRequirementItemsPrompt, fetchRequirementItems } from "../../lib/chat/contextQuery";
 import type { ChatCtx } from "../../lib/chat/contextQuery";
-import { runContextPipeline } from "../../lib/chat/contextRouter";
+import { runContextPipeline, type ContextPipelineResult } from "../../lib/chat/contextRouter";
+import { validateLlmAnswer, buildBlockedAnswer } from "../../lib/chat/contextValidation";
 import { MdText } from "../chat/MdText";
 import { HelpPanel } from "../chat/HelpPanel";
 import { ChatAutoInput } from "../chat/ChatAutoInput";
@@ -556,8 +557,30 @@ export function RoundtableView() {
     // cotización searches, recursos, propuestas técnicas). The pipeline never
     // throws — on a temporary error it returns a soft note instead of data.
     let autoCodeCtx = "";
+    let pipeline: ContextPipelineResult | null = null;
     if (!simple) {
-      autoCodeCtx = (await runContextPipeline(parsed.cleanText)).block;
+      pipeline = await runContextPipeline(parsed.cleanText);
+      autoCodeCtx = pipeline.block;
+    }
+
+    // Anti-alucinación: una consulta de datos se responde UNA sola vez con datos
+    // reales (determinístico) o se rechaza sin inventar (fallback), SIN llamar al
+    // LLM ni hacer que cada agente repita la misma tabla. La atribuye el primer
+    // responder (o el coordinador) para mantener la conversación coherente.
+    if (pipeline && (pipeline.shouldUseDeterministicAnswer || pipeline.shouldBlockModelAnswer)) {
+      const text = pipeline.shouldUseDeterministicAnswer
+        ? pipeline.deterministicAnswer
+        : pipeline.fallbackAnswer;
+      if (text) {
+        const primary = responders[0] ?? TEAM_COORDINATOR;
+        appendChat(ROUNDTABLE_THREAD, { role: "agent", agentId: primary, text, modelLabel: "datos/Supabase" });
+        if (pipeline.shouldUseDeterministicAnswer) {
+          saveConversation(userId, primary, parsed.cleanText, text, "datos/Supabase", routing.complexity, activeProject?.id).catch(() => {});
+        }
+        setHands([]);
+        setBusy(false);
+        return;
+      }
     }
 
     // Item/material-level data for the referenced requirement (Supabase)
@@ -623,8 +646,17 @@ export function RoundtableView() {
       try {
         const { response, actualConfig } = await sendChatWithFallback(messages, agRouting.config);
         const label = `${actualConfig.provider}/${response.model}`;
-        appendChat(ROUNDTABLE_THREAD, { role: "agent", agentId: agId, text: response.content, modelLabel: label, modelSuggestion: agRouting.suggestion });
-        saveConversation(userId, agId, parsed.cleanText + fileCtx, response.content, label, agRouting.complexity, activeProject?.id).catch(() => {});
+        // Post-validación anti-alucinación contra los datos reales recuperados.
+        let finalText = response.content;
+        if (pipeline && pipeline.results.length > 0) {
+          const v = validateLlmAnswer(finalText, pipeline.results);
+          if (!v.ok) {
+            if (process.env.NODE_ENV !== "production") console.debug("[AI_CONTEXT_VALIDATION] blocked", v.violations);
+            finalText = buildBlockedAnswer(pipeline.deterministicAnswer ?? null);
+          }
+        }
+        appendChat(ROUNDTABLE_THREAD, { role: "agent", agentId: agId, text: finalText, modelLabel: label, modelSuggestion: agRouting.suggestion });
+        saveConversation(userId, agId, parsed.cleanText + fileCtx, finalText, label, agRouting.complexity, activeProject?.id).catch(() => {});
       } catch (err) {
         appendChat(ROUNDTABLE_THREAD, {
           role: "agent", agentId: agId,

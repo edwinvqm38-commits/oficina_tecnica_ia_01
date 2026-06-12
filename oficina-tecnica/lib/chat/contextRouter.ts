@@ -34,6 +34,7 @@ import {
 } from "@/lib/chat/contextTools";
 import type { CotizacionSearchFilters, RequerimientoSearchFilters } from "@/lib/chat/contextQuery";
 import { buildContextPack, hasRealData } from "@/lib/chat/contextPackBuilder";
+import { decideAnswerStrategy, isDataQuestion } from "@/lib/chat/contextDeterministic";
 
 export type ContextToolName =
   | "buscarCotizaciones"
@@ -185,12 +186,85 @@ async function executeTool(call: ContextToolCall): Promise<ContextToolResult> {
   }
 }
 
+/** Resumen serializable por herramienta (para debug y para la UI). */
+export interface ContextResultSummary {
+  source: string;
+  status: ContextToolResult["status"];
+  total: number;
+  message?: string;
+}
+
 export interface ContextPipelineResult {
   /** Bloque de contexto real listo para inyectar en el system prompt (o ""). */
   block: string;
   decision: ContextRoutingDecision;
   results: ContextToolResult[];
   hasData: boolean;
+  // ── Campos de control anti-alucinación ──────────────────────────────────────
+  intent: string;
+  confidence: number;
+  /** True si la pregunta apunta a datos reales (tabla/código/búsqueda). */
+  isDataQuestion: boolean;
+  /** Nombres de las herramientas efectivamente ejecutadas. */
+  toolsCalled: string[];
+  /** Resumen por fuente (source/status/total). */
+  resultsSummary: ContextResultSummary[];
+  /** True → NO llamar al LLM; responder con `fallbackAnswer`. */
+  shouldBlockModelAnswer: boolean;
+  fallbackAnswer?: string;
+  /** True → NO llamar al LLM; responder con `deterministicAnswer`. */
+  shouldUseDeterministicAnswer: boolean;
+  deterministicAnswer?: string;
+}
+
+function summarize(results: ContextToolResult[]): ContextResultSummary[] {
+  return results.map((r) => ({ source: r.source, status: r.status, total: r.total, message: r.message }));
+}
+
+// Construye el resultado completo del pipeline aplicando la estrategia de
+// respuesta (determinística / bloqueo / LLM) sobre los resultados ya obtenidos.
+function finalizePipeline(
+  cleanText: string,
+  decision: ContextRoutingDecision,
+  results: ContextToolResult[],
+  block: string,
+): ContextPipelineResult {
+  const strategy = decideAnswerStrategy(cleanText, decision, results);
+  const result: ContextPipelineResult = {
+    block,
+    decision,
+    results,
+    hasData: hasRealData(results),
+    intent: decision.intent,
+    confidence: decision.confidence,
+    isDataQuestion: isDataQuestion(decision),
+    toolsCalled: decision.toolsToCall.map((c) => c.tool),
+    resultsSummary: summarize(results),
+    shouldBlockModelAnswer: strategy.shouldBlockModelAnswer,
+    fallbackAnswer: strategy.fallbackAnswer,
+    shouldUseDeterministicAnswer: strategy.shouldUseDeterministicAnswer,
+    deterministicAnswer: strategy.deterministicAnswer,
+  };
+  debugPipeline(cleanText, result);
+  return result;
+}
+
+// Debug solo en desarrollo: permite verificar qué se recuperó realmente sin
+// exponer claves ni tokens. El bloque se recorta a 1500 caracteres.
+function debugPipeline(cleanText: string, r: ContextPipelineResult) {
+  if (process.env.NODE_ENV === "production") return;
+  console.debug("[AI_CONTEXT_PIPELINE]", {
+    cleanText,
+    intent: r.intent,
+    confidence: r.confidence,
+    isDataQuestion: r.isDataQuestion,
+    toolsCalled: r.toolsCalled,
+    resultsSummary: r.resultsSummary,
+    blockPreview: r.block.slice(0, 1500),
+    shouldBlockModelAnswer: r.shouldBlockModelAnswer,
+    shouldUseDeterministicAnswer: r.shouldUseDeterministicAnswer,
+    fallbackAnswer: r.fallbackAnswer,
+  });
 }
 
 const SOFT_ERROR_NOTE =
@@ -208,8 +282,11 @@ const SOFT_ERROR_NOTE =
 export async function runContextPipeline(cleanText: string): Promise<ContextPipelineResult> {
   const decision = detectContextIntent(cleanText);
 
+  // Sin herramientas que ejecutar: o no es pregunta de datos, o es una pregunta
+  // de tabla sin filtro (needs_clarification). finalizePipeline decide si se
+  // bloquea con una aclaración o se deja pasar al LLM normal.
   if (decision.toolsToCall.length === 0) {
-    return { block: "", decision, results: [], hasData: false };
+    return finalizePipeline(cleanText, decision, [], "");
   }
 
   try {
@@ -235,9 +312,27 @@ export async function runContextPipeline(cleanText: string): Promise<ContextPipe
     }
 
     const block = buildContextPack(results, { intent: decision.intent });
-    return { block, decision, results, hasData: hasRealData(results) };
+    return finalizePipeline(cleanText, decision, results, block);
   } catch (err) {
     if (process.env.NODE_ENV !== "production") console.debug("[contextRouter] pipeline error", err);
-    return { block: SOFT_ERROR_NOTE, decision, results: [], hasData: false };
+    // Error duro e inesperado: si era pregunta de datos, bloqueamos con una nota
+    // segura (no inventar); si no, devolvemos la nota suave para el system prompt.
+    const dataQ = isDataQuestion(decision);
+    return {
+      block: dataQ ? "" : SOFT_ERROR_NOTE,
+      decision,
+      results: [],
+      hasData: false,
+      intent: decision.intent,
+      confidence: decision.confidence,
+      isDataQuestion: dataQ,
+      toolsCalled: decision.toolsToCall.map((c) => c.tool),
+      resultsSummary: [],
+      shouldBlockModelAnswer: dataQ,
+      fallbackAnswer: dataQ
+        ? "No pude consultar la base de datos por un error temporal. No voy a inventar datos: vuelve a intentarlo en unos segundos o indícame un código exacto."
+        : undefined,
+      shouldUseDeterministicAnswer: false,
+    };
   }
 }
