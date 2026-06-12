@@ -47,6 +47,8 @@ import {
 import type { CotizacionSearchFilters, RequerimientoSearchFilters } from "@/lib/chat/contextQuery";
 import { buildContextPack, hasRealData } from "@/lib/chat/contextPackBuilder";
 import { decideAnswerStrategy, isDataQuestion } from "@/lib/chat/contextDeterministic";
+import { executeCrossIntentPreflight } from "@/lib/chat/crossIntentExecutor";
+import type { CrossIntentFamily } from "@/lib/chat/crossIntentRegistry";
 
 export type ContextToolName =
   | "buscarCotizaciones"
@@ -244,6 +246,15 @@ export interface ContextResultSummary {
   message?: string;
 }
 
+export type ContextCapabilityOutcome =
+  | "not_applicable"
+  | "executed_with_results"
+  | "executed_empty"
+  | "tool_error"
+  | "not_implemented"
+  | "needs_clarification"
+  | "system_response";
+
 export interface ContextPipelineResult {
   /** Bloque de contexto real listo para inyectar en el system prompt (o ""). */
   block: string;
@@ -259,6 +270,12 @@ export interface ContextPipelineResult {
   toolsCalled: string[];
   /** Resumen por fuente (source/status/total). */
   resultsSummary: ContextResultSummary[];
+  /** Resultado inequívoco del intento de capacidad/tool. */
+  capabilityOutcome: ContextCapabilityOutcome;
+  /** Solo "supabase" cuando al menos una tool real fue ejecutada. */
+  responseSource: "supabase" | "system";
+  /** Familia declarativa detectada por el registry, si aplica. */
+  registryFamily?: CrossIntentFamily;
   /** True → NO llamar al LLM; responder con `fallbackAnswer`. */
   shouldBlockModelAnswer: boolean;
   fallbackAnswer?: string;
@@ -281,6 +298,10 @@ export interface ContextPipelineOptions {
   isValidationQuestion?: boolean;
   /** Memoria del último dataset mostrado en el hilo (para seguimientos). */
   memory?: DatasetMemory;
+  /** Identificador del hilo para feedback en memoria de sesión. */
+  threadKey?: string;
+  /** Agente que responderá, usado solo para adaptar el mensaje honesto. */
+  agentId?: string;
   /** Interno: evita re-evaluar aclaración al resolver una opción (anti-recursión). */
   skipClarification?: boolean;
 }
@@ -307,6 +328,8 @@ function buildClarificationOutcome(
     isDataQuestion: true,
     toolsCalled: [],
     resultsSummary: [],
+    capabilityOutcome: "needs_clarification",
+    responseSource: "system",
     shouldBlockModelAnswer: true,
     fallbackAnswer: answer,
     shouldUseDeterministicAnswer: false,
@@ -324,16 +347,33 @@ function finalizePipeline(
   opts: ContextPipelineOptions,
 ): ContextPipelineResult {
   const strategy = decideAnswerStrategy(cleanText, decision, results, opts);
+  const realData = hasRealData(results);
+  const hasToolError = results.some((r) => r.status === "error");
+  const hasNotImplemented = results.some((r) => r.status === "not_implemented");
+  const toolsWereCalled = decision.toolsToCall.length > 0;
+  const capabilityOutcome: ContextCapabilityOutcome = hasNotImplemented
+    ? "not_implemented"
+    : realData
+      ? "executed_with_results"
+      : hasToolError
+        ? "tool_error"
+        : toolsWereCalled
+          ? "executed_empty"
+          : strategy.shouldBlockModelAnswer
+            ? "needs_clarification"
+            : "not_applicable";
   const result: ContextPipelineResult = {
     block,
     decision,
     results,
-    hasData: hasRealData(results),
+    hasData: realData,
     intent: decision.intent,
     confidence: decision.confidence,
     isDataQuestion: isDataQuestion(decision) || Boolean(opts.isValidationQuestion),
     toolsCalled: decision.toolsToCall.map((c) => c.tool),
     resultsSummary: summarize(results),
+    capabilityOutcome,
+    responseSource: toolsWereCalled ? "supabase" : "system",
     shouldBlockModelAnswer: strategy.shouldBlockModelAnswer,
     fallbackAnswer: strategy.fallbackAnswer,
     shouldUseDeterministicAnswer: strategy.shouldUseDeterministicAnswer,
@@ -357,6 +397,9 @@ function debugPipeline(cleanText: string, r: ContextPipelineResult) {
     blockPreview: r.block.slice(0, 1500),
     shouldBlockModelAnswer: r.shouldBlockModelAnswer,
     shouldUseDeterministicAnswer: r.shouldUseDeterministicAnswer,
+    capabilityOutcome: r.capabilityOutcome,
+    responseSource: r.responseSource,
+    registryFamily: r.registryFamily,
     fallbackAnswer: r.fallbackAnswer,
   });
 }
@@ -378,6 +421,51 @@ export async function runContextPipeline(
   opts: ContextPipelineOptions = {},
 ): Promise<ContextPipelineResult> {
   const memory = opts.memory ?? {};
+  const preflight = executeCrossIntentPreflight(cleanText, {
+    memory,
+    threadKey: opts.threadKey,
+    agentId: opts.agentId,
+  });
+  const effectiveOpts: ContextPipelineOptions = {
+    ...opts,
+    isValidationQuestion: opts.isValidationQuestion || preflight.isValidationQuestion,
+  };
+
+  if (preflight.status !== "continue") {
+    const outcome: ContextCapabilityOutcome =
+      preflight.status === "not_implemented"
+        ? "not_implemented"
+        : preflight.status === "needs_clarification"
+          ? "needs_clarification"
+          : "system_response";
+    const result: ContextPipelineResult = {
+      block: "",
+      decision: {
+        intent: preflight.family ?? preflight.status,
+        toolsToCall: [],
+        confidence: preflight.status === "not_implemented" ? 1 : 0.5,
+        reason: "Resuelto por el registry de capacidades antes de llamar al modelo.",
+      },
+      results: [],
+      hasData: false,
+      intent: preflight.family ?? preflight.status,
+      confidence: preflight.status === "not_implemented" ? 1 : 0.5,
+      isDataQuestion: true,
+      toolsCalled: [],
+      resultsSummary: [],
+      capabilityOutcome: outcome,
+      responseSource: "system",
+      registryFamily: preflight.family,
+      shouldBlockModelAnswer: true,
+      fallbackAnswer: preflight.answer,
+      shouldUseDeterministicAnswer: false,
+      isClarification: preflight.status === "needs_clarification",
+    };
+    debugPipeline(cleanText, result);
+    return result;
+  }
+
+  const routedText = preflight.text;
 
   // ── (A) Resolver una aclaración pendiente ──────────────────────────────────
   // Si hay una aclaración pendiente y el mensaje elige una opción ("1",
@@ -385,11 +473,11 @@ export async function runContextPipeline(
   // LLM. Las opciones no ejecutables (fuente no implementada) responden con una
   // nota honesta en vez de inventar.
   if (!opts.skipClarification && memory.pendingClarification) {
-    const choice = resolveClarificationChoice(stripAgentLabelsForRouting(cleanText), memory.pendingClarification);
+    const choice = resolveClarificationChoice(stripAgentLabelsForRouting(routedText), memory.pendingClarification);
     if (choice) {
       if (choice.resolvedQuery && choice.source !== "not_implemented") {
         const resolved = await runContextPipeline(choice.resolvedQuery, {
-          ...opts,
+          ...effectiveOpts,
           skipClarification: true,
           isValidationQuestion: choice.validation ?? opts.isValidationQuestion,
           memory: { ...memory, pendingClarification: undefined },
@@ -402,7 +490,11 @@ export async function runContextPipeline(
       return buildClarificationOutcome(
         { intent: "clarification_resolved", toolsToCall: [], confidence: 0.5, reason: "Opción de aclaración no ejecutable." },
         note,
-        { clarificationResolved: true },
+        {
+          clarificationResolved: true,
+          capabilityOutcome: "not_implemented",
+          registryFamily: preflight.family,
+        },
       );
     }
     // No fue una elección: seguimos el flujo normal (la vista limpiará el pending).
@@ -410,7 +502,7 @@ export async function runContextPipeline(
 
   // ── (B) Pedir aclaración ante ambigüedad/baja confianza ────────────────────
   if (!opts.skipClarification) {
-    const cla = shouldAskClarification(cleanText, memory);
+    const cla = shouldAskClarification(routedText, memory);
     if (cla.ask) {
       const pending: PendingClarification = {
         question: cla.question,
@@ -426,13 +518,14 @@ export async function runContextPipeline(
     }
   }
 
-  const decision = detectContextIntent(cleanText, memory);
+  const decision = detectContextIntent(routedText, memory);
 
   // Sin herramientas que ejecutar: o no es pregunta de datos, o es una pregunta
   // de tabla sin filtro (needs_clarification). finalizePipeline decide si se
   // bloquea con una aclaración o se deja pasar al LLM normal.
   if (decision.toolsToCall.length === 0) {
-    return finalizePipeline(cleanText, decision, [], "", opts);
+    const result = finalizePipeline(routedText, decision, [], "", effectiveOpts);
+    return { ...result, registryFamily: preflight.family };
   }
 
   try {
@@ -458,12 +551,13 @@ export async function runContextPipeline(
     }
 
     const block = buildContextPack(results, { intent: decision.intent });
-    return finalizePipeline(cleanText, decision, results, block, opts);
+    const result = finalizePipeline(routedText, decision, results, block, effectiveOpts);
+    return { ...result, registryFamily: preflight.family };
   } catch (err) {
     if (process.env.NODE_ENV !== "production") console.debug("[contextRouter] pipeline error", err);
     // Error duro e inesperado: si era pregunta de datos, bloqueamos con una nota
     // segura (no inventar); si no, devolvemos la nota suave para el system prompt.
-    const dataQ = isDataQuestion(decision) || Boolean(opts.isValidationQuestion);
+    const dataQ = isDataQuestion(decision) || Boolean(effectiveOpts.isValidationQuestion);
     return {
       block: dataQ ? "" : SOFT_ERROR_NOTE,
       decision,
@@ -474,6 +568,9 @@ export async function runContextPipeline(
       isDataQuestion: dataQ,
       toolsCalled: decision.toolsToCall.map((c) => c.tool),
       resultsSummary: [],
+      capabilityOutcome: "tool_error",
+      responseSource: "supabase",
+      registryFamily: preflight.family,
       shouldBlockModelAnswer: dataQ,
       fallbackAnswer: dataQ
         ? "No pude consultar la base de datos por un error temporal. No voy a inventar datos: vuelve a intentarlo en unos segundos o indícame un código exacto."

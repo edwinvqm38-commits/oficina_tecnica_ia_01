@@ -10,13 +10,14 @@ import { sendChatWithFallback } from "../../lib/llm/providers";
 import { routeRequest } from "../../lib/llm/modelRouter";
 import { getAgentModelOverride } from "../../lib/llm/agentModels";
 import type { ChatMessage } from "../../lib/llm/providers";
-import { parseInput, isSimpleMessage, isTeamMessage, hasClearIntent, slugForUser, HUMANIZE_CTX, resolveConversationReference, dedupeAgentLabels } from "../../lib/chat/messageUtils";
+import { parseInput, isSimpleMessage, isTeamMessage, hasClearIntent, slugForUser, HUMANIZE_CTX, dedupeAgentLabels } from "../../lib/chat/messageUtils";
 import type { UserDirectory } from "../../lib/chat/messageUtils";
 import { buildContextPrompt, buildRequirementItemsPrompt, fetchRequirementItems } from "../../lib/chat/contextQuery";
 import type { ChatCtx } from "../../lib/chat/contextQuery";
 import { runContextPipeline, type ContextPipelineResult } from "../../lib/chat/contextRouter";
 import { validateLlmAnswer, buildBlockedAnswer } from "../../lib/chat/contextValidation";
 import { getDatasetMemory, recordDisplayedDataset, updateDatasetMemory } from "../../lib/chat/datasetMemory";
+import { buildAgentProfileContext } from "../../lib/chat/agentProfiles";
 import { MdText } from "../chat/MdText";
 import { HelpPanel } from "../chat/HelpPanel";
 import { ChatAutoInput } from "../chat/ChatAutoInput";
@@ -557,29 +558,23 @@ export function RoundtableView() {
     // lib/chat/contextRouter (codes COT/RQ, historical codes, requerimiento/
     // cotización searches, recursos, propuestas técnicas). The pipeline never
     // throws — on a temporary error it returns a soft note instead of data.
-    let autoCodeCtx = "";
-    let pipeline: ContextPipelineResult | null = null;
-    if (!simple) {
-      // Resuelve referencias conversacionales ("ese proyecto", "es verdad lo
-      // que dice el PM") con el último código en los mensajes del usuario, para
-      // re-consultar Supabase y NO validar respuestas previas inventadas.
-      const recentUserTexts = thread.filter((m) => m.role === "gg").map((m) => m.text);
-      const ref = resolveConversationReference(parsed.cleanText, recentUserTexts);
-      pipeline = await runContextPipeline(ref.text, {
-        isValidationQuestion: ref.isValidationQuestion,
-        memory: getDatasetMemory(ROUNDTABLE_THREAD),
-      });
-      autoCodeCtx = pipeline.block;
+    // El registry/preflight corre incluso para mensajes cortos, antes de que un
+    // proveedor LLM pueda responder una capacidad global no implementada.
+    const pipeline: ContextPipelineResult = await runContextPipeline(parsed.cleanText, {
+      memory: getDatasetMemory(ROUNDTABLE_THREAD),
+      threadKey: ROUNDTABLE_THREAD,
+      agentId: responders[0] ?? TEAM_COORDINATOR,
+    });
+    const autoCodeCtx = pipeline.block;
 
-      // Aclaración pendiente: guardar si se pidió, limpiar si se resolvió/avanzó.
-      updateDatasetMemory(ROUNDTABLE_THREAD, { pendingClarification: pipeline.pendingClarification });
-    }
+    // Aclaración pendiente: guardar si se pidió, limpiar si se resolvió/avanzó.
+    updateDatasetMemory(ROUNDTABLE_THREAD, { pendingClarification: pipeline.pendingClarification });
 
     // Anti-alucinación: una consulta de datos se responde UNA sola vez con datos
     // reales (determinístico) o se rechaza sin inventar (fallback), SIN llamar al
     // LLM ni hacer que cada agente repita la misma tabla. La atribuye el primer
     // responder (o el coordinador) para mantener la conversación coherente.
-    if (pipeline && (pipeline.shouldUseDeterministicAnswer || pipeline.shouldBlockModelAnswer)) {
+    if (pipeline.shouldUseDeterministicAnswer || pipeline.shouldBlockModelAnswer) {
       const text = pipeline.shouldUseDeterministicAnswer
         ? pipeline.deterministicAnswer
         : pipeline.fallbackAnswer;
@@ -588,7 +583,7 @@ export function RoundtableView() {
         // Las aclaraciones salen como `datos/Sistema`; los datos reales como
         // `datos/Supabase`. Ambos se persisten para que se vean al recargar.
         const isClarif = Boolean(pipeline.isClarification || pipeline.clarificationResolved);
-        const label = isClarif ? "datos/Sistema" : "datos/Supabase";
+        const label = pipeline.responseSource === "supabase" ? "datos/Supabase" : "datos/Sistema";
         appendChat(ROUNDTABLE_THREAD, { role: "agent", agentId: primary, text, modelLabel: label });
         if (pipeline.shouldUseDeterministicAnswer) {
           // Memoria del dataset mostrado (solo desde datos reales / determinístico).
@@ -655,7 +650,7 @@ export function RoundtableView() {
         : await loadConversationHistory(userId, agId, activeProject.id, 6).catch(() => []);
 
       const messages: ChatMessage[] = [
-        { role: "system", content: sysPrompt + HUMANIZE_CTX + skillsCtx + platformCtx + projectCtx + requirementCtx + autoCodeCtx + attachmentCtx + toneCtx + brevityCtx + coordinatorCtx },
+        { role: "system", content: sysPrompt + HUMANIZE_CTX + buildAgentProfileContext(agId) + skillsCtx + platformCtx + projectCtx + requirementCtx + autoCodeCtx + attachmentCtx + toneCtx + brevityCtx + coordinatorCtx },
         ...supabaseHistory.map((m) => ({ role: m.role as "user" | "assistant", content: m.content })),
         ...buildThreadHistory(agId),
         { role: "user", content: parsed.cleanText + fileCtx },
@@ -668,7 +663,7 @@ export function RoundtableView() {
         const label = `${actualConfig.provider}/${response.model}`;
         // Post-validación anti-alucinación contra los datos reales recuperados.
         let finalText = response.content;
-        if (pipeline && pipeline.results.length > 0) {
+        if (pipeline.results.length > 0) {
           const v = validateLlmAnswer(finalText, pipeline.results);
           if (!v.ok) {
             if (process.env.NODE_ENV !== "production") console.debug("[AI_CONTEXT_VALIDATION] blocked", v.violations);

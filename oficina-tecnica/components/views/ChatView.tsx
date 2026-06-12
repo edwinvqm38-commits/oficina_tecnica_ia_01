@@ -9,7 +9,7 @@ import { sendChatWithFallback } from "../../lib/llm/providers";
 import { routeRequest } from "../../lib/llm/modelRouter";
 import { getAgentModelOverride } from "../../lib/llm/agentModels";
 import type { ChatMessage } from "../../lib/llm/providers";
-import { parseInput, isSimpleMessage, HUMANIZE_CTX, resolveConversationReference, dedupeAgentLabels } from "../../lib/chat/messageUtils";
+import { parseInput, isSimpleMessage, HUMANIZE_CTX, dedupeAgentLabels } from "../../lib/chat/messageUtils";
 import { MdText } from "../chat/MdText";
 import { HelpPanel } from "../chat/HelpPanel";
 import { ChatAutoInput } from "../chat/ChatAutoInput";
@@ -18,6 +18,7 @@ import type { ChatCtx } from "../../lib/chat/contextQuery";
 import { runContextPipeline, type ContextPipelineResult } from "../../lib/chat/contextRouter";
 import { validateLlmAnswer, buildBlockedAnswer } from "../../lib/chat/contextValidation";
 import { getDatasetMemory, recordDisplayedDataset, updateDatasetMemory } from "../../lib/chat/datasetMemory";
+import { buildAgentProfileContext } from "../../lib/chat/agentProfiles";
 import { useSession } from "../../lib/auth/useSession";
 import { saveConversation, loadConversationHistory } from "../../lib/memory/conversationMemory";
 
@@ -226,30 +227,24 @@ export function ChatView() {
     // lib/chat/contextRouter (codes COT/RQ, historical codes, requerimiento/
     // cotización searches, recursos, propuestas técnicas). The pipeline never
     // throws — on a temporary error it returns a soft note instead of data.
-    let autoCodeCtx = "";
-    let pipeline: ContextPipelineResult | null = null;
-    if (!simple) {
-      // Resuelve referencias conversacionales ("ese proyecto", "es verdad lo
-      // que dice el PM") usando el último código en los mensajes del usuario,
-      // para re-consultar Supabase en vez de dejar que el modelo invente.
-      const recentUserTexts = chatFor(threadKey).filter((m) => m.role === "gg").map((m) => m.text);
-      const ref = resolveConversationReference(parsed.cleanText, recentUserTexts);
-      pipeline = await runContextPipeline(ref.text, {
-        isValidationQuestion: ref.isValidationQuestion,
-        memory: getDatasetMemory(threadKey),
-      });
-      autoCodeCtx = pipeline.block;
+    // El preflight corre incluso en mensajes cortos: así "top proveedores" o
+    // "este RQ" no saltan el registry por la heurística de conversación simple.
+    const pipeline: ContextPipelineResult = await runContextPipeline(parsed.cleanText, {
+      memory: getDatasetMemory(threadKey),
+      threadKey,
+      agentId,
+    });
+    const autoCodeCtx = pipeline.block;
 
-      // Aclaración pendiente: si el pipeline pidió aclaración, la guardamos para
-      // que el próximo mensaje pueda elegir una opción; si la resolvió o respondió
-      // otra cosa, la limpiamos (el usuario siguió adelante).
-      updateDatasetMemory(threadKey, { pendingClarification: pipeline.pendingClarification });
-    }
+    // Aclaración pendiente: si el pipeline pidió aclaración, la guardamos para
+    // que el próximo mensaje pueda elegir una opción; si la resolvió o respondió
+    // otra cosa, la limpiamos (el usuario siguió adelante).
+    updateDatasetMemory(threadKey, { pendingClarification: pipeline.pendingClarification });
 
     // Anti-alucinación: para preguntas de datos la app responde directamente —
     // con datos reales (determinístico) o rechazando sin inventar (fallback) —
     // SIN llamar al LLM. Así garantizamos exactitud aunque el modelo sea pequeño.
-    if (pipeline?.shouldUseDeterministicAnswer && pipeline.deterministicAnswer) {
+    if (pipeline.shouldUseDeterministicAnswer && pipeline.deterministicAnswer) {
       appendChat(threadKey, { role: "agent", text: pipeline.deterministicAnswer, agentId, modelLabel: "datos/Supabase" });
       // Memoria del dataset mostrado (solo desde datos reales / determinístico).
       recordDisplayedDataset(threadKey, pipeline.results, pipeline.intent);
@@ -258,12 +253,12 @@ export function ChatView() {
       setTypingModel(undefined);
       return;
     }
-    if (pipeline?.shouldBlockModelAnswer && pipeline.fallbackAnswer) {
+    if (pipeline.shouldBlockModelAnswer && pipeline.fallbackAnswer) {
       // Las aclaraciones (tabla de opciones o respuesta a una opción) salen como
       // `datos/Sistema`, no como un proveedor LLM. Se persisten para que la tabla
       // de opciones siga visible al recargar.
       const isClarif = Boolean(pipeline.isClarification || pipeline.clarificationResolved);
-      const label = isClarif ? "datos/Sistema" : "datos/Supabase";
+      const label = pipeline.responseSource === "supabase" ? "datos/Supabase" : "datos/Sistema";
       appendChat(threadKey, { role: "agent", text: pipeline.fallbackAnswer, agentId, modelLabel: label });
       if (isClarif) {
         saveConversation(session?.email ?? "anonymous", agentId, parsed.cleanText, pipeline.fallbackAnswer, label, routing.complexity).catch(() => {});
@@ -283,7 +278,12 @@ export function ChatView() {
       ? `\n\nEl usuario adjuntó ${(inputCtx?.attachments?.length ?? 0) === 1 ? "un archivo" : `${inputCtx?.attachments?.length} archivos`} a este mensaje. Su contenido (texto extraído) viene al final, en bloques "--- Archivo adjunto: <nombre> ---". Básate en ese contenido para responder a lo que pregunta el usuario sobre el/los archivo(s) — NO respondas con un saludo genérico ni ignores el adjunto. Si el contenido extraído está vacío, es muy corto o dice "sin texto extraíble" (típico de planos/imágenes escaneadas), dilo explícitamente, indica qué archivo es (nombre) y pide al usuario un resumen, las páginas/secciones clave o una versión más legible para poder ayudar. El archivo adjunto de este mensaje es la fuente principal: ignora archivos o documentos mencionados en historial previo salvo que el usuario los nombre explícitamente.`
       : "";
 
-    const systemPrompt = (AGENT_SYSTEM_PROMPTS[agentId] ?? AGENT_SYSTEM_PROMPTS.ic) + HUMANIZE_CTX + ctxPrompt + autoCodeCtx + attachmentCtx;
+    const systemPrompt = (AGENT_SYSTEM_PROMPTS[agentId] ?? AGENT_SYSTEM_PROMPTS.ic)
+      + HUMANIZE_CTX
+      + buildAgentProfileContext(agentId)
+      + ctxPrompt
+      + autoCodeCtx
+      + attachmentCtx;
 
     // Load Supabase memory (older conversations) only for non-trivial
     // messages, but always read this thread's local history — it's already
@@ -325,7 +325,7 @@ export function ChatView() {
       // Post-validación: si el LLM inventó códigos/montos/fechas/clientes que no
       // están en el contexto real recuperado, se bloquea y se responde seguro.
       let finalText = response.content;
-      if (pipeline && pipeline.results.length > 0) {
+      if (pipeline.results.length > 0) {
         const v = validateLlmAnswer(finalText, pipeline.results);
         if (!v.ok) {
           if (process.env.NODE_ENV !== "production") console.debug("[AI_CONTEXT_VALIDATION] blocked", v.violations);
