@@ -6,7 +6,7 @@ import { useStore, useSkillsWithOverrides } from "../../lib/store/StoreProvider"
 import { agentById, AGENTS, PROJECTS } from "../../lib/data";
 import type { Skill } from "../../lib/types";
 import { agentAvatarClass } from "./shared";
-import { sendChatWithFallback, getOllamaModels } from "../../lib/llm/providers";
+import { sendChatWithFallback } from "../../lib/llm/providers";
 import { routeRequest } from "../../lib/llm/modelRouter";
 import { getAgentModelOverride } from "../../lib/llm/agentModels";
 import type { ChatMessage } from "../../lib/llm/providers";
@@ -22,17 +22,6 @@ import { saveConversation, loadConversationHistory } from "../../lib/memory/conv
 import { colorForEmail, initialsFor } from "../../lib/presence/avatar";
 import { useApprovedUsers, type ApprovedUser } from "../../lib/presence/useApprovedUsers";
 import { useRoomPresence, presenceStatus, type RoomPresenceEntry } from "../../lib/presence/useRoomPresence";
-
-function useOnlineMode() {
-  const [online, setOnline] = useState(true);
-  useEffect(() => { setOnline(localStorage.getItem("ot:ollama:disabled") !== "false"); }, []);
-  function toggle() {
-    const next = !online;
-    setOnline(next);
-    localStorage.setItem("ot:ollama:disabled", next ? "true" : "false");
-  }
-  return { online, toggle };
-}
 
 // Commands that explicitly request an AI response in Mesa de trabajo, even
 // when "IA: por mención" is active.
@@ -370,7 +359,6 @@ export function RoundtableView() {
   const { state, appendChat, chatFor, notify } = useStore();
   const skills = useSkillsWithOverrides();
   const { session } = useSession(false);
-  const { online, toggle: toggleOnline } = useOnlineMode();
   const { enabled: aiAssist, toggle: toggleAiAssist } = useAiAssist();
   const [input, setInput] = useState("");
   const [busy, setBusy] = useState(false);
@@ -380,7 +368,6 @@ export function RoundtableView() {
   const [narrow, setNarrow] = useState(false);
   const [usersDrawerOpen, setUsersDrawerOpen] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
-  const ollamaModelsRef = useRef<string[]>([]);
 
   const thread = chatFor(ROUNDTABLE_THREAD);
   const allProjects = [...PROJECTS, ...state.customProjects];
@@ -421,10 +408,6 @@ export function RoundtableView() {
   useEffect(() => {
     if (showHelp && scrollRef.current) scrollRef.current.scrollTop = 0;
   }, [showHelp]);
-
-  useEffect(() => {
-    getOllamaModels().then((m) => { ollamaModelsRef.current = m; });
-  }, []);
 
   useEffect(() => {
     function onResize() { setNarrow(window.innerWidth < NARROW_BREAKPOINT); }
@@ -513,7 +496,7 @@ export function RoundtableView() {
 
     const hasAttachments = (inputCtx?.attachments?.length ?? 0) > 0;
     const responders = agentsForMessage(parsed.cleanText, parsed.targetAgentIds, hasAttachments);
-    const routing = routeRequest(parsed.cleanText, ollamaModelsRef.current);
+    const routing = routeRequest(parsed.cleanText);
 
     // True when the message had no specific target/topic and routed solely
     // to the team coordinator — it should briefly point to the right
@@ -689,10 +672,10 @@ export function RoundtableView() {
         { role: "user", content: parsed.cleanText + fileCtx },
       ];
 
-      const agRouting = routeRequest(parsed.cleanText, ollamaModelsRef.current, getAgentModelOverride(agId));
+      const agRouting = routeRequest(parsed.cleanText, getAgentModelOverride(agId));
 
       try {
-        const { response, actualConfig } = await sendChatWithFallback(messages, agRouting.config, ollamaModelsRef.current);
+        const { response, actualConfig } = await sendChatWithFallback(messages, agRouting.config);
         const label = `${actualConfig.provider}/${response.model}`;
         appendChat(ROUNDTABLE_THREAD, { role: "agent", agentId: agId, text: response.content, modelLabel: label, modelSuggestion: agRouting.suggestion });
         saveConversation(userId, agId, parsed.cleanText + fileCtx, response.content, label, agRouting.complexity, activeProject?.id).catch(() => {});
@@ -756,14 +739,6 @@ export function RoundtableView() {
             </div>
             <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
               <span className="badge badge--green">IA activa</span>
-              <button
-                className="btn btn--ghost btn--sm"
-                style={{ fontSize: 10, color: online ? "var(--blue)" : "var(--t3)" }}
-                title={online ? "Modo Online — solo modelos cloud" : "Ollama activo — click para solo-cloud"}
-                onClick={toggleOnline}
-              >
-                {online ? "☁ Online" : "🖥 Local+Cloud"}
-              </button>
               <button
                 className="btn btn--ghost btn--sm"
                 style={{ fontSize: 10, color: aiAssist ? "var(--blue)" : "var(--t3)" }}

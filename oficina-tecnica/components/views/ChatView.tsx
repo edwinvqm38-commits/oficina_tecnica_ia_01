@@ -5,7 +5,7 @@ import { PageHeader } from "../shell/PageHeader";
 import { useStore } from "../../lib/store/StoreProvider";
 import { agentById } from "../../lib/data";
 import { agentAvatarClass } from "./shared";
-import { sendChatWithFallback, getOllamaModels } from "../../lib/llm/providers";
+import { sendChatWithFallback } from "../../lib/llm/providers";
 import { routeRequest } from "../../lib/llm/modelRouter";
 import { getAgentModelOverride } from "../../lib/llm/agentModels";
 import type { ChatMessage } from "../../lib/llm/providers";
@@ -137,21 +137,9 @@ function TypingDots({ agentId, modelLabel }: { agentId: string; modelLabel?: str
   );
 }
 
-function useOnlineMode() {
-  const [online, setOnline] = useState(true);
-  useEffect(() => { setOnline(localStorage.getItem("ot:ollama:disabled") !== "false"); }, []);
-  function toggle() {
-    const next = !online;
-    setOnline(next);
-    localStorage.setItem("ot:ollama:disabled", next ? "true" : "false");
-  }
-  return { online, toggle };
-}
-
 export function ChatView() {
   const { state, appendChat, chatFor, seedThreadFromLegacy, ready } = useStore();
   const { session } = useSession(false);
-  const { online, toggle: toggleOnline } = useOnlineMode();
   const [agentId, setAgentId] = useState("ic");
   const [input, setInput] = useState("");
   const [busy, setBusy] = useState(false);
@@ -159,7 +147,6 @@ export function ChatView() {
   const [showHelp, setShowHelp] = useState(false);
   const [visibleCount, setVisibleCount] = useState(VISIBLE_MESSAGES_STEP);
   const scrollRef = useRef<HTMLDivElement>(null);
-  const ollamaModelsRef = useRef<string[]>([]);
 
   // "Chat privado" is 1:1 between this user and the agent — namespace the
   // thread key by user so it never gets mixed with other users' private
@@ -187,10 +174,6 @@ export function ChatView() {
     setPrevThreadKey(threadKey);
     setVisibleCount(VISIBLE_MESSAGES_STEP);
   }
-
-  useEffect(() => {
-    getOllamaModels().then((models) => { ollamaModelsRef.current = models; });
-  }, []);
 
   // One-time migration: copy each agent's old unscoped thread (chats.ic etc,
   // shared by everyone before this fix) into this user's namespaced thread,
@@ -221,7 +204,7 @@ export function ChatView() {
     setInput("");
     setBusy(true);
 
-    const routing = routeRequest(parsed.cleanText, ollamaModelsRef.current, getAgentModelOverride(agentId));
+    const routing = routeRequest(parsed.cleanText, getAgentModelOverride(agentId));
     setTypingModel(routing.modelLabel);
 
     let ctxPrompt = inputCtx ? buildContextPrompt(inputCtx) : "";
@@ -347,7 +330,7 @@ export function ChatView() {
     ];
 
     try {
-      const { response, actualConfig } = await sendChatWithFallback(messages, routing.config, ollamaModelsRef.current);
+      const { response, actualConfig } = await sendChatWithFallback(messages, routing.config);
       const label = `${actualConfig.provider}/${response.model}`;
       appendChat(threadKey, { role: "agent", text: response.content, agentId, modelLabel: label, modelSuggestion: routing.suggestion });
       saveConversation(session?.email ?? "anonymous", agentId, parsed.cleanText, response.content, label, routing.complexity).catch(() => {});
@@ -419,14 +402,6 @@ export function ChatView() {
             </div>
             <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
               <span className="badge badge--green">IA activa</span>
-              <button
-                className="btn btn--ghost btn--sm"
-                style={{ fontSize: 10, color: online ? "var(--blue)" : "var(--t3)" }}
-                title={online ? "Modo Online — click para activar Ollama local" : "Ollama activo — click para modo solo-cloud"}
-                onClick={toggleOnline}
-              >
-                {online ? "☁ Online" : "🖥 Local+Cloud"}
-              </button>
               <button className="btn btn--ghost btn--sm" style={{ fontSize: 11 }} onClick={() => setShowHelp((v) => !v)}>/ayuda</button>
             </div>
           </div>

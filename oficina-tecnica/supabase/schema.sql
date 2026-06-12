@@ -36,7 +36,7 @@ create policy "workspace_state_update" on workspace_state
 create table if not exists provider_credentials (
   id uuid primary key default gen_random_uuid(),
   workspace_id text not null default 'default',
-  provider text not null check (provider in ('anthropic', 'openai', 'google', 'ollama')),
+  provider text not null check (provider in ('anthropic', 'openai', 'google')),
   ciphertext text not null,
   base_url text,
   default_model text,

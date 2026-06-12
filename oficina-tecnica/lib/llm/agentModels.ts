@@ -1,11 +1,5 @@
 // Default model recommendations for each agent role
 export const RECOMMENDED_MODELS = {
-  ollama: [
-    { model: "qwen2.5:7b",      label: "Qwen 2.5 7B",      description: "Mejor para español + análisis técnico", size: "4.4 GB", recommended: true },
-    { model: "deepseek-r1:7b",  label: "DeepSeek R1 7B",   description: "Razonamiento y análisis profundo",       size: "4.7 GB", recommended: false },
-    { model: "llama3.1:8b",     label: "Llama 3.1 8B",     description: "Conversación general",                   size: "4.7 GB", recommended: false },
-    { model: "mistral:7b",      label: "Mistral 7B",        description: "Tareas de ingeniería, rápido",           size: "4.1 GB", recommended: false },
-  ],
   gemini: [
     // Google retira versiones fechadas (1.5/2.0) periódicamente — usamos los
     // alias "latest", que Google redirige automáticamente al modelo vigente.
@@ -118,11 +112,3 @@ export function getAgentModelOverride(chatAgentId: string): AgentModelAssignment
 
   return DEFAULT_AGENT_MODELS[settingsId] ?? null;
 }
-
-export const OLLAMA_SETUP_STEPS = [
-  { step: 1, title: "Descargar Ollama", description: "Ve a ollama.com y descarga el instalador para tu sistema operativo (Windows/Mac/Linux).", link: "https://ollama.com/download" },
-  { step: 2, title: "Instalar Ollama",  description: "Ejecuta el instalador. Ollama correrá automáticamente en segundo plano en el puerto 11434." },
-  { step: 3, title: "Descargar un modelo", description: "Abre una terminal y ejecuta:", command: "ollama pull qwen2.5:7b" },
-  { step: 4, title: "Verificar instalación", description: "Ejecuta el siguiente comando para probar que funciona:", command: "ollama run qwen2.5:7b \"Hola, ¿puedes presentarte?\"" },
-  { step: 5, title: "Acceso remoto (opcional)", description: "Si quieres usar la app desde otra PC o desde Vercel, instala Cloudflare Tunnel:", command: "cloudflared tunnel --url http://localhost:11434", link: "https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/get-started/" },
-];

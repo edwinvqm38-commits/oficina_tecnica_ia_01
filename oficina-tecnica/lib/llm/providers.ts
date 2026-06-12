@@ -1,6 +1,5 @@
 // Supported LLM providers
 export type LLMProvider =
-  | "ollama"
   | "openai"
   | "anthropic"
   | "gemini"
@@ -32,39 +31,8 @@ export type LLMResponse = {
   tokensUsed?: number;
 };
 
-// Ollama is local-only and disabled by default (it caused CORS/connection
-// errors in production, where localhost:11434 doesn't exist). It must be
-// explicitly enabled by the user (e.g. from Conexiones) — absence of the
-// flag means disabled.
-export function isOllamaEnabled(): boolean {
-  if (typeof localStorage === "undefined") return false;
-  return localStorage.getItem("ot:ollama:disabled") === "false";
-}
-
-export async function checkOllamaConnectivity(baseUrl = "http://localhost:11434"): Promise<boolean> {
-  try {
-    const res = await fetch(`${baseUrl}/api/tags`, { signal: AbortSignal.timeout(3000) });
-    return res.ok;
-  } catch {
-    return false;
-  }
-}
-
-export async function getOllamaModels(baseUrl = "http://localhost:11434"): Promise<string[]> {
-  if (!isOllamaEnabled()) return [];
-  try {
-    const res = await fetch(`${baseUrl}/api/tags`, { signal: AbortSignal.timeout(5000) });
-    if (!res.ok) return [];
-    const data = await res.json();
-    return (data.models ?? []).map((m: { name: string }) => m.name);
-  } catch {
-    return [];
-  }
-}
-
 // Tries server proxy first (Vercel env vars); falls back to direct call with localStorage key
 export async function sendChat(messages: ChatMessage[], config: ModelConfig): Promise<LLMResponse> {
-  if (config.provider === "ollama") return sendOllamaChat(messages, config);
   if (config.provider === "anthropic") return sendAnthropicChat(messages, config);
   if (config.provider === "cloudflare") return sendCloudflareChat(messages, config);
 
@@ -144,19 +112,6 @@ async function sendOpenAICompatChat(
   };
 }
 
-async function sendOllamaChat(messages: ChatMessage[], config: ModelConfig): Promise<LLMResponse> {
-  const baseUrl = config.baseUrl ?? "http://localhost:11434";
-  const res = await fetch(`${baseUrl}/api/chat`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ model: config.model, messages, stream: false }),
-    signal: AbortSignal.timeout(12000),
-  });
-  if (!res.ok) throw new Error(`Ollama error: ${res.statusText}`);
-  const data = await res.json();
-  return { content: data.message?.content ?? "", model: config.model, provider: "ollama" };
-}
-
 async function sendAnthropicChat(messages: ChatMessage[], config: ModelConfig): Promise<LLMResponse> {
   const systemMsg = messages.find((m) => m.role === "system")?.content;
   const userMessages = messages.filter((m) => m.role !== "system");
@@ -210,7 +165,6 @@ async function sendCloudflareChat(messages: ChatMessage[], config: ModelConfig):
 export async function sendChatWithFallback(
   messages: ChatMessage[],
   primaryConfig: ModelConfig,
-  ollamaModels: string[]
 ): Promise<{ response: LLMResponse; actualConfig: ModelConfig; usedFallback: boolean }> {
   try {
     const response = await sendChat(messages, primaryConfig);
@@ -229,8 +183,6 @@ export async function sendChatWithFallback(
     { provider: "huggingface", lsKey: "ot:apikey:huggingface", model: "meta-llama/Llama-3.1-8B-Instruct" },
   ];
 
-  const ollamaBase = localStorage.getItem("ot:ollama:baseUrl") ?? "http://localhost:11434";
-
   for (const fb of CLOUD_FALLBACKS) {
     if (fb.provider === primaryConfig.provider) continue;
     // Always try server proxy (no key needed); also pass localStorage key if available
@@ -240,14 +192,6 @@ export async function sendChatWithFallback(
       const response = await sendChat(messages, config);
       return { response, actualConfig: config, usedFallback: true };
     } catch { /* try next */ }
-  }
-
-  if (isOllamaEnabled() && primaryConfig.provider !== "ollama" && ollamaModels.length > 0) {
-    const config: ModelConfig = { provider: "ollama", model: ollamaModels[0], baseUrl: ollamaBase };
-    try {
-      const response = await sendChat(messages, config);
-      return { response, actualConfig: config, usedFallback: true };
-    } catch { /* give up */ }
   }
 
   throw new Error("Sin conexión con ningún proveedor. Verifica tu conexión y las API keys en Conexiones.");

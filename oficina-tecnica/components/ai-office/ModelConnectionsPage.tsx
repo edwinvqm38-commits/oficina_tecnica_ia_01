@@ -1,20 +1,16 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import { aiAgentsMock } from "@/lib/ai-office/aiAgentsMock";
-import { checkOllamaConnectivity, getOllamaModels, isOllamaEnabled } from "@/lib/llm/providers";
-import { DEFAULT_AGENT_MODELS, OLLAMA_SETUP_STEPS, RECOMMENDED_MODELS, normalizeAgentModel } from "@/lib/llm/agentModels";
-
-type OllamaStatus = "checking" | "connected" | "disconnected" | "disabled";
+import { DEFAULT_AGENT_MODELS, RECOMMENDED_MODELS, normalizeAgentModel } from "@/lib/llm/agentModels";
 
 type ProviderKey =
-  | "ollama" | "gemini" | "groq" | "sambanova" | "openrouter"
+  | "gemini" | "groq" | "sambanova" | "openrouter"
   | "cerebras" | "mistral" | "together" | "huggingface"
   | "openai" | "anthropic";
 
 type AgentModelAssignment = { provider: ProviderKey; model: string };
 
-const LS_OLLAMA_URL   = "ot:ollama:baseUrl";
 const LS_AGENT_MODELS = "ot:agent:models";
 
 const API_KEY_FIELDS: { label: string; key: string; placeholder: string; envVar: string }[] = [
@@ -35,142 +31,11 @@ function getLS(key: string, fallback: string): string {
   return localStorage.getItem(key) ?? fallback;
 }
 
-// ── Ollama Status Banner ──────────────────────────────────────────────────────
-
-function OllamaStatusBanner({
-  status, ollamaUrl, ollamaModels, setupOpen, onToggleSetup,
-}: {
-  status: OllamaStatus; ollamaUrl: string; ollamaModels: string[]; setupOpen: boolean; onToggleSetup: () => void;
-}) {
-  if (status === "disabled") {
-    return (
-      <div className="card" style={{ borderLeft: "3px solid var(--t3)", padding: "12px 16px" }}>
-        <p style={{ fontSize: 13, color: "var(--t2)" }}>
-          Ollama está desactivado. No se realizan llamadas a <span style={{ fontFamily: "var(--mono)" }}>{ollamaUrl}</span>. Actívalo arriba si quieres usar modelos locales.
-        </p>
-      </div>
-    );
-  }
-
-  if (status === "checking") {
-    return (
-      <div className="card" style={{ borderLeft: "3px solid var(--blue)", padding: "12px 16px", display: "flex", alignItems: "center", gap: 10 }}>
-        <span className="spinner" />
-        <p style={{ fontSize: 13, color: "var(--t2)" }}>Verificando conexión con Ollama…</p>
-      </div>
-    );
-  }
-
-  if (status === "connected") {
-    return (
-      <div className="card" style={{ borderLeft: "3px solid var(--green)", padding: "12px 16px" }}>
-        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-          <span style={{ width: 8, height: 8, borderRadius: "50%", background: "var(--green)", flexShrink: 0 }} />
-          <p style={{ fontSize: 13, fontWeight: 600, color: "var(--green-text)" }}>
-            Ollama conectado en <span style={{ fontFamily: "var(--mono)" }}>{ollamaUrl}</span>
-            {" — "}
-            {ollamaModels.length > 0 ? `${ollamaModels.length} modelo${ollamaModels.length !== 1 ? "s" : ""} disponible${ollamaModels.length !== 1 ? "s" : ""}` : "sin modelos descargados"}
-          </p>
-        </div>
-
-        {/* Modelos disponibles with compatibility */}
-        {ollamaModels.length > 0 && (
-          <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginTop: 8 }}>
-            {ollamaModels.map((m) => (
-              <span key={m} className="badge badge--slate" style={{ fontFamily: "var(--mono)", fontSize: 11 }}>{m}</span>
-            ))}
-          </div>
-        )}
-      </div>
-    );
-  }
-
-  return (
-    <div className="card" style={{ borderLeft: "3px solid var(--amber)" }}>
-      <div style={{ padding: "12px 16px", display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10 }}>
-        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-          <span style={{ width: 8, height: 8, borderRadius: "50%", background: "var(--amber)", flexShrink: 0 }} />
-          <p style={{ fontSize: 13, fontWeight: 600, color: "var(--amber-text)" }}>
-            Ollama no detectado en <span style={{ fontFamily: "var(--mono)" }}>{ollamaUrl}</span>
-          </p>
-        </div>
-        <button className="btn btn--ghost btn--sm" onClick={onToggleSetup}>
-          {setupOpen ? "Ocultar guía" : "Guía de instalación"}
-        </button>
-      </div>
-
-      {setupOpen && (
-        <div style={{ borderTop: "1px solid var(--amber-border)", padding: "16px", background: "var(--amber-bg)" }}>
-          <p style={{ fontSize: 12, fontWeight: 700, color: "var(--amber-text)", marginBottom: 14, textTransform: "uppercase", letterSpacing: "0.08em" }}>Cómo instalar Ollama</p>
-          <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
-            {OLLAMA_SETUP_STEPS.map((s) => (
-              <div key={s.step} style={{ display: "flex", gap: 14, alignItems: "flex-start" }}>
-                <div style={{ width: 24, height: 24, borderRadius: "50%", background: "var(--amber)", color: "#fff", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 11, fontWeight: 700, flexShrink: 0 }}>
-                  {s.step}
-                </div>
-                <div style={{ flex: 1 }}>
-                  <p style={{ fontSize: 13, fontWeight: 600, color: "var(--t1)", marginBottom: 3 }}>{s.title}</p>
-                  <p style={{ fontSize: 12, color: "var(--t2)", lineHeight: 1.5, marginBottom: s.command ? 6 : 0 }}>{s.description}</p>
-                  {s.command && (
-                    <pre style={{ fontFamily: "var(--mono)", fontSize: 12, background: "var(--bg-subtle)", border: "1px solid var(--border)", borderRadius: "var(--r)", padding: "6px 10px", color: "var(--t1)", overflowX: "auto" }}>
-                      {s.command}
-                    </pre>
-                  )}
-                  {s.link && (
-                    <a href={s.link} target="_blank" rel="noopener noreferrer" style={{ fontSize: 11, color: "var(--blue)", marginTop: 4, display: "inline-block" }}>{s.link}</a>
-                  )}
-                </div>
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
-    </div>
-  );
-}
-
-// ── Ollama URL Config ─────────────────────────────────────────────────────────
-
-function OllamaUrlConfig({ ollamaUrl, onUrlChange, onTest, status }: {
-  ollamaUrl: string; onUrlChange: (url: string) => void; onTest: () => void; status: OllamaStatus;
-}) {
-  const [draft, setDraft] = useState(ollamaUrl);
-
-  function handleSave() {
-    const url = draft.trim() || "http://localhost:11434";
-    localStorage.setItem(LS_OLLAMA_URL, url);
-    onUrlChange(url);
-    onTest();
-  }
-
-  return (
-    <div className="card">
-      <div className="card-header">
-        <div>
-          <p className="page-eyebrow" style={{ marginBottom: 2 }}>Configuración</p>
-          <p style={{ fontSize: 13, fontWeight: 600, color: "var(--t1)" }}>URL de Ollama</p>
-        </div>
-      </div>
-      <div className="card-body" style={{ display: "flex", gap: 8, alignItems: "flex-end", flexWrap: "wrap" }}>
-        <div className="field" style={{ flex: 1, minWidth: 220, marginBottom: 0 }}>
-          <label className="field-label">Base URL</label>
-          <input className="input" type="url" value={draft} onChange={(e) => setDraft(e.target.value)} placeholder="http://localhost:11434" />
-          <span className="field-hint">Por defecto: http://localhost:11434. Cambia si usas Cloudflare Tunnel u otro proxy.</span>
-        </div>
-        <button className="btn btn--primary btn--sm" onClick={handleSave} disabled={status === "checking"} style={{ flexShrink: 0, marginBottom: 18 }}>
-          {status === "checking" ? "Probando…" : "Probar conexión"}
-        </button>
-      </div>
-    </div>
-  );
-}
-
 // ── Agent Model Assignments ───────────────────────────────────────────────────
 
-function AgentModelAssignments({ assignments, onChange, ollamaModels }: {
+function AgentModelAssignments({ assignments, onChange }: {
   assignments: Record<string, AgentModelAssignment>;
   onChange: (agentId: string, value: AgentModelAssignment) => void;
-  ollamaModels: string[];
 }) {
 
   return (
@@ -186,15 +51,7 @@ function AgentModelAssignments({ assignments, onChange, ollamaModels }: {
       <div style={{ display: "flex", flexDirection: "column" }}>
         {aiAgentsMock.map((agent, idx) => {
           const asgn: AgentModelAssignment = (assignments[agent.id] as AgentModelAssignment | undefined) ?? (DEFAULT_AGENT_MODELS[agent.id] as AgentModelAssignment | undefined) ?? { provider: "gemini", model: "gemini-flash-latest" };
-          const models =
-            asgn.provider === "ollama"
-              ? [
-                  ...RECOMMENDED_MODELS.ollama,
-                  ...ollamaModels
-                    .filter((m) => !RECOMMENDED_MODELS.ollama.find((r) => r.model === m))
-                    .map((m) => ({ model: m, label: m, description: "Instalado localmente", recommended: false, size: undefined })),
-                ]
-              : RECOMMENDED_MODELS[asgn.provider] ?? RECOMMENDED_MODELS.gemini;
+          const models = RECOMMENDED_MODELS[asgn.provider] ?? RECOMMENDED_MODELS.gemini;
 
           return (
             <div key={agent.id} style={{ padding: "12px 16px", borderBottom: idx < aiAgentsMock.length - 1 ? "1px solid var(--border)" : "none", display: "flex", gap: 16, alignItems: "flex-start", flexWrap: "wrap" }}>
@@ -223,9 +80,6 @@ function AgentModelAssignments({ assignments, onChange, ollamaModels }: {
                     <option value="mistral">Mistral AI</option>
                     <option value="together">Together AI</option>
                     <option value="huggingface">Hugging Face</option>
-                  </optgroup>
-                  <optgroup label="Local">
-                    <option value="ollama">Ollama (local)</option>
                   </optgroup>
                   <optgroup label="De pago">
                     <option value="openai">OpenAI</option>
@@ -364,20 +218,9 @@ function ProviderReferenceSection() {
 // ── Main Page ─────────────────────────────────────────────────────────────────
 
 export function ModelConnectionsPage() {
-  const [ollamaUrl, setOllamaUrl] = useState("http://localhost:11434");
-  const [ollamaStatus, setOllamaStatus] = useState<OllamaStatus>("disabled");
-  const [ollamaModels, setOllamaModels] = useState<string[]>([]);
-  const [setupOpen, setSetupOpen] = useState(false);
   const [assignments, setAssignments] = useState<Record<string, AgentModelAssignment>>({});
-  const [ollamaEnabled, setOllamaEnabled] = useState(false);
 
   useEffect(() => {
-    setOllamaEnabled(isOllamaEnabled());
-  }, []);
-
-  useEffect(() => {
-    const savedUrl = getLS(LS_OLLAMA_URL, "http://localhost:11434");
-    setOllamaUrl(savedUrl);
     const savedModels = getLS(LS_AGENT_MODELS, "");
     if (savedModels) {
       try {
@@ -389,28 +232,6 @@ export function ModelConnectionsPage() {
       setAssignments(DEFAULT_AGENT_MODELS as Record<string, AgentModelAssignment>);
     }
   }, []);
-
-  const runConnectivityCheck = useCallback(async (url: string) => {
-    if (!isOllamaEnabled()) {
-      setOllamaModels([]);
-      setOllamaStatus("disabled");
-      return;
-    }
-    setOllamaStatus("checking");
-    const ok = await checkOllamaConnectivity(url);
-    if (ok) {
-      setOllamaModels(await getOllamaModels(url));
-      setOllamaStatus("connected");
-      setSetupOpen(false);
-    } else {
-      setOllamaModels([]);
-      setOllamaStatus("disconnected");
-    }
-  }, []);
-
-  useEffect(() => {
-    runConnectivityCheck(getLS(LS_OLLAMA_URL, "http://localhost:11434"));
-  }, [runConnectivityCheck, ollamaEnabled]);
 
   function handleAssignmentChange(agentId: string, value: AgentModelAssignment) {
     setAssignments((prev) => {
@@ -427,40 +248,15 @@ export function ModelConnectionsPage() {
           <p className="page-eyebrow">Configuración · Admin</p>
           <h1 className="page-title">Conexiones y modelos LLM</h1>
           <p className="page-desc">
-            Configura proveedores de modelos: Gemini, Groq, Sambanova, Mistral, Cerebras, Together, HuggingFace, Ollama, OpenAI y Anthropic.
-            Los proveedores gratuitos se usan primero; la app rota automáticamente si uno falla.
+            Configura proveedores de modelos: Gemini, Groq, Sambanova, Mistral, Cerebras, Together, HuggingFace, OpenAI y Anthropic.
+            Los proveedores gratuitos se usan primero; la app rota automáticamente si uno falla. Sin modelos locales — todos los agentes usan proveedores cloud vía API key.
           </p>
         </div>
       </div>
 
       <ServerStatusSection />
 
-      {/* Ollama toggle */}
-      <div className="card" style={{ padding: "12px 16px", display: "flex", alignItems: "center", justifyContent: "space-between", gap: 16 }}>
-        <div>
-          <p style={{ fontSize: 13, fontWeight: 600, color: "var(--t1)" }}>Ollama (modelos locales)</p>
-          <p style={{ fontSize: 11.5, color: "var(--t2)", marginTop: 2 }}>
-            {ollamaEnabled
-              ? "Activo — se usará como respaldo si los proveedores cloud fallan. Puede ser lento."
-              : "Desactivado — solo se usan modelos cloud (Gemini, Groq, Sambanova…). Recomendado en producción."}
-          </p>
-        </div>
-        <button
-          onClick={() => {
-            const next = !ollamaEnabled;
-            setOllamaEnabled(next);
-            localStorage.setItem("ot:ollama:disabled", next ? "false" : "true");
-          }}
-          className={ollamaEnabled ? "btn btn--warning btn--sm" : "btn btn--success btn--sm"}
-          style={{ flexShrink: 0 }}
-        >
-          {ollamaEnabled ? "Desactivar Ollama" : "Activar Ollama"}
-        </button>
-      </div>
-
-      <OllamaStatusBanner status={ollamaStatus} ollamaUrl={ollamaUrl} ollamaModels={ollamaModels} setupOpen={setupOpen} onToggleSetup={() => setSetupOpen((v) => !v)} />
-      <OllamaUrlConfig ollamaUrl={ollamaUrl} onUrlChange={setOllamaUrl} onTest={() => runConnectivityCheck(ollamaUrl)} status={ollamaStatus} />
-      <AgentModelAssignments assignments={assignments} onChange={handleAssignmentChange} ollamaModels={ollamaModels} />
+      <AgentModelAssignments assignments={assignments} onChange={handleAssignmentChange} />
       <ProviderReferenceSection />
     </div>
   );

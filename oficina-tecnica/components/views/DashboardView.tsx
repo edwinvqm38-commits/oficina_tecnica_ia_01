@@ -203,7 +203,6 @@ export function DashboardView() {
             </div>
             <div style={{ padding: "8px 14px", display: "flex", flexDirection: "column", gap: 6 }}>
               {[
-                { label: "Ollama", status: "unknown", enabled: false },
                 { label: "Memoria local", status: "online", enabled: true },
                 { label: "Supabase", status: "unknown" as const, enabled: false },
                 { label: "IA (proveedores)", status: "fallback", enabled: true },

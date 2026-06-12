@@ -21,13 +21,12 @@ export type Notification = {
   ts: number;
 };
 
-export type ModelProviderId = "anthropic" | "openai" | "google" | "ollama";
+export type ModelProviderId = "anthropic" | "openai" | "google";
 
 export type ProviderConnection = {
   provider: ModelProviderId;
   /** Stored only client-side / sent to the server route per-request — never written to localStorage in plaintext for cloud providers. */
   apiKey: string;
-  /** For Ollama: base URL of the local server, e.g. http://localhost:11434 */
   baseUrl?: string;
   enabled: boolean;
   defaultModel: string;

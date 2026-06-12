@@ -1,5 +1,4 @@
 import type { ModelConfig, LLMProvider } from "./providers";
-import { isOllamaEnabled } from "./providers";
 import { isDataAccessQuestion, isLogTableQuestion } from "../chat/messageUtils";
 
 export type RequestComplexity = "simple" | "technical" | "analytical" | "generative";
@@ -60,24 +59,11 @@ const PAID_PROVIDER_TIERS: Partial<Record<LLMProvider, { light: string; deepLabe
   anthropic: { light: "claude-haiku-4-5-20251001", deepLabel: "Claude Sonnet" },
 };
 
-const OLLAMA_DEEP_PREFERENCE = ["deepseek-r1:7b", "qwen2.5:7b", "mistral:7b"];
-
-function pickOllama(availableOllamaModels: string[], preferred: string[], fallback: string): string {
-  for (const m of preferred) {
-    const found = availableOllamaModels.find((am) => am.startsWith(m));
-    if (found) return found;
-  }
-  return availableOllamaModels[0] ?? fallback;
-}
-
 export function routeRequest(
   text: string,
-  availableOllamaModels: string[],
   agentModelOverride?: { provider: string; model: string } | null,
 ): RoutingDecision {
   const complexity = classifyRequest(text);
-  const ollamaBase = getKey("ot:ollama:baseUrl") || "http://localhost:11434";
-  const ollamaEnabled = isOllamaEnabled();
 
   const geminiKey     = getKey("ot:apikey:gemini");
   const groqKey       = getKey("ot:apikey:groq");
@@ -114,9 +100,9 @@ export function routeRequest(
     // serve these providers even without a per-browser API key — so a
     // manual model assignment for them should be honored regardless of
     // whether the user has a local key. Anthropic has no server proxy and
-    // needs a local key; Ollama needs availableOllamaModels/baseUrl only.
-    const usableWithoutLocalKey = prov !== "anthropic" && prov !== "ollama";
-    if (key || prov === "ollama" || usableWithoutLocalKey) {
+    // needs a local key.
+    const usableWithoutLocalKey = prov !== "anthropic";
+    if (key || usableWithoutLocalKey) {
       let model = agentModelOverride.model;
       let reason = "Modelo configurado manualmente";
       let suggestion: string | undefined;
@@ -127,19 +113,13 @@ export function routeRequest(
         if (freeTier && model === freeTier.light) {
           model = freeTier.deep;
           reason = "Modelo configurado manualmente → se usó la versión avanzada de este proveedor para esta consulta (anti-alucinación)";
-        } else if (prov === "ollama" && availableOllamaModels.length > 0) {
-          const upgraded = pickOllama(availableOllamaModels, OLLAMA_DEEP_PREFERENCE, model);
-          if (upgraded !== model) {
-            model = upgraded;
-            reason = "Modelo configurado manualmente → se usó un modelo Ollama de razonamiento para esta consulta (anti-alucinación)";
-          }
         } else if (paidTier && model === paidTier.light) {
           suggestion = `Este agente usa "${model}" para preguntas de cotizaciones/requerimientos. Se recomienda cambiarlo a ${paidTier.deepLabel} en Conexiones para reducir el riesgo de alucinaciones.`;
         }
       }
 
       return {
-        config: { provider: prov, model, apiKey: key || undefined, baseUrl: prov === "ollama" ? ollamaBase : undefined },
+        config: { provider: prov, model, apiKey: key || undefined },
         complexity,
         reason,
         modelLabel: model,
@@ -185,16 +165,6 @@ export function routeRequest(
 
   if (huggingfaceKey) {
     return { config: { provider: "huggingface", model: "meta-llama/Llama-3.1-8B-Instruct", apiKey: huggingfaceKey }, complexity, reason: "HuggingFace → gratuito, miles de modelos", modelLabel: "Llama-3.1-8B" };
-  }
-
-  if (ollamaEnabled && availableOllamaModels.length > 0) {
-    if (isDeep) {
-      const model = pickOllama(availableOllamaModels, OLLAMA_DEEP_PREFERENCE, "qwen2.5:7b");
-      return { config: { provider: "ollama", model, baseUrl: ollamaBase }, complexity, reason: "Ollama local → modelo de razonamiento", modelLabel: model };
-    }
-
-    const model = pickOllama(availableOllamaModels, ["qwen2.5:7b", "mistral:7b", "llama3.1:8b"], "qwen2.5:7b");
-    return { config: { provider: "ollama", model, baseUrl: ollamaBase }, complexity, reason: "Ollama local → modelo eficiente", modelLabel: model };
   }
 
   if (openaiKey) {
