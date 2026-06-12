@@ -187,12 +187,46 @@ export function resolveConversationReference(cleanText: string, recentUserTexts:
   const code = findLastCodeInHistory(recentUserTexts);
   if (!code) return { text: t, injectedCode: null, isValidationQuestion };
 
-  // Para validaciones o referencias a requerimientos, encaminamos hacia la
-  // consulta relacional de requerimientos del proyecto/cotización.
-  const text = isValidationQuestion || /requerimiento/i.test(t)
-    ? `${t} requerimientos del proyecto ${code}`
-    : `${t} ${code}`;
+  // Un código RQ se valida sobre el DETALLE del requerimiento (existe, # ítems,
+  // estado/avance), no como consulta relacional de proyecto. Para proyectos/
+  // cotizaciones sí encaminamos a "requerimientos del proyecto X".
+  const isRqCode = /^RQ-/i.test(code);
+  const text = isRqCode
+    ? `${t} ${code}`
+    : isValidationQuestion || /requerimiento/i.test(t)
+      ? `${t} requerimientos del proyecto ${code}`
+      : `${t} ${code}`;
   return { text, injectedCode: code, isValidationQuestion };
+}
+
+// ── Intención de análisis/clasificación sobre lo ya mostrado ─────────────────
+// Preguntas de seguimiento como "de esos recursos cuáles son eléctricos",
+// "diferéncialos", "revisa nuevamente", "solo los eléctricos" NO deben volver a
+// "listar todo": piden clasificar/filtrar el dataset anterior. Estas señales
+// enrutan a un análisis determinístico (no al LLM).
+const ELECTRIC_TERM_RE = /\b(el[eé]ctric[oa]s?|electric)\b/i;
+const RECURSO_MENTION_RE = /\brecursos?\b|\bcat[aá]logo\b/i;
+// Sin word-boundary final: los stems ("difer[eé]nci", "clasific", "mezclad") deben
+// matchear aunque sigan con sufijos ("diferéncialos", "mezclados").
+const ANALYZE_FILTER_RE = /\b(?:cu[aá]l(?:es)?\s+(?:son|aplican)|difer[eé]nci|clasific|filtr|separa|s[oó]lo\s+los|solo\s+los|de\s+(?:los|esos|estos)\s+recursos|recursos?\s+anteriores|listado\s+anterior|del\s+listado|respuestas?\s+anteriores|revisa\s+nuevamente|otros?\s+recursos|mezclad)/i;
+// Seguimiento puro (sin la palabra "eléctrico"): solo aplica si antes se mostró
+// un dataset de recursos.
+const FOLLOWUP_FILTER_RE = /\b(?:difer[eé]nci|revisa\s+nuevamente|s[oó]lo\s+los|solo\s+los|mezclad|cu[aá]les\s+aplican|de\s+(?:esos|estos)\s+recursos|otros?\s+recursos)/i;
+
+/**
+ * True cuando el usuario pide identificar/clasificar/filtrar recursos eléctricos
+ * (sobre el catálogo o sobre lo mostrado antes). `hadRecursosContext` indica que
+ * en este hilo ya se mostró un dataset de recursos (memoria), lo que habilita
+ * seguimientos sin la palabra "eléctrico" ("diferéncialos", "revisa nuevamente").
+ */
+export function wantsElectricalClassification(cleanText: string, hadRecursosContext = false): boolean {
+  const t = cleanText.trim();
+  if (!t) return false;
+  if (ELECTRIC_TERM_RE.test(t) && (RECURSO_MENTION_RE.test(t) || ANALYZE_FILTER_RE.test(t) || /\b(anteriores|esos|estos)\b/i.test(t))) {
+    return true;
+  }
+  if (hadRecursosContext && FOLLOWUP_FILTER_RE.test(t)) return true;
+  return false;
 }
 
 // ── Inline markdown to React nodes ───────────────────────────────────────────

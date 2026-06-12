@@ -17,6 +17,7 @@ import { buildContextPrompt, buildRequirementItemsPrompt, fetchRequirementItems 
 import type { ChatCtx } from "../../lib/chat/contextQuery";
 import { runContextPipeline, type ContextPipelineResult } from "../../lib/chat/contextRouter";
 import { validateLlmAnswer, buildBlockedAnswer } from "../../lib/chat/contextValidation";
+import { getDatasetMemory, recordDisplayedDataset } from "../../lib/chat/datasetMemory";
 import { useSession } from "../../lib/auth/useSession";
 import { saveConversation, loadConversationHistory } from "../../lib/memory/conversationMemory";
 
@@ -233,7 +234,10 @@ export function ChatView() {
       // para re-consultar Supabase en vez de dejar que el modelo invente.
       const recentUserTexts = chatFor(threadKey).filter((m) => m.role === "gg").map((m) => m.text);
       const ref = resolveConversationReference(parsed.cleanText, recentUserTexts);
-      pipeline = await runContextPipeline(ref.text, { isValidationQuestion: ref.isValidationQuestion });
+      pipeline = await runContextPipeline(ref.text, {
+        isValidationQuestion: ref.isValidationQuestion,
+        memory: getDatasetMemory(threadKey),
+      });
       autoCodeCtx = pipeline.block;
     }
 
@@ -242,6 +246,8 @@ export function ChatView() {
     // SIN llamar al LLM. Así garantizamos exactitud aunque el modelo sea pequeño.
     if (pipeline?.shouldUseDeterministicAnswer && pipeline.deterministicAnswer) {
       appendChat(threadKey, { role: "agent", text: pipeline.deterministicAnswer, agentId, modelLabel: "datos/Supabase" });
+      // Memoria del dataset mostrado (solo desde datos reales / determinístico).
+      recordDisplayedDataset(threadKey, pipeline.results, pipeline.intent);
       saveConversation(session?.email ?? "anonymous", agentId, parsed.cleanText, pipeline.deterministicAnswer, "datos/Supabase", routing.complexity).catch(() => {});
       setBusy(false);
       setTypingModel(undefined);

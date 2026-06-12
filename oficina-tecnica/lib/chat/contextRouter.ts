@@ -18,7 +18,9 @@ import {
   detectCotizacionSearchIntent,
   isLogTableQuestion,
   stripAgentLabelsForRouting,
+  wantsElectricalClassification,
 } from "@/lib/chat/messageUtils";
+import type { DatasetMemory } from "@/lib/chat/datasetMemory";
 import {
   buscarCotizaciones,
   buscarCotizacionPorCodigo,
@@ -28,6 +30,7 @@ import {
   buscarItemsDeRequerimiento,
   buscarPropuestaTecnicaPorCodigo,
   buscarRecursos,
+  clasificarRecursosElectricos,
   buscarProyectoPorCodigo,
   obtenerResumenProyecto,
   DEFAULT_CONTEXT_LIMIT,
@@ -46,6 +49,7 @@ export type ContextToolName =
   | "buscarRequerimientosPorProyecto"
   | "buscarPropuestaTecnicaPorCodigo"
   | "buscarRecursos"
+  | "clasificarRecursosElectricos"
   | "buscarProyectoPorCodigo"
   | "obtenerResumenProyecto";
 
@@ -83,11 +87,24 @@ function detectRecursoIntent(t: string): RecursosToolFilters | null {
  * Router puro y testeable: no toca Supabase. Las consultas dependientes de
  * resultados en runtime (ítems de un RQ encontrado) las encadena el pipeline.
  */
-export function detectContextIntent(cleanText: string): ContextRoutingDecision {
+export function detectContextIntent(cleanText: string, memory: DatasetMemory = {}): ContextRoutingDecision {
   // Quita prefijos de rol del agente ("Ingeniero de Costos ...", repetidos o no)
   // para que la detección vea solo la pregunta real.
   const t = stripAgentLabelsForRouting(cleanText);
   if (!t) return { intent: "sin_intencion_datos", toolsToCall: [], confidence: 0, reason: "Mensaje vacío." };
+
+  // Clasificación/filtrado de recursos eléctricos (análisis del catálogo o de lo
+  // mostrado antes): "de esos recursos cuáles son eléctricos", "diferéncialos",
+  // "revisa nuevamente". Tiene prioridad: NO volvemos a "listar todo".
+  const hadRecursosContext = memory.lastDisplayedDataset === "recursos";
+  if (wantsElectricalClassification(t, hadRecursosContext)) {
+    return {
+      intent: "clasificar_recursos_electricos",
+      toolsToCall: [{ tool: "clasificarRecursosElectricos", args: {} }],
+      confidence: 0.85,
+      reason: "El usuario pide identificar/clasificar/filtrar recursos eléctricos, no listar el catálogo completo.",
+    };
+  }
 
   const wantsResumen = RESUMEN_RE.test(t);
   const wantsProposal = PROPOSAL_RE.test(t);
@@ -203,6 +220,8 @@ async function executeTool(call: ContextToolCall): Promise<ContextToolResult> {
       return buscarPropuestaTecnicaPorCodigo(String(call.args.code));
     case "buscarRecursos":
       return buscarRecursos(call.args.filters as RecursosToolFilters, call.args.limit as number | undefined);
+    case "clasificarRecursosElectricos":
+      return clasificarRecursosElectricos();
     case "buscarProyectoPorCodigo":
       return buscarProyectoPorCodigo(String(call.args.code));
     case "obtenerResumenProyecto":
@@ -244,6 +263,8 @@ export interface ContextPipelineResult {
 export interface ContextPipelineOptions {
   /** El usuario pide validar/confirmar algo (no usar respuestas previas como verdad). */
   isValidationQuestion?: boolean;
+  /** Memoria del último dataset mostrado en el hilo (para seguimientos). */
+  memory?: DatasetMemory;
 }
 
 function summarize(results: ContextToolResult[]): ContextResultSummary[] {
@@ -313,7 +334,7 @@ export async function runContextPipeline(
   cleanText: string,
   opts: ContextPipelineOptions = {},
 ): Promise<ContextPipelineResult> {
-  const decision = detectContextIntent(cleanText);
+  const decision = detectContextIntent(cleanText, opts.memory ?? {});
 
   // Sin herramientas que ejecutar: o no es pregunta de datos, o es una pregunta
   // de tabla sin filtro (needs_clarification). finalizePipeline decide si se

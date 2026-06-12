@@ -15,6 +15,7 @@
 
 import type { ContextToolResult } from "@/lib/chat/contextTools";
 import type { ContextRoutingDecision } from "@/lib/chat/contextRouter";
+import type { DatasetMemory } from "@/lib/chat/datasetMemory";
 import type {
   CotizacionSummary,
   RequirementSummary,
@@ -30,6 +31,7 @@ const DATA_INTENTS = new Set([
   "buscar_requerimientos",
   "buscar_cotizaciones",
   "buscar_recursos",
+  "clasificar_recursos_electricos",
   "needs_clarification",
 ]);
 
@@ -139,6 +141,72 @@ function renderRecursos(result: Extract<ContextToolResult, { source: "recursos" 
     ? `\n\nHay ${result.total} recursos en total; muestro ${result.records.length}. Pide un filtro (tipo, proveedor, marca) para acotar.`
     : "";
   return `Encontré ${result.records.length} recurso(s) en el catálogo (Supabase)${result.total !== result.records.length ? ` (de ${result.total})` : ""}:\n\n${tbl}${extra}`;
+}
+
+// Disclaimer obligatorio: la clasificación eléctrica es una inferencia técnica,
+// no un campo formal de la tabla `recursos` (no existe `es_electrico`).
+const ELECTRIC_DISCLAIMER =
+  "Supabase no tiene un campo `es_eléctrico`: esta clasificación es una **inferencia técnica** a partir de descripción/tipo/marca, no un campo formal de la tabla.";
+const ELECTRIC_EXCLUSION_NOTE =
+  "No incluí cursos, EPPs, antecedentes, alimentación, lavado ni gastos generales porque no corresponden a recursos eléctricos según descripción/tipo/marca.";
+
+// Clasificación de recursos eléctricos sobre el catálogo COMPLETO. Solo lista
+// los eléctricos/dudosos (nunca "todos mezclados") y deja claro el total real.
+function renderRecursosElectricos(
+  result: Extract<ContextToolResult, { source: "recursos" }>,
+): string {
+  const total = result.classifiedTotal ?? result.total;
+  const electrical = result.classifiedElectrical ?? [];
+  const header = `Clasifiqué **${total}** recurso(s) del catálogo Supabase. Encontré **${electrical.length}** recurso(s) eléctrico(s) o relacionado(s).`;
+
+  if (electrical.length === 0) {
+    return `${header}\n\n${ELECTRIC_DISCLAIMER}\n\nNinguno de los recursos del catálogo coincide con términos eléctricos en descripción/tipo/marca.`;
+  }
+
+  const rows = electrical.map((c) => [
+    cell(c.codigo), cell(c.descripcion), cell(c.tipo), cell(c.marca), cell(c.clasificacion), cell(c.motivo),
+  ]);
+  const tbl = table(["Código", "Descripción", "Tipo", "Marca", "Clasificación", "Motivo"], rows);
+  return `${header}\n\n${ELECTRIC_DISCLAIMER}\n\n${tbl}\n\n${ELECTRIC_EXCLUSION_NOTE}`;
+}
+
+// ── Validación de respuestas previas de agentes (tabla afirmación/evidencia) ──
+// Las respuestas previas de otros agentes NO son evidencia: re-verificamos
+// contra Supabase y separamos lo verificable de lo que no se puede validar
+// (fuentes no implementadas: logística, guías de remisión).
+function renderValidationFraming(results: ContextToolResult[]): string {
+  const facts: string[][] = [];
+
+  for (const r of results) {
+    if (r.status !== "success") continue;
+    if (r.source === "requerimientos") {
+      if (r.projectCode) {
+        const tot = r.exactCount ?? r.total;
+        facts.push([`Requerimientos asociados al proyecto/cotización ${r.projectCode}`, `${tot} registro(s) en Supabase`, "✅ Verificable"]);
+      } else if (r.records.length === 1) {
+        const rq = r.records[0];
+        facts.push([`El requerimiento ${rq.codigo} existe`, "Encontrado en Supabase", "✅ Verificable"]);
+        if (rq.estado) facts.push([`Estado de ${rq.codigo}`, `${rq.estado}${rq.avance != null ? ` · avance ${rq.avance}%` : ""}`, "✅ Verificable"]);
+      } else if (r.records.length > 0) {
+        facts.push([`Coincidencias de requerimientos`, `${r.total} registro(s) en Supabase`, "✅ Verificable"]);
+      }
+    }
+    if (r.source === "requerimiento_items") {
+      facts.push([`Cantidad de ítems${r.requerimientoCodigo ? ` de ${r.requerimientoCodigo}` : ""}`, `${r.records.length} ítem(s) registrados`, "✅ Verificable"]);
+      facts.push([`Fecha de entrega por ítem`, "La tabla `requerimiento_items` no tiene ese campo", "⚠️ No existe en la fuente"]);
+    }
+    if (r.source === "cotizaciones" && r.records.length === 1) {
+      const c = r.records[0];
+      facts.push([`La cotización ${c.codigo} existe`, `Estado: ${c.estado ?? "—"}`, "✅ Verificable"]);
+    }
+  }
+
+  // Filas siempre presentes: lo que NO se puede validar desde Supabase.
+  facts.push(["Fechas de entrega reales / logística", "No hay fuente de logística conectada al contexto IA", "❌ No verificable aquí"]);
+  facts.push(["Guías de remisión / despacho", "Fuente no implementada en el contexto IA", "❌ No verificable aquí"]);
+
+  const tbl = table(["Afirmación", "Verificación en Supabase", "Estado"], facts);
+  return `Las respuestas previas de otros agentes **no son evidencia**: re-verifiqué directamente contra Supabase.\n\n${tbl}`;
 }
 
 function renderItemsTable(items: RequirementItemSummary[]): string {
@@ -271,10 +339,40 @@ const FALLBACK_VALIDATION_NO_DATA =
 export interface AnswerStrategyOptions {
   /** El usuario pide validar/confirmar (no usar respuestas previas como verdad). */
   isValidationQuestion?: boolean;
+  /** Memoria del último dataset/código mostrado en el hilo. */
+  memory?: DatasetMemory;
+}
+
+// Consulta ambigua ("me refiero a las respuestas del IC, qué piensas"): en vez
+// de inventar, ofrecemos hasta 3 interpretaciones accionables usando la memoria.
+function buildAmbiguityOptions(memory: DatasetMemory): string | null {
+  const rqCode = memory.lastVerifiedRequirementCode;
+  const projCode = memory.lastVerifiedProjectCode ?? memory.lastVerifiedCotizacionCode;
+  const hasRecursos = memory.lastDisplayedDataset === "recursos";
+  // Sin ninguna pista en memoria no hay 3 opciones concretas que ofrecer.
+  if (!rqCode && !projCode && !hasRecursos) return null;
+
+  const opts: string[] = [];
+  if (rqCode) opts.push(`Validar con datos reales de Supabase la última respuesta sobre **${rqCode}**.`);
+  else if (projCode) opts.push(`Validar con datos reales de Supabase lo dicho sobre **${projCode}**.`);
+  if (hasRecursos) opts.push("Clasificar los recursos anteriores y mostrar **solo los eléctricos**.");
+  if (rqCode) opts.push(`Revisar los **ítems** del último requerimiento consultado (${rqCode}).`);
+  // Garantiza al menos 2-3 opciones aunque falte alguna pista.
+  if (opts.length < 2) opts.push("Revisar el último requerimiento o cotización que consultamos en este hilo.");
+
+  const numbered = opts.slice(0, 3).map((o, i) => `${i + 1}. ${o}`).join("\n");
+  return `No estoy completamente seguro de qué deseas revisar. Puedo:\n\n${numbered}\n\nResponde ${opts.length >= 3 ? "1, 2 o 3" : "1 o 2"} y lo verifico contra Supabase (sin usar como verdad lo que dijo otro agente).`;
 }
 
 function hasSuccessData(results: ContextToolResult[]): boolean {
-  return results.some((r) => r.status === "success" && (r.source === "proyecto" ? r.total > 0 : r.records.length > 0));
+  return results.some((r) => {
+    if (r.status !== "success") return false;
+    if (r.source === "proyecto") return r.total > 0;
+    // Una clasificación eléctrica que corrió (aunque 0 eléctricos) SÍ es una
+    // respuesta válida: "clasifiqué N, encontré 0 eléctricos".
+    if (r.source === "recursos" && r.electricalMode) return true;
+    return r.records.length > 0;
+  });
 }
 
 /**
@@ -307,8 +405,10 @@ export function decideAnswerStrategy(
       };
     }
     // Validación sin datos reales: NO confirmar respuestas previas de agentes.
+    // Si la referencia es ambigua pero hay memoria del hilo, ofrecer 3 opciones.
     if (isValidation) {
-      return { shouldBlockModelAnswer: true, fallbackAnswer: FALLBACK_VALIDATION_NO_DATA, shouldUseDeterministicAnswer: false };
+      const ambiguity = buildAmbiguityOptions(opts.memory ?? {});
+      return { shouldBlockModelAnswer: true, fallbackAnswer: ambiguity ?? FALLBACK_VALIDATION_NO_DATA, shouldUseDeterministicAnswer: false };
     }
     return { shouldBlockModelAnswer: true, fallbackAnswer: FALLBACK_NO_DATA, shouldUseDeterministicAnswer: false };
   }
@@ -373,7 +473,9 @@ export function buildDeterministicAnswer(
         break;
       }
       case "recursos":
-        if (r.records.length > 0) sections.push(renderRecursos(r));
+        // Clasificación eléctrica (catálogo completo) vs. listado de catálogo.
+        if (r.electricalMode) sections.push(renderRecursosElectricos(r));
+        else if (r.records.length > 0) sections.push(renderRecursos(r));
         break;
       case "technical_proposals":
         if (r.records.length > 0) {
@@ -413,9 +515,10 @@ export function buildDeterministicAnswer(
 
   if (sections.length === 0) return null;
   const body = sections.join("\n\n");
-  // Validación: dejamos claro que esto sale de Supabase, no de un agente previo.
+  // Validación: tabla afirmación/evidencia + detalle real, dejando claro que
+  // esto sale de Supabase, no de la respuesta previa de otro agente.
   if (opts.isValidationQuestion) {
-    return `Verifiqué directamente en Supabase (las respuestas previas de otros agentes no son evidencia). Esto es lo que arrojan los datos reales:\n\n${body}`;
+    return `${renderValidationFraming(results)}\n\nDetalle de los datos reales consultados:\n\n${body}`;
   }
   return body;
 }

@@ -16,6 +16,7 @@ import { buildContextPrompt, buildRequirementItemsPrompt, fetchRequirementItems 
 import type { ChatCtx } from "../../lib/chat/contextQuery";
 import { runContextPipeline, type ContextPipelineResult } from "../../lib/chat/contextRouter";
 import { validateLlmAnswer, buildBlockedAnswer } from "../../lib/chat/contextValidation";
+import { getDatasetMemory, recordDisplayedDataset } from "../../lib/chat/datasetMemory";
 import { MdText } from "../chat/MdText";
 import { HelpPanel } from "../chat/HelpPanel";
 import { ChatAutoInput } from "../chat/ChatAutoInput";
@@ -564,7 +565,10 @@ export function RoundtableView() {
       // re-consultar Supabase y NO validar respuestas previas inventadas.
       const recentUserTexts = thread.filter((m) => m.role === "gg").map((m) => m.text);
       const ref = resolveConversationReference(parsed.cleanText, recentUserTexts);
-      pipeline = await runContextPipeline(ref.text, { isValidationQuestion: ref.isValidationQuestion });
+      pipeline = await runContextPipeline(ref.text, {
+        isValidationQuestion: ref.isValidationQuestion,
+        memory: getDatasetMemory(ROUNDTABLE_THREAD),
+      });
       autoCodeCtx = pipeline.block;
     }
 
@@ -580,6 +584,8 @@ export function RoundtableView() {
         const primary = responders[0] ?? TEAM_COORDINATOR;
         appendChat(ROUNDTABLE_THREAD, { role: "agent", agentId: primary, text, modelLabel: "datos/Supabase" });
         if (pipeline.shouldUseDeterministicAnswer) {
+          // Memoria del dataset mostrado (solo desde datos reales / determinístico).
+          recordDisplayedDataset(ROUNDTABLE_THREAD, pipeline.results, pipeline.intent);
           saveConversation(userId, primary, parsed.cleanText, text, "datos/Supabase", routing.complexity, activeProject?.id).catch(() => {});
         }
         setHands([]);

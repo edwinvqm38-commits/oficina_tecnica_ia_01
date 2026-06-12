@@ -27,7 +27,9 @@ import {
   type ProjectReferenceResult,
 } from "@/lib/chat/contextQuery";
 import { getTechnicalProposalByCode } from "@/lib/sgp/technicalProposalsRepository";
-import { listRecursos } from "@/lib/sgp/recursosRepository";
+import { listRecursos, listAllRecursos } from "@/lib/sgp/recursosRepository";
+import type { Recurso } from "@/lib/sgp/demoData";
+import { clasificarRecursosElectricos as classifyRecursos, type ClassifiedRecurso } from "@/lib/chat/resourceClassifier";
 
 // Límite máximo de registros que una herramienta devuelve al contexto IA.
 export const DEFAULT_CONTEXT_LIMIT = 20;
@@ -94,6 +96,12 @@ export interface TechnicalProposalsToolResult extends ContextToolResultBase {
 export interface RecursosToolResult extends ContextToolResultBase {
   source: "recursos";
   records: RecursoLite[];
+  /** Clasificación técnica eléctrica (cuando la consulta pide diferenciar eléctricos). */
+  classifiedElectrical?: ClassifiedRecurso[];
+  /** Total de recursos del catálogo que se clasificaron (no la muestra). */
+  classifiedTotal?: number;
+  /** True → este resultado es una clasificación eléctrica, no un listado de catálogo. */
+  electricalMode?: boolean;
 }
 export interface ProyectoToolResult extends ContextToolResultBase {
   source: "proyecto";
@@ -270,6 +278,21 @@ export interface RecursosToolFilters {
   marca?: string;
 }
 
+// `listRecursos`/`listAllRecursos` devuelven el shape de dominio `Recurso`
+// (tipo_recurso, moneda, proveedor, marca), no las columnas crudas de la BD.
+function recursoToLite(r: Recurso): RecursoLite {
+  return {
+    codigo_recurso: r.codigo_recurso,
+    descripcion: r.descripcion,
+    tipo_recurso_nombre: r.tipo_recurso ?? null,
+    precio_unitario_ref: r.precio_unitario_ref ?? null,
+    moneda_codigo: r.moneda ?? null,
+    proveedor_nombre: r.proveedor ?? null,
+    marca_nombre: r.marca ?? null,
+    estado: r.estado ?? null,
+  };
+}
+
 export async function buscarRecursos(
   filters: RecursosToolFilters,
   limit = DEFAULT_CONTEXT_LIMIT,
@@ -288,22 +311,45 @@ export async function buscarRecursos(
     if (result.rows.length === 0) {
       return { source: "recursos", status: "empty", query, records: [], total: 0 };
     }
-    // `listRecursos` devuelve filas con el shape de dominio `Recurso`
-    // (tipo_recurso, moneda, proveedor, marca), no las columnas crudas de la BD.
-    const lite: RecursoLite[] = result.rows.map((r) => ({
-      codigo_recurso: r.codigo_recurso,
-      descripcion: r.descripcion,
-      tipo_recurso_nombre: r.tipo_recurso ?? null,
-      precio_unitario_ref: r.precio_unitario_ref ?? null,
-      moneda_codigo: r.moneda ?? null,
-      proveedor_nombre: r.proveedor ?? null,
-      marca_nombre: r.marca ?? null,
-      estado: r.estado ?? null,
-    }));
+    const lite: RecursoLite[] = result.rows.map(recursoToLite);
     return { source: "recursos", status: "success", query, records: lite, total: result.total };
   } catch (err) {
     devLog("buscarRecursos error", err);
     return { source: "recursos", status: "error", query, records: [], total: 0, message: safeErrorMessage(err) };
+  }
+}
+
+// Clasificación técnica de recursos eléctricos sobre el catálogo COMPLETO
+// (no la muestra de 20). Recupera todos los recursos de Supabase, infiere su
+// categoría eléctrica y devuelve SOLO los eléctricos/dudosos en
+// `classifiedElectrical`, con el total real revisado en `classifiedTotal`.
+export async function clasificarRecursosElectricos(): Promise<RecursosToolResult> {
+  const query: Record<string, unknown> = { mode: "electrical_classification" };
+  try {
+    const all = await listAllRecursos();
+    const total = all.rows.length;
+    if (total === 0) {
+      return { source: "recursos", status: "empty", query, records: [], total: 0, electricalMode: true, classifiedTotal: 0, classifiedElectrical: [] };
+    }
+    const classifiedAll = classifyRecursos(
+      all.rows.map((r) => ({ codigo: r.codigo_recurso, descripcion: r.descripcion, tipo: r.tipo_recurso ?? null, marca: r.marca ?? null })),
+    );
+    const electricalLite: RecursoLite[] = [];
+    const electricalClass: ClassifiedRecurso[] = [];
+    for (let i = 0; i < classifiedAll.length; i++) {
+      if (classifiedAll[i].electrico) {
+        electricalLite.push(recursoToLite(all.rows[i]));
+        electricalClass.push(classifiedAll[i]);
+      }
+    }
+    return {
+      source: "recursos", status: "success", query,
+      records: electricalLite, total,
+      classifiedElectrical: electricalClass, classifiedTotal: total, electricalMode: true,
+    };
+  } catch (err) {
+    devLog("clasificarRecursosElectricos error", err);
+    return { source: "recursos", status: "error", query, records: [], total: 0, message: safeErrorMessage(err), electricalMode: true };
   }
 }
 
