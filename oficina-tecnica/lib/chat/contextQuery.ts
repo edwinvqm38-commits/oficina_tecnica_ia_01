@@ -326,7 +326,14 @@ export async function searchCotizacionesByFilters(filters: CotizacionSearchFilte
   if (q) {
     query = query.or(`codigo.ilike.%${q}%,proyecto.ilike.%${q}%,cliente_nombre.ilike.%${q}%,responsable_tecnico.ilike.%${q}%`);
   }
-  if (filters.estado?.trim()) query = query.ilike("estado", `%${filters.estado.trim()}%`);
+  const estado = filters.estado?.trim();
+  if (estado === "Ganada") {
+    query = query.in("estado", ["Ganada", "Adjudicado"]);
+  } else if (estado === "Perdida / No adjudicada") {
+    query = query.in("estado", ["Perdida / No adjudicada", "No adjudicado"]);
+  } else if (estado) {
+    query = query.ilike("estado", `%${estado}%`);
+  }
 
   const { data, error, count } = await query;
   if (error || !data) return { items: [], total: 0 };

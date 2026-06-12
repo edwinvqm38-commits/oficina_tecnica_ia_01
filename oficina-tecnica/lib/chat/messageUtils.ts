@@ -470,7 +470,7 @@ const COT_NOUN_RE = /\bcotizaci[oó]n(?:es)?\b|\bcots?\b/i;
 // "últimos/recientes/recién registrados" → trigger a recency-ordered query
 // even without a search verb (e.g. "¿cuáles son los últimos requerimientos
 // registrados?", "dame las 5 cotizaciones más recientes").
-const RECENT_RE = /\b(últim[oa]s?|reci[eé]n(?:temente)?|recientes?|nuevos?|m[aá]s\s+nuevas?)\b/i;
+const RECENT_RE = /\b([uú]ltim[oa]s?|reci[eé]n(?:temente)?|recientes?|nuevos?|m[aá]s\s+nuevas?)\b/i;
 const RECENT_COUNT_RE = /\b(\d{1,2})\b/;
 
 // "primera/primero/más antigua" → oldest-first (ascending by created_at).
@@ -482,10 +482,15 @@ const OLDEST_RE = /\b(primer[ao]s?|m[aá]s\s+antigu[oa]s?|m[aá]s\s+vieja?s?)\b/
 // real matches instead of guessing/inventing codes.
 const FRAGMENT_RE = /\b(?:termin[ae]n?|acab[ae]n?)\s+(?:en|con)\s+([A-Za-z0-9._-]+)|\b(?:empiez[ae]n?|comienz[ae]n?|inici[ae]n?)\s+(?:en|con|por)\s+([A-Za-z0-9._-]+)|\b(?:contien[ea]n?|incluy[ea]n?)\s+([A-Za-z0-9._-]+)/i;
 
-const ESTADO_KEYWORDS: Array<[RegExp, string]> = [
+const REQUERIMIENTO_ESTADO_KEYWORDS: Array<[RegExp, string]> = [
   [/\bpendientes?\b/i, "Pendiente"],
   [/\ben\s+proceso\b|\ben\s+curso\b/i, "En proceso"],
   [/\batendidos?\b|\bcompletados?\b|\bfinalizados?\b|\bculminados?\b/i, "Atendido"],
+];
+
+const COTIZACION_ESTADO_KEYWORDS: Array<[RegExp, string]> = [
+  [/\b(?:perdid[ao]s?|no\s+adjudicad[ao]s?)\b/i, "Perdida / No adjudicada"],
+  [/\b(?:ganad[ao]s?|adjudicad[ao]s?)\b/i, "Ganada"],
 ];
 
 export interface RequerimientoSearchIntent {
@@ -515,7 +520,7 @@ export function detectRequerimientoSearchIntent(cleanText: string): Requerimient
   if (!isRecent && !isOldest && !fragMatch && !SEARCH_VERB_RE.test(t)) return null;
 
   const intent: RequerimientoSearchIntent = {};
-  for (const [re, estado] of ESTADO_KEYWORDS) {
+  for (const [re, estado] of REQUERIMIENTO_ESTADO_KEYWORDS) {
     if (re.test(t)) { intent.estado = estado; break; }
   }
 
@@ -570,12 +575,11 @@ export function detectCotizacionSearchIntent(cleanText: string): CotizacionSearc
   const isRecent = RECENT_RE.test(t);
   const isOldest = OLDEST_RE.test(t);
   const fragMatch = t.match(FRAGMENT_RE);
-  if (!isRecent && !isOldest && !fragMatch && !SEARCH_VERB_RE.test(t)) return null;
+  const estadoMatch = COTIZACION_ESTADO_KEYWORDS.find(([re]) => re.test(t));
+  if (!isRecent && !isOldest && !fragMatch && !estadoMatch && !SEARCH_VERB_RE.test(t)) return null;
 
   const intent: CotizacionSearchIntent = {};
-  for (const [re, estado] of ESTADO_KEYWORDS) {
-    if (re.test(t)) { intent.estado = estado; break; }
-  }
+  if (estadoMatch) intent.estado = estadoMatch[1];
 
   if (fragMatch) {
     intent.q = (fragMatch[1] ?? fragMatch[2] ?? fragMatch[3]).trim();
