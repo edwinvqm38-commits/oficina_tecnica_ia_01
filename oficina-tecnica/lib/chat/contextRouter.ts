@@ -17,12 +17,14 @@ import {
   detectRequerimientoSearchIntent,
   detectCotizacionSearchIntent,
   isLogTableQuestion,
+  stripAgentLabelsForRouting,
 } from "@/lib/chat/messageUtils";
 import {
   buscarCotizaciones,
   buscarCotizacionPorCodigo,
   buscarRequerimientos,
   buscarRequerimientoPorCodigo,
+  buscarRequerimientosPorProyecto,
   buscarItemsDeRequerimiento,
   buscarPropuestaTecnicaPorCodigo,
   buscarRecursos,
@@ -41,6 +43,7 @@ export type ContextToolName =
   | "buscarCotizacionPorCodigo"
   | "buscarRequerimientos"
   | "buscarRequerimientoPorCodigo"
+  | "buscarRequerimientosPorProyecto"
   | "buscarPropuestaTecnicaPorCodigo"
   | "buscarRecursos"
   | "buscarProyectoPorCodigo"
@@ -63,6 +66,10 @@ const RESUMEN_RE = /\b(res[uú]men|res[uú]m[eé]me|res[uú]meme|panorama|estado
 const PROPOSAL_RE = /\bpropuestas?\s+t[eé]cnicas?\b/i;
 const RECURSO_NOUN_RE = /\brecursos?\b|\bcat[aá]logo\b/i;
 const RECURSO_TRIGGER_RE = /\b(busca|buscar|lista|listar|mu[eé]stra|mu[eé]strame|dame|cu[aá]l(?:es)?|qu[eé]|registrad[oa]s?|hay|tenemos|existen|tien[ee]s)\b/i;
+// Consulta relacional: "cuántos/qué requerimientos tiene/del proyecto X".
+const REQ_NOUN_RE = /\brequerimientos?\b|\brqs?\b/i;
+const COUNT_RE = /\bcu[aá]nt[oa]s?\b|\bn[uú]mero\s+de\b|\bcantidad\s+de\b/i;
+const REQ_OF_PROJECT_RE = /requerimientos?\s+(?:del?|de\s+la|asociad[oa]s?|relacionad[oa]s?|que\s+(?:tiene|contiene|hay|posee)|tiene\s+(?:el|la|ese|este|esa|esta))/i;
 
 /** Detecta intención de consultar el catálogo de recursos. */
 function detectRecursoIntent(t: string): RecursosToolFilters | null {
@@ -77,11 +84,16 @@ function detectRecursoIntent(t: string): RecursosToolFilters | null {
  * resultados en runtime (ítems de un RQ encontrado) las encadena el pipeline.
  */
 export function detectContextIntent(cleanText: string): ContextRoutingDecision {
-  const t = cleanText.trim();
+  // Quita prefijos de rol del agente ("Ingeniero de Costos ...", repetidos o no)
+  // para que la detección vea solo la pregunta real.
+  const t = stripAgentLabelsForRouting(cleanText);
   if (!t) return { intent: "sin_intencion_datos", toolsToCall: [], confidence: 0, reason: "Mensaje vacío." };
 
   const wantsResumen = RESUMEN_RE.test(t);
   const wantsProposal = PROPOSAL_RE.test(t);
+  // Consulta relacional de requerimientos de un proyecto/cotización
+  // ("cuántos requerimientos tiene el proyecto X", "requerimientos del proyecto X").
+  const wantsReqOfProject = REQ_NOUN_RE.test(t) && (COUNT_RE.test(t) || REQ_OF_PROJECT_RE.test(t));
 
   const codes = detectDocumentCodes(t);
   const cotCodes = codes.filter((c) => c.type === "COT").map((c) => c.code);
@@ -94,24 +106,30 @@ export function detectContextIntent(cleanText: string): ContextRoutingDecision {
   // RQ por código → requerimiento (el pipeline encadena sus ítems).
   for (const code of rqCodes) calls.push({ tool: "buscarRequerimientoPorCodigo", args: { code } });
 
-  // COT por código → resumen / propuesta / cotización según intención.
+  // COT por código → requerimientos del proyecto / resumen / propuesta / cotización.
   for (const code of cotCodes) {
-    if (wantsResumen) calls.push({ tool: "obtenerResumenProyecto", args: { code } });
+    if (wantsReqOfProject) calls.push({ tool: "buscarRequerimientosPorProyecto", args: { code } });
+    else if (wantsResumen) calls.push({ tool: "obtenerResumenProyecto", args: { code } });
     else if (wantsProposal) calls.push({ tool: "buscarPropuestaTecnicaPorCodigo", args: { code } });
     else calls.push({ tool: "buscarCotizacionPorCodigo", args: { code } });
   }
 
   // Códigos que no siguen COT-/RQ-/OC- (históricos, FOR-EKA-PRO-...) →
-  // cascada por código (o resumen/propuesta si así se pidió).
+  // requerimientos del proyecto si se pide conteo/lista, si no cascada por código.
   for (const code of otherCodes) {
-    if (wantsProposal) calls.push({ tool: "buscarPropuestaTecnicaPorCodigo", args: { code } });
+    if (wantsReqOfProject) calls.push({ tool: "buscarRequerimientosPorProyecto", args: { code } });
+    else if (wantsProposal) calls.push({ tool: "buscarPropuestaTecnicaPorCodigo", args: { code } });
     else if (wantsResumen) calls.push({ tool: "obtenerResumenProyecto", args: { code } });
     else calls.push({ tool: "buscarProyectoPorCodigo", args: { code } });
   }
 
+  const hasProjectCode = cotCodes.length > 0 || otherCodes.length > 0;
+
   // Búsqueda libre de requerimientos ("lista RQ pendientes de Juan").
+  // Se omite cuando la intención es relacional con un código de proyecto/cotización
+  // (esa consulta ya la cubre buscarRequerimientosPorProyecto, con conteo exacto).
   const reqIntent = detectRequerimientoSearchIntent(t);
-  if (reqIntent) {
+  if (reqIntent && !(wantsReqOfProject && hasProjectCode)) {
     const { limit, ...filters } = reqIntent;
     calls.push({ tool: "buscarRequerimientos", args: { filters: filters as RequerimientoSearchFilters, limit: limit ?? DEFAULT_CONTEXT_LIMIT } });
   }
@@ -136,7 +154,11 @@ export function detectContextIntent(cleanText: string): ContextRoutingDecision {
   let reason: string;
 
   if (hasCodeCall) {
-    intent = wantsResumen ? "resumen_proyecto" : wantsProposal ? "consulta_propuesta_tecnica" : "consulta_por_codigo";
+    intent = wantsReqOfProject && hasProjectCode
+      ? "requerimientos_de_proyecto"
+      : wantsResumen ? "resumen_proyecto"
+      : wantsProposal ? "consulta_propuesta_tecnica"
+      : "consulta_por_codigo";
     confidence = 0.9;
     reason = "Se detectó al menos un código (COT/RQ/proyecto) en el mensaje.";
   } else if (reqIntent) {
@@ -175,6 +197,8 @@ async function executeTool(call: ContextToolCall): Promise<ContextToolResult> {
       return buscarRequerimientoPorCodigo(String(call.args.code));
     case "buscarRequerimientos":
       return buscarRequerimientos(call.args.filters as RequerimientoSearchFilters, call.args.limit as number | undefined);
+    case "buscarRequerimientosPorProyecto":
+      return buscarRequerimientosPorProyecto(String(call.args.code), call.args.limit as number | undefined);
     case "buscarPropuestaTecnicaPorCodigo":
       return buscarPropuestaTecnicaPorCodigo(String(call.args.code));
     case "buscarRecursos":
@@ -217,6 +241,11 @@ export interface ContextPipelineResult {
   deterministicAnswer?: string;
 }
 
+export interface ContextPipelineOptions {
+  /** El usuario pide validar/confirmar algo (no usar respuestas previas como verdad). */
+  isValidationQuestion?: boolean;
+}
+
 function summarize(results: ContextToolResult[]): ContextResultSummary[] {
   return results.map((r) => ({ source: r.source, status: r.status, total: r.total, message: r.message }));
 }
@@ -228,8 +257,9 @@ function finalizePipeline(
   decision: ContextRoutingDecision,
   results: ContextToolResult[],
   block: string,
+  opts: ContextPipelineOptions,
 ): ContextPipelineResult {
-  const strategy = decideAnswerStrategy(cleanText, decision, results);
+  const strategy = decideAnswerStrategy(cleanText, decision, results, opts);
   const result: ContextPipelineResult = {
     block,
     decision,
@@ -237,7 +267,7 @@ function finalizePipeline(
     hasData: hasRealData(results),
     intent: decision.intent,
     confidence: decision.confidence,
-    isDataQuestion: isDataQuestion(decision),
+    isDataQuestion: isDataQuestion(decision) || Boolean(opts.isValidationQuestion),
     toolsCalled: decision.toolsToCall.map((c) => c.tool),
     resultsSummary: summarize(results),
     shouldBlockModelAnswer: strategy.shouldBlockModelAnswer,
@@ -279,14 +309,17 @@ const SOFT_ERROR_NOTE =
  *  - tras encontrar un RQ por código (1 resultado) trae sus ítems.
  *  - tras resolver un código a un requerimiento único, trae sus ítems.
  */
-export async function runContextPipeline(cleanText: string): Promise<ContextPipelineResult> {
+export async function runContextPipeline(
+  cleanText: string,
+  opts: ContextPipelineOptions = {},
+): Promise<ContextPipelineResult> {
   const decision = detectContextIntent(cleanText);
 
   // Sin herramientas que ejecutar: o no es pregunta de datos, o es una pregunta
   // de tabla sin filtro (needs_clarification). finalizePipeline decide si se
   // bloquea con una aclaración o se deja pasar al LLM normal.
   if (decision.toolsToCall.length === 0) {
-    return finalizePipeline(cleanText, decision, [], "");
+    return finalizePipeline(cleanText, decision, [], "", opts);
   }
 
   try {
@@ -312,12 +345,12 @@ export async function runContextPipeline(cleanText: string): Promise<ContextPipe
     }
 
     const block = buildContextPack(results, { intent: decision.intent });
-    return finalizePipeline(cleanText, decision, results, block);
+    return finalizePipeline(cleanText, decision, results, block, opts);
   } catch (err) {
     if (process.env.NODE_ENV !== "production") console.debug("[contextRouter] pipeline error", err);
     // Error duro e inesperado: si era pregunta de datos, bloqueamos con una nota
     // segura (no inventar); si no, devolvemos la nota suave para el system prompt.
-    const dataQ = isDataQuestion(decision);
+    const dataQ = isDataQuestion(decision) || Boolean(opts.isValidationQuestion);
     return {
       block: dataQ ? "" : SOFT_ERROR_NOTE,
       decision,

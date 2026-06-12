@@ -17,6 +17,8 @@ import {
   fetchRequirementByCode,
   fetchRequirementItems,
   fetchProjectContextByCode,
+  fetchRequerimientosByProject,
+  type RequerimientosByProjectMatchMode,
   type CotizacionSummary,
   type RequirementSummary,
   type RequirementItemSummary,
@@ -72,6 +74,12 @@ export interface CotizacionesToolResult extends ContextToolResultBase {
 export interface RequerimientosToolResult extends ContextToolResultBase {
   source: "requerimientos";
   records: RequirementSummary[];
+  /** Presente cuando es una consulta relacional de "requerimientos del proyecto X". */
+  projectCode?: string;
+  /** Vía por la que se halló la relación (formal vs. coincidencia textual). */
+  matchMode?: RequerimientosByProjectMatchMode;
+  /** Conteo exacto de asociados (puede superar la muestra mostrada en records). */
+  exactCount?: number;
 }
 export interface RequerimientoItemsToolResult extends ContextToolResultBase {
   source: "requerimiento_items";
@@ -182,6 +190,29 @@ export async function buscarRequerimientoPorCodigo(code: string): Promise<Requer
   } catch (err) {
     devLog("buscarRequerimientoPorCodigo error", err);
     return { source: "requerimientos", status: "error", query, records: [], total: 0, message: safeErrorMessage(err) };
+  }
+}
+
+// Requerimientos asociados a un proyecto/cotización, con CONTEO EXACTO real
+// (no recortado a 20). `total` = conteo exacto; `records` = muestra (≤ límite).
+export async function buscarRequerimientosPorProyecto(
+  projectCode: string,
+  limit = DEFAULT_CONTEXT_LIMIT,
+): Promise<RequerimientosToolResult> {
+  const query: Record<string, unknown> = { projectCode, limit: clampLimit(limit) };
+  try {
+    const result = await fetchRequerimientosByProject(projectCode, clampLimit(limit));
+    if (result.matchMode === "none" || result.total === 0) {
+      return { source: "requerimientos", status: "empty", query, records: [], total: 0, projectCode, matchMode: "none" };
+    }
+    return {
+      source: "requerimientos", status: "success", query,
+      records: result.sample, total: result.total,
+      projectCode, matchMode: result.matchMode, exactCount: result.total,
+    };
+  } catch (err) {
+    devLog("buscarRequerimientosPorProyecto error", err);
+    return { source: "requerimientos", status: "error", query, records: [], total: 0, projectCode, message: safeErrorMessage(err) };
   }
 }
 

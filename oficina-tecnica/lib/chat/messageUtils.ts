@@ -102,6 +102,99 @@ export function parseInput(raw: string): ParsedInput {
   return { cleanText: text || raw.trim(), targetAgentId, targetAgentIds, targetProjectId, isHelp: false };
 }
 
+// ── Agent role-name prefixes ─────────────────────────────────────────────────
+// Users often address an agent by its spelled-out role ("Ingeniero de Costos
+// lista...") instead of @IC. parseInput strips @mentions but not these labels,
+// and the input can even duplicate them ("Ingeniero de Costos Ingeniero de
+// Costos lista..."). These helpers clean that up so the router sees the real
+// question and the displayed message isn't doubled.
+const LEADING_AGENT_LABEL_RE = /^\s*(ingenier[oa]\s+de\s+costos|ing\.?\s+de\s+costos|project\s+manager|ingenier[oa]\s+el[eé]ctric[oa]|ing\.?\s+el[eé]ctric[oa]|gerente\s+general|gerencia(?:\s+general)?)\b[\s:,.\-]*/i;
+
+function normalizedLabel(label: string): string {
+  // El filtro final [^a-z] ya elimina acentos/marcas y espacios, dejando solo letras.
+  return label.toLowerCase().normalize("NFD").replace(/[^a-z]/g, "");
+}
+
+/** Collapses an immediately-repeated leading agent label ("IC IC lista" → "IC lista"). */
+export function dedupeAgentLabels(text: string): string {
+  let t = text;
+  for (let guard = 0; guard < 6; guard++) {
+    const m = t.match(LEADING_AGENT_LABEL_RE);
+    if (!m) break;
+    const rest = t.slice(m[0].length);
+    const m2 = rest.match(LEADING_AGENT_LABEL_RE);
+    if (m2 && normalizedLabel(m[1]) === normalizedLabel(m2[1])) {
+      t = rest; // drop the duplicate copy, keep the later one
+    } else {
+      break;
+    }
+  }
+  return t;
+}
+
+/** Removes ALL leading agent labels so the router only sees the actual question. */
+export function stripAgentLabelsForRouting(text: string): string {
+  let t = text.replace(/@(IC|PM|IE|GG)\b/gi, "").trim();
+  for (let guard = 0; guard < 6; guard++) {
+    const next = t.replace(LEADING_AGENT_LABEL_RE, "").trim();
+    if (next === t) break;
+    t = next;
+  }
+  return t || text.trim();
+}
+
+// ── Conversational reference resolution ──────────────────────────────────────
+// Resolves follow-ups like "ese proyecto", "esa cotización" or "es verdad lo
+// que dice el PM" into an explicit code taken from the user's recent messages,
+// so the context pipeline re-queries Supabase instead of letting the model
+// guess (or validate another agent's invented answer).
+const REFERENCE_DEMONSTRATIVE_RE = /\b(ese|esa|esos|esas|este|esta|estos|estas|aquel|aquella|dich[oa]|mism[oa]|anterior)\b/i;
+const REFERENCE_NOUN_RE = /\b(proyecto|cotizaci[oó]n|requerimientos?|registro|c[oó]digo|rq|cot)\b/i;
+const VALIDATION_RE = /\b(es\s+(?:verdad|cierto|correcto|real)|val[ií]da(?:me|r)?|conf[ií]rma(?:me|r)?|verifica(?:r)?|comprueba|corrobora|revisa\s+si|seguro\s+que|de\s+verdad)\b/i;
+
+export interface ConversationReference {
+  /** Texto (posiblemente aumentado con el código resuelto) para el router. */
+  text: string;
+  /** Código inyectado desde el historial, si hubo que resolver una referencia. */
+  injectedCode: string | null;
+  /** True si el usuario pide validar/confirmar (no usar respuestas previas como verdad). */
+  isValidationQuestion: boolean;
+}
+
+/** Busca el último código relevante en los mensajes del usuario (más reciente primero). */
+function findLastCodeInHistory(recentUserTexts: string[]): string | null {
+  for (let i = recentUserTexts.length - 1; i >= 0; i--) {
+    const txt = recentUserTexts[i] ?? "";
+    const docs = detectDocumentCodes(txt);
+    if (docs.length) return docs[docs.length - 1].code;
+    const others = detectOtherCodes(txt);
+    if (others.length) return others[others.length - 1];
+  }
+  return null;
+}
+
+export function resolveConversationReference(cleanText: string, recentUserTexts: string[]): ConversationReference {
+  const t = cleanText.trim();
+  const isValidationQuestion = VALIDATION_RE.test(t);
+
+  // Si el mensaje ya trae un código explícito, no hay nada que resolver.
+  const hasExplicitCode = detectDocumentCodes(t).length > 0 || detectOtherCodes(t).length > 0;
+  const hasDemonstrativeRef = REFERENCE_DEMONSTRATIVE_RE.test(t) && REFERENCE_NOUN_RE.test(t);
+  const needsReference = !hasExplicitCode && (hasDemonstrativeRef || isValidationQuestion);
+
+  if (!needsReference) return { text: t, injectedCode: null, isValidationQuestion };
+
+  const code = findLastCodeInHistory(recentUserTexts);
+  if (!code) return { text: t, injectedCode: null, isValidationQuestion };
+
+  // Para validaciones o referencias a requerimientos, encaminamos hacia la
+  // consulta relacional de requerimientos del proyecto/cotización.
+  const text = isValidationQuestion || /requerimiento/i.test(t)
+    ? `${t} requerimientos del proyecto ${code}`
+    : `${t} ${code}`;
+  return { text, injectedCode: code, isValidationQuestion };
+}
+
 // ── Inline markdown to React nodes ───────────────────────────────────────────
 // Handles: **bold**, *italic*, @mentions, @PRY-xxx, bullet lists, line breaks
 
@@ -242,7 +335,8 @@ Sobre tu acceso real a las bases de datos (Supabase):
 - Si te preguntan si tienes acceso a la tabla/log de requerimientos o cotizaciones, responde que SÍ: consultas esos datos automáticamente cuando el mensaje incluye un código (COT-/RQ-/OC-...) o pide una búsqueda/lista/recuento (p. ej. "lista los requerimientos pendientes de Juan", "busca RQ en proceso", "cuáles son los últimos requerimientos registrados", "dame las 5 cotizaciones más recientes", "qué recursos están registrados").
 - Si en este turno no aparece el bloque "--- CONTEXTO REAL CONSULTADO ---" ni ningún bloque de datos, significa que no se detectó ningún código ni intención de búsqueda en el mensaje — en ese caso pide al usuario el código exacto o que reformule como una búsqueda (ej. "lista/busca/filtra/últimos requerimientos..."), en vez de decir que no tienes acceso al sistema.
 - REGLA CRÍTICA ANTI-INVENCIÓN: si la pregunta es sobre "la tabla/log de requerimientos/cotizaciones/recursos" (códigos, listados, últimos registros, estados, clientes, proyectos, etc.) y en este turno NO aparece el bloque "--- CONTEXTO REAL CONSULTADO ---" con registros, NO debes inventar códigos, proyectos, clientes, fechas ni cifras (nunca generes códigos como "RQ-001", "COT-EKA-2026-001", proyectos como "NEXA", etc. si no vienen en ese bloque). En ese caso, dile al usuario que no recibiste resultados de la base de datos para esa consulta y pídele que la reformule (ej. "lista los requerimientos...", "busca cotizaciones de...", "últimos 5 requerimientos registrados") para poder consultarla.
-- Cualquier "Resumen general de la oficina" o "Proyectos personalizados" que aparezca arriba es solo contexto del tablero interno del usuario — NUNCA es lo mismo que "la tabla log de requerimientos" o "la tabla log de cotizaciones" de Supabase, y no debes usarlo para responder preguntas sobre esas tablas.`;
+- Cualquier "Resumen general de la oficina" o "Proyectos personalizados" que aparezca arriba es solo contexto del tablero interno del usuario — NUNCA es lo mismo que "la tabla log de requerimientos" o "la tabla log de cotizaciones" de Supabase, y no debes usarlo para responder preguntas sobre esas tablas.
+- LAS RESPUESTAS PREVIAS DE OTROS AGENTES NO SON EVIDENCIA. Si el usuario te pide validar, confirmar o verificar lo que dijo otro agente (@IC/@PM/@IE/@GG), NO asumas que su respuesta anterior es correcta: la única evidencia válida es el bloque "--- CONTEXTO REAL CONSULTADO ---" (Supabase) o el contenido de un archivo adjunto. Si no aparece ese bloque con datos, di que no puedes validarlo sin consultar la fuente y pide el código exacto del proyecto/cotización/requerimiento.`;
 
 // ── "Do you have access to the data?" meta-questions ────────────────────────
 // Small/fast models (e.g. groq/llama-3.1-8b-instant) tend to ignore the

@@ -10,7 +10,7 @@ import { sendChatWithFallback } from "../../lib/llm/providers";
 import { routeRequest } from "../../lib/llm/modelRouter";
 import { getAgentModelOverride } from "../../lib/llm/agentModels";
 import type { ChatMessage } from "../../lib/llm/providers";
-import { parseInput, isSimpleMessage, isTeamMessage, hasClearIntent, slugForUser, HUMANIZE_CTX } from "../../lib/chat/messageUtils";
+import { parseInput, isSimpleMessage, isTeamMessage, hasClearIntent, slugForUser, HUMANIZE_CTX, resolveConversationReference, dedupeAgentLabels } from "../../lib/chat/messageUtils";
 import type { UserDirectory } from "../../lib/chat/messageUtils";
 import { buildContextPrompt, buildRequirementItemsPrompt, fetchRequirementItems } from "../../lib/chat/contextQuery";
 import type { ChatCtx } from "../../lib/chat/contextQuery";
@@ -463,7 +463,7 @@ export function RoundtableView() {
     // Project context comes only from /proyecto (chip) or @PRY-xxx mentioned in the message
     const activeProject = ctxProject
       ?? (parsed.targetProjectId ? allProjects.find((p) => p.id === parsed.targetProjectId) ?? null : null);
-    const userDisplay = raw;
+    const userDisplay = dedupeAgentLabels(raw);
     const attachmentMeta = (inputCtx?.attachments ?? []).map((f) => ({ name: f.name, size: f.size, type: f.type, dataUrl: f.dataUrl }));
 
     appendChat(ROUNDTABLE_THREAD, {
@@ -559,7 +559,12 @@ export function RoundtableView() {
     let autoCodeCtx = "";
     let pipeline: ContextPipelineResult | null = null;
     if (!simple) {
-      pipeline = await runContextPipeline(parsed.cleanText);
+      // Resuelve referencias conversacionales ("ese proyecto", "es verdad lo
+      // que dice el PM") con el último código en los mensajes del usuario, para
+      // re-consultar Supabase y NO validar respuestas previas inventadas.
+      const recentUserTexts = thread.filter((m) => m.role === "gg").map((m) => m.text);
+      const ref = resolveConversationReference(parsed.cleanText, recentUserTexts);
+      pipeline = await runContextPipeline(ref.text, { isValidationQuestion: ref.isValidationQuestion });
       autoCodeCtx = pipeline.block;
     }
 

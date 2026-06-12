@@ -27,6 +27,8 @@ interface AllowedValues {
   codes: Set<string>;
   amounts: number[];
   dates: Set<string>;
+  /** Conteos reales (totales/exactCount) que el modelo puede citar legítimamente. */
+  counts: Set<number>;
 }
 
 function addCode(set: Set<string>, code: string | null | undefined) {
@@ -45,8 +47,13 @@ function collectAllowed(results: ContextToolResult[]): AllowedValues {
   const codes = new Set<string>();
   const amounts: number[] = [];
   const dates = new Set<string>();
+  const counts = new Set<number>();
 
   for (const r of results) {
+    // Cualquier total/exactCount real es un conteo legítimo que el modelo puede citar.
+    if (typeof r.total === "number") counts.add(r.total);
+    if (r.source === "requerimientos" && typeof r.exactCount === "number") counts.add(r.exactCount);
+    if (r.source === "proyecto" && r.reference.historicalSummary) counts.add(r.reference.historicalSummary.total);
     switch (r.source) {
       case "cotizaciones":
         for (const c of r.records) {
@@ -90,13 +97,19 @@ function collectAllowed(results: ContextToolResult[]): AllowedValues {
       }
     }
   }
-  return { codes, amounts, dates };
+  return { codes, amounts, dates, counts };
 }
 
 // ── Detectores en la respuesta del LLM ───────────────────────────────────────
 const CODE_RE = /\b(?:RQ|COT|OC|FOR)[-A-Z0-9_./]*\d[-A-Z0-9_./]*/gi;
-// Clientes/empresas placeholder: "Client A", "Cliente 1", "Empresa B", "Client_2".
-const PLACEHOLDER_CLIENT_RE = /\b(?:client|cliente|empresa|proveedor)[\s_-]*([a-d]|[0-9]{1,2})\b/gi;
+// Clientes/empresas placeholder: "Client A", "Cliente 1", "Empresa B", "Client X/Y/Z".
+const PLACEHOLDER_CLIENT_RE = /\b(?:client|cliente|empresa|proveedor)[\s_-]*([a-dx-z]|[0-9]{1,2})\b/gi;
+// Conteo de requerimientos afirmado por el modelo ("tiene 2 requerimientos",
+// "son 122 requerimientos", "5 requerimientos asociados", "total de 3").
+const COUNT_CLAIM_RES = [
+  /\b(?:tiene|son|hay|cuenta\s+con|total\s+de|total:?)\s*(\d{1,5})\s+requerimientos?\b/gi,
+  /\b(\d{1,5})\s+requerimientos?\s+(?:asociad|relacionad|en\s+total)/gi,
+];
 // Montos con símbolo de moneda.
 const MONEY_RE = /(?:S\/\.?|US\$|USD|\$|€)\s?\d[\d.,]*/gi;
 // Fechas dd/mm/yyyy o yyyy-mm-dd.
@@ -163,6 +176,19 @@ export function validateLlmAnswer(answer: string, results: ContextToolResult[]):
   if (allowed.dates.size > 0) {
     for (const m of answer.matchAll(DATE_RE)) {
       if (!allowed.dates.has(m[0])) violations.push(`fecha no sustentada: "${m[0]}"`);
+    }
+  }
+
+  // 5) Conteo de requerimientos no sustentado (solo si recuperamos algún total
+  //    real): bloquea "tiene 2 requerimientos" cuando el conteo real es otro.
+  if (allowed.counts.size > 0) {
+    for (const re of COUNT_CLAIM_RES) {
+      for (const m of answer.matchAll(re)) {
+        const n = parseInt(m[1], 10);
+        if (Number.isFinite(n) && !allowed.counts.has(n)) {
+          violations.push(`conteo no sustentado: "${m[0].trim()}"`);
+        }
+      }
     }
   }
 

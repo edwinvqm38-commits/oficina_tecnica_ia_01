@@ -501,6 +501,106 @@ export async function fetchProjectContextByCode(rawCode: string): Promise<Projec
   return { source: "none" };
 }
 
+// ── Requerimientos asociados a un proyecto / cotización (relacional) ─────────
+// Devuelve el conteo EXACTO de requerimientos asociados a un código de
+// proyecto/cotización (no limitado a 20) más una muestra, indicando por qué
+// vía se encontró la relación. Inspecciona las relaciones reales del esquema:
+//   - requerimientos.cotizacion_codigo (relación por cotización)
+//   - requerimientos.codigo_proyecto_adjudicado (proyecto adjudicado)
+//   - requerimiento_items.metadata->historical_import->>historical_cotizacion_key
+//     (importación histórica — la vía de los códigos FOR-EKA-PRO-...)
+//   - búsqueda textual como último recurso (marcada como tal)
+export type RequerimientosByProjectMatchMode =
+  | "quotation_code" | "project_code" | "relation" | "text_fallback" | "none";
+
+export interface RequerimientosByProjectResult {
+  matchMode: RequerimientosByProjectMatchMode;
+  /** Conteo exacto de requerimientos asociados (no recortado a la muestra). */
+  total: number;
+  sample: RequirementSummary[];
+}
+
+// Recolecta los requerimiento_id distintos vinculados por importación histórica,
+// paginando TODOS los ítems coincidentes para que el conteo sea exacto.
+async function collectHistoricalRequerimientoIds(code: string): Promise<string[]> {
+  const distinct = new Set<string>();
+  const pageSize = 1000;
+  for (let from = 0; from < 50000; from += pageSize) {
+    const { data, error } = await supabase
+      .from("requerimiento_items")
+      .select("requerimiento_id")
+      .or(
+        `metadata->historical_import->>historical_cotizacion_key.eq.${code},` +
+        `metadata->historical_import->>historical_rq_key.ilike.${code}*`
+      )
+      .range(from, from + pageSize - 1);
+    if (error || !data || data.length === 0) break;
+    for (const r of data) {
+      const id = r.requerimiento_id as string | null;
+      if (id) distinct.add(id);
+    }
+    if (data.length < pageSize) break;
+  }
+  return [...distinct];
+}
+
+export async function fetchRequerimientosByProject(
+  rawCode: string,
+  sampleLimit = 20,
+): Promise<RequerimientosByProjectResult> {
+  const code = rawCode.trim().toUpperCase();
+  if (!code) return { matchMode: "none", total: 0, sample: [] };
+
+  // 1) Relación formal por código de cotización.
+  {
+    const { count } = await supabase
+      .from("requerimientos")
+      .select("id", { count: "exact", head: true })
+      .eq("cotizacion_codigo", code);
+    if (count && count > 0) {
+      const { data } = await supabase
+        .from("requerimientos").select(REQUIREMENT_SELECT)
+        .eq("cotizacion_codigo", code).order("codigo", { ascending: true }).limit(sampleLimit);
+      return { matchMode: "quotation_code", total: count, sample: (data ?? []) as RequirementSummary[] };
+    }
+  }
+
+  // 2) Relación por proyecto adjudicado (codigo_proyecto_adjudicado).
+  {
+    const { count, error } = await supabase
+      .from("requerimientos")
+      .select("id", { count: "exact", head: true })
+      .eq("codigo_proyecto_adjudicado", code);
+    if (!error && count && count > 0) {
+      const { data } = await supabase
+        .from("requerimientos").select(REQUIREMENT_SELECT)
+        .eq("codigo_proyecto_adjudicado", code).order("codigo", { ascending: true }).limit(sampleLimit);
+      return { matchMode: "project_code", total: count, sample: (data ?? []) as RequirementSummary[] };
+    }
+  }
+
+  // 3) Relación por importación histórica (conteo exacto de RQ distintos).
+  {
+    const ids = await collectHistoricalRequerimientoIds(code);
+    if (ids.length > 0) {
+      const { data } = await supabase
+        .from("requerimientos").select(REQUIREMENT_SELECT)
+        .in("id", ids.slice(0, 200)).order("codigo", { ascending: true }).limit(sampleLimit);
+      return { matchMode: "relation", total: ids.length, sample: (data ?? []) as RequirementSummary[] };
+    }
+  }
+
+  // 4) Último recurso: coincidencia textual (no implica asociación formal).
+  {
+    const res = await searchRequerimientos({ q: code }, sampleLimit);
+    if (res.items.length > 0) {
+      return { matchMode: "text_fallback", total: res.total, sample: res.items };
+    }
+  }
+
+  return { matchMode: "none", total: 0, sample: [] };
+}
+
 export function buildProjectReferencePrompt(code: string, result: ProjectReferenceResult): string {
   if (result.source === "none") {
     return `\n\nSe detectó el código **${code}** en el mensaje, pero no se encontró en cotizaciones, requerimientos, propuestas técnicas ni en datos históricos importados. Dile al usuario claramente que no encontraste ese código (no es un problema de permisos) y pídele que confirme el código o el nombre del proyecto.`;

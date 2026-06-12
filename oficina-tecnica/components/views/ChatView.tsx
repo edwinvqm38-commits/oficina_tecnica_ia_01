@@ -9,7 +9,7 @@ import { sendChatWithFallback } from "../../lib/llm/providers";
 import { routeRequest } from "../../lib/llm/modelRouter";
 import { getAgentModelOverride } from "../../lib/llm/agentModels";
 import type { ChatMessage } from "../../lib/llm/providers";
-import { parseInput, isSimpleMessage, HUMANIZE_CTX } from "../../lib/chat/messageUtils";
+import { parseInput, isSimpleMessage, HUMANIZE_CTX, resolveConversationReference, dedupeAgentLabels } from "../../lib/chat/messageUtils";
 import { MdText } from "../chat/MdText";
 import { HelpPanel } from "../chat/HelpPanel";
 import { ChatAutoInput } from "../chat/ChatAutoInput";
@@ -202,7 +202,7 @@ export function ChatView() {
       return;
     }
 
-    appendChat(threadKey, { role: "gg", text: raw });
+    appendChat(threadKey, { role: "gg", text: dedupeAgentLabels(raw) });
     setInput("");
     setBusy(true);
 
@@ -228,7 +228,12 @@ export function ChatView() {
     let autoCodeCtx = "";
     let pipeline: ContextPipelineResult | null = null;
     if (!simple) {
-      pipeline = await runContextPipeline(parsed.cleanText);
+      // Resuelve referencias conversacionales ("ese proyecto", "es verdad lo
+      // que dice el PM") usando el último código en los mensajes del usuario,
+      // para re-consultar Supabase en vez de dejar que el modelo invente.
+      const recentUserTexts = chatFor(threadKey).filter((m) => m.role === "gg").map((m) => m.text);
+      const ref = resolveConversationReference(parsed.cleanText, recentUserTexts);
+      pipeline = await runContextPipeline(ref.text, { isValidationQuestion: ref.isValidationQuestion });
       autoCodeCtx = pipeline.block;
     }
 

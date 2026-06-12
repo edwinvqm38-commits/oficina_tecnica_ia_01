@@ -26,6 +26,7 @@ const DATA_INTENTS = new Set([
   "resumen_proyecto",
   "consulta_propuesta_tecnica",
   "consulta_por_codigo",
+  "requerimientos_de_proyecto",
   "buscar_requerimientos",
   "buscar_cotizaciones",
   "buscar_recursos",
@@ -84,6 +85,35 @@ function renderRequerimientos(records: RequirementSummary[], total: number): str
     ? `\n\nHay ${total} en total; muestro ${records.length}. Indica un filtro (estado, responsable, cotización) para acotar.`
     : "";
   return `Encontré ${records.length} requerimiento(s) en Supabase${total !== records.length ? ` (de ${total} coincidencias)` : ""}:\n\n${tbl}${extra}`;
+}
+
+// Requerimientos asociados a un proyecto/cotización, con conteo EXACTO y la vía
+// por la que se halló la relación (formal vs. coincidencia textual).
+function renderRequerimientosPorProyecto(
+  result: Extract<ContextToolResult, { source: "requerimientos" }>,
+): string {
+  const projectCode = result.projectCode ?? "(proyecto)";
+  const total = result.exactCount ?? result.total;
+  const shown = result.records.length;
+
+  // Coincidencia textual: no afirmamos asociación formal.
+  if (result.matchMode === "text_fallback") {
+    const tbl = shown > 0 ? `\n\n${table(
+      ["Código", "Estado", "Avance", "Responsable", "Cotización", "Fecha req."],
+      result.records.map((r) => [cell(r.codigo), cell(r.estado), pct(r.avance), cell(r.responsable), cell(r.cotizacion_codigo), cell(r.fecha_requerida)]),
+    )}` : "";
+    return `Encontré ${total} coincidencia(s) textual(es) relacionada(s) con ${projectCode} en Supabase, pero no puedo afirmar que sean una asociación formal del proyecto.${tbl}`;
+  }
+
+  const viaNote = result.matchMode === "quotation_code" ? " (relación por cotización)"
+    : result.matchMode === "project_code" ? " (relación por proyecto adjudicado)"
+    : " (relación por importación histórica)";
+  const rows = result.records.map((r) => [
+    cell(r.codigo), cell(r.estado), pct(r.avance), cell(r.responsable), cell(r.cotizacion_codigo), cell(r.fecha_requerida),
+  ]);
+  const tbl = shown > 0 ? `\n\n${table(["Código", "Estado", "Avance", "Responsable", "Cotización", "Fecha req."], rows)}` : "";
+  const muestra = total > shown ? ` Muestro los primeros ${shown}:` : shown > 0 ? " Detalle:" : "";
+  return `El proyecto/cotización **${projectCode}** tiene **${total}** requerimiento(s) asociado(s) en Supabase${viaNote}.${muestra}${tbl}`;
 }
 
 function renderCotizaciones(records: CotizacionSummary[], total: number): string {
@@ -235,6 +265,14 @@ const FALLBACK_NO_DATA =
 const FALLBACK_NEEDS_CLARIFICATION =
   "Sí tengo acceso a esa tabla, pero necesito un dato para consultarla sin inventar: indícame un código exacto (RQ-XXXX / COT-XXXX), un cliente, un estado o cuántos registros quieres ver.";
 
+const FALLBACK_VALIDATION_NO_DATA =
+  "No puedo validar la respuesta anterior porque las respuestas previas de los agentes no son evidencia: solo Supabase lo es. No encontré un código de proyecto/cotización/requerimiento en la conversación para volver a consultarlo. Indícame el código exacto y lo verifico contra la base de datos.";
+
+export interface AnswerStrategyOptions {
+  /** El usuario pide validar/confirmar (no usar respuestas previas como verdad). */
+  isValidationQuestion?: boolean;
+}
+
 function hasSuccessData(results: ContextToolResult[]): boolean {
   return results.some((r) => r.status === "success" && (r.source === "proyecto" ? r.total > 0 : r.records.length > 0));
 }
@@ -247,9 +285,11 @@ export function decideAnswerStrategy(
   cleanText: string,
   decision: ContextRoutingDecision,
   results: ContextToolResult[],
+  opts: AnswerStrategyOptions = {},
 ): AnswerStrategy {
   const none: AnswerStrategy = { shouldBlockModelAnswer: false, shouldUseDeterministicAnswer: false };
-  if (!isDataQuestion(decision)) return none;
+  const isValidation = Boolean(opts.isValidationQuestion);
+  if (!isDataQuestion(decision) && !isValidation) return none;
 
   // Pregunta sobre tablas reales pero sin código/filtro accionable: pedir dato.
   if (decision.intent === "needs_clarification") {
@@ -266,11 +306,15 @@ export function decideAnswerStrategy(
         shouldUseDeterministicAnswer: false,
       };
     }
+    // Validación sin datos reales: NO confirmar respuestas previas de agentes.
+    if (isValidation) {
+      return { shouldBlockModelAnswer: true, fallbackAnswer: FALLBACK_VALIDATION_NO_DATA, shouldUseDeterministicAnswer: false };
+    }
     return { shouldBlockModelAnswer: true, fallbackAnswer: FALLBACK_NO_DATA, shouldUseDeterministicAnswer: false };
   }
 
   // Hay datos reales → la app redacta la respuesta determinística.
-  const det = buildDeterministicAnswer(cleanText, results);
+  const det = buildDeterministicAnswer(cleanText, results, { isValidationQuestion: isValidation });
   if (det) return { shouldBlockModelAnswer: false, shouldUseDeterministicAnswer: true, deterministicAnswer: det };
 
   // No supimos renderizar (caso raro): bloquear en vez de arriesgar alucinación.
@@ -281,7 +325,11 @@ export function decideAnswerStrategy(
  * Redacta una respuesta usando EXCLUSIVAMENTE los `records` reales recuperados.
  * Devuelve null si no hay nada renderizable.
  */
-export function buildDeterministicAnswer(cleanText: string, results: ContextToolResult[]): string | null {
+export function buildDeterministicAnswer(
+  cleanText: string,
+  results: ContextToolResult[],
+  opts: { isValidationQuestion?: boolean } = {},
+): string | null {
   const fields = detectRequestedFields(cleanText);
 
   // Índice de ítems por código de requerimiento (encadenados por el pipeline).
@@ -301,6 +349,11 @@ export function buildDeterministicAnswer(cleanText: string, results: ContextTool
     if (r.status !== "success") continue;
     switch (r.source) {
       case "requerimientos": {
+        // Consulta relacional "requerimientos del proyecto X" (conteo exacto).
+        if (r.projectCode) {
+          sections.push(renderRequerimientosPorProyecto(r));
+          break;
+        }
         // Detalle por código (1 registro) vs. listado.
         if (r.records.length === 1 && (r.query.codigo || r.query.code)) {
           const rq = r.records[0];
@@ -359,5 +412,10 @@ export function buildDeterministicAnswer(cleanText: string, results: ContextTool
   }
 
   if (sections.length === 0) return null;
-  return sections.join("\n\n");
+  const body = sections.join("\n\n");
+  // Validación: dejamos claro que esto sale de Supabase, no de un agente previo.
+  if (opts.isValidationQuestion) {
+    return `Verifiqué directamente en Supabase (las respuestas previas de otros agentes no son evidencia). Esto es lo que arrojan los datos reales:\n\n${body}`;
+  }
+  return body;
 }
