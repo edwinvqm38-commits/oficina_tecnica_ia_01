@@ -10,10 +10,11 @@ import { sendChatWithFallback } from "../../lib/llm/providers";
 import { routeRequest } from "../../lib/llm/modelRouter";
 import { getAgentModelOverride } from "../../lib/llm/agentModels";
 import type { ChatMessage } from "../../lib/llm/providers";
-import { parseInput, isSimpleMessage, isTeamMessage, hasClearIntent, detectDocumentCodes, detectOtherCodes, detectRequerimientoSearchIntent, detectCotizacionSearchIntent, slugForUser, HUMANIZE_CTX } from "../../lib/chat/messageUtils";
+import { parseInput, isSimpleMessage, isTeamMessage, hasClearIntent, slugForUser, HUMANIZE_CTX } from "../../lib/chat/messageUtils";
 import type { UserDirectory } from "../../lib/chat/messageUtils";
-import { buildContextPrompt, buildRequirementItemsPrompt, fetchCotizacionByCode, fetchRequirementByCode, fetchRequirementItems, fetchProjectContextByCode, buildProjectReferencePrompt, cotizacionToProject, searchRequerimientos, buildRequerimientoSearchPrompt, searchCotizacionesByFilters, buildCotizacionSearchPrompt } from "../../lib/chat/contextQuery";
+import { buildContextPrompt, buildRequirementItemsPrompt, fetchRequirementItems } from "../../lib/chat/contextQuery";
 import type { ChatCtx } from "../../lib/chat/contextQuery";
+import { runContextPipeline } from "../../lib/chat/contextRouter";
 import { MdText } from "../chat/MdText";
 import { HelpPanel } from "../chat/HelpPanel";
 import { ChatAutoInput } from "../chat/ChatAutoInput";
@@ -549,69 +550,14 @@ export function RoundtableView() {
     // question itself is short.
     const simple = isSimpleMessage(parsed.cleanText) && !ctxProject && !ctxRequirement && !hasAttachments;
 
-    // Auto-detect COT-xxx / RQ-xxx / OC-xxx codes pasted in the message.
-    // Wrapped in try/catch so a Supabase/network hiccup while building this
-    // extra context never breaks the whole send flow or leaves the page stuck.
+    // Real-data context: detect intent → query Supabase → build the
+    // "--- CONTEXTO REAL CONSULTADO ---" block. Centralized in
+    // lib/chat/contextRouter (codes COT/RQ, historical codes, requerimiento/
+    // cotización searches, recursos, propuestas técnicas). The pipeline never
+    // throws — on a temporary error it returns a soft note instead of data.
     let autoCodeCtx = "";
     if (!simple) {
-      try {
-        const codes = detectDocumentCodes(parsed.cleanText);
-        for (const dc of codes) {
-          if (dc.type === "COT") {
-            const cot = await fetchCotizacionByCode(dc.code).catch(() => null);
-            if (cot) {
-              const p = cotizacionToProject(cot);
-              autoCodeCtx += `\n\nCotización detectada **${p.id}**: ${p.name} · Cliente: ${p.client} · Estado: ${p.status} · Avance: ${p.progress}%${p.summary ? ` · ${p.summary}` : ""}`;
-            }
-          } else if (dc.type === "RQ") {
-            const rq = await fetchRequirementByCode(dc.code).catch(() => null);
-            if (rq) {
-              autoCodeCtx += buildContextPrompt({ project: null, requirement: rq });
-              const rqItems = await fetchRequirementItems(rq.id).catch(() => []);
-              autoCodeCtx += buildRequirementItemsPrompt(rqItems);
-            }
-          }
-        }
-
-        // Codes that don't follow COT-/RQ-/OC- conventions (e.g. historical
-        // imports like "FOR-EKA-PRO-3_2025-143"): cascade through cotizaciones,
-        // requerimientos, technical_proposals, and historical-import metadata.
-        const exclude = new Set(codes.map((c) => c.code));
-        const otherCodes = detectOtherCodes(parsed.cleanText, exclude);
-        for (const code of otherCodes.slice(0, 2)) {
-          const result = await fetchProjectContextByCode(code).catch(() => null);
-          if (!result || result.source === "none") continue;
-          autoCodeCtx += buildProjectReferencePrompt(code, result);
-          // Item-level detail is only worth loading when the code resolved to
-          // a single specific requerimiento — not for historical-import
-          // matches, which can fan out to 100+ RQs (already summarized above).
-          if (result.source === "requerimiento" && result.requirements?.length === 1) {
-            const items = await fetchRequirementItems(result.requirements[0].id).catch(() => []);
-            autoCodeCtx += buildRequirementItemsPrompt(items);
-          }
-        }
-
-        // Free-form search ("busca/lista los requerimientos pendientes de
-        // Juan", "filtra RQ en proceso") — lets agents query the
-        // requerimientos table by status/responsible/text, not just by an
-        // exact code pasted in the message.
-        const searchIntent = detectRequerimientoSearchIntent(parsed.cleanText);
-        if (searchIntent) {
-          const searchResult = await searchRequerimientos(searchIntent, searchIntent.limit ?? 20).catch(() => ({ items: [], total: 0 }));
-          autoCodeCtx += buildRequerimientoSearchPrompt(searchIntent, searchResult);
-        }
-
-        // Same idea, but for "últimas cotizaciones registradas/recientes"
-        // and "busca/lista cotizaciones ..." over the real cotizaciones table.
-        const cotSearchIntent = detectCotizacionSearchIntent(parsed.cleanText);
-        if (cotSearchIntent) {
-          const cotSearchResult = await searchCotizacionesByFilters(cotSearchIntent, cotSearchIntent.limit ?? 20).catch(() => ({ items: [], total: 0 }));
-          autoCodeCtx += buildCotizacionSearchPrompt(cotSearchIntent, cotSearchResult);
-        }
-      } catch (err) {
-        if (process.env.NODE_ENV !== "production") console.debug("[RoundtableView] autoCodeCtx error", err);
-        autoCodeCtx += `\n\n(No pude cargar el detalle histórico del código mencionado por un error temporal. Indícalo brevemente al usuario si pregunta por ese código.)`;
-      }
+      autoCodeCtx = (await runContextPipeline(parsed.cleanText)).block;
     }
 
     // Item/material-level data for the referenced requirement (Supabase)
