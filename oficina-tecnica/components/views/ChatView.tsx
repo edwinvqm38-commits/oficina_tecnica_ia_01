@@ -147,6 +147,7 @@ export function ChatView() {
     chatFor,
     seedThreadFromLegacy,
     ready,
+    remoteConfigured,
     persistenceIssue,
     reportPersistenceIssue,
     clearPersistenceIssue,
@@ -201,6 +202,7 @@ export function ChatView() {
   }, [ready, userKey, seedThreadFromLegacy]);
 
   function persistConversation(...args: Parameters<typeof saveConversation>) {
+    if (!remoteConfigured) return;
     void saveConversation(...args).then((result) => {
       if (result.ok) clearPersistenceIssue("conversation-write");
       else reportPersistenceIssue(result.issue);
@@ -208,6 +210,7 @@ export function ChatView() {
   }
 
   async function readConversationHistory(...args: Parameters<typeof loadConversationHistory>) {
+    if (!remoteConfigured) return [];
     const result = await loadConversationHistory(...args);
     if (result.ok) {
       clearPersistenceIssue("conversation-read");

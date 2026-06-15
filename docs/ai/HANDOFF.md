@@ -21,11 +21,18 @@ funcional del cliente para tolerar un futuro cierre seguro de RLS: captura de
 errores Supabase, avisos no técnicos al usuario y continuidad local/mock cuando
 fallan lecturas, escrituras o Realtime.
 
+En la rama `security/auth-gated-store-hydration` se agregó un gate mínimo de
+autorización para que `workspace_state`, la sincronización remota y el historial
+persistente de Chat/Mesa no se activen hasta confirmar sesión y perfil aprobado.
+La auditoría posterior detectó CR-1: una resolución obsoleta de `resolveAccess`
+podía habilitar remoto después de un cambio de sesión. Se corrigió con un
+`requestId` vigente en `StoreProvider`.
+
 ## Último estado
 
-- Rama: `security/supabase-client-rls-readiness`.
-- HEAD base antes de la preparación funcional:
-  `83b2971 docs: address AI memory RLS audit findings`.
+- Rama: `security/auth-gated-store-hydration`.
+- HEAD base antes del gate de hidratación:
+  `9b52e2f fix: surface Supabase persistence errors in UI`.
 - Base funcional conocida: `e08fa6b`.
 - La rama parte de la capa documental publicada en
   `chore/ai-context-governance`.
@@ -73,17 +80,31 @@ fallan lecturas, escrituras o Realtime.
   error o falla la red.
 - `ChatView` y `RoundtableView` muestran un aviso no técnico si falla la carga
   o guardado de historial/persistencia, manteniendo el flujo local.
+- `StoreProvider` se monta en `app/layout.tsx`, antes de `AppShell`; por eso la
+  persistencia remota ahora valida sesión y `user_profiles.status ===
+  "approved"` antes de leer/escribir `workspace_state`.
+- Mientras no exista sesión, el perfil esté cargando o el usuario esté pendiente,
+  rechazado, bloqueado o deshabilitado, el store se queda en modo local y cancela
+  guardados remotos pendientes.
+- Chat y Mesa saltan lectura/escritura en `agent_conversations` cuando el gate
+  remoto no está habilitado.
+- CR-1 corregido: `resolveAccess` marca cada invocación con un id monotónico y,
+  después de cualquier `await`, descarta la respuesta si ya existe una invocación
+  más reciente o cambió la sesión.
+- Limitación conocida: los guardados remotos ya en vuelo no se abortan
+  completamente desde el cliente; la garantía definitiva debe cerrarse después
+  con RLS/policies correctas.
+- No se tocó SQL, RLS, policies, grants, Supabase remoto, SISTEMA V2 /
+  SGP-LITE; tampoco se hizo commit ni push.
 
 ## Verificaciones de esta tarea
 
-- Rama verificada: `security/supabase-client-rls-readiness`.
+- Rama verificada: `security/auth-gated-store-hydration`.
 - `git status --short`: muestra cambios en `docs/ai/HANDOFF.md`,
   `oficina-tecnica/components/views/ChatView.tsx`,
   `oficina-tecnica/components/views/RoundtableView.tsx`,
-  `oficina-tecnica/components/views/shared.tsx`,
-  `oficina-tecnica/lib/memory/conversationMemory.ts`,
   `oficina-tecnica/lib/store/StoreProvider.tsx`,
-  `oficina-tecnica/lib/store/persistence.ts` y el nuevo
+  `oficina-tecnica/lib/store/persistence.ts` y
   `oficina-tecnica/lib/supabase/persistenceErrors.ts`.
 - `git diff --check`: sin errores; Git reporta solo avisos CRLF esperados en
   Windows.
@@ -97,10 +118,10 @@ fallan lecturas, escrituras o Realtime.
 
 ## Próxima acción recomendada
 
-Revisar el diff funcional/documental de preparación RLS del cliente y validar
-lint/build. Si pasa revisión, preparar un commit local separado sin push. No
-cerrar RLS ni crear migraciones hasta confirmar policies, grants, volumen,
-Realtime, Storage y dependencias reales.
+Revisar el diff funcional/documental del gate de hidratación remota. Si pasa
+revisión, preparar un commit local separado sin push. No cerrar RLS ni crear
+migraciones hasta confirmar policies, grants, volumen, Realtime, Storage y
+dependencias reales.
 
 ## Cambios pendientes
 
