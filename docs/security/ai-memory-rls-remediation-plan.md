@@ -214,6 +214,12 @@ Conceptualmente:
 - restringir memoria oficial a gerencia o administración;
 - dejar cualquier operación privilegiada futura detrás de backend controlado.
 
+En una migración futura aprobada, la eliminación de cada policy permisiva y la
+creación de su reemplazo restrictivo deben ejecutarse dentro de una misma
+transacción `BEGIN`/`COMMIT`. La migración debe abortar completamente ante
+cualquier error para no dejar una ventana intermedia de exposición ni un estado
+de bloqueo total por policies retiradas sin reemplazo.
+
 No se incluye SQL de cambio en este documento.
 
 ## 9. Esquema futuro `ai_*`
@@ -366,6 +372,8 @@ Casos mínimos:
 12. Polling, Realtime y reintentos no duplican mensajes.
 13. El cliente no contiene `service_role`.
 14. Las policies abiertas dejan de aparecer en el inventario posterior.
+15. Un miembro de `workspace_id = A` no puede leer, escribir ni recibir eventos
+    Realtime de conversaciones o memorias de `workspace_id = B`.
 
 Las pruebas deben incluir REST directo con anon key y JWT de cada rol, no solo
 la interfaz.

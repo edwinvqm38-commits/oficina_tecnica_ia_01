@@ -19,7 +19,8 @@ consultó Supabase real.
 ## Último estado
 
 - Rama: `security/ai-memory-rls-audit`.
-- HEAD: `1451d79 docs: add persistent AI memory architecture`.
+- HEAD antes de los ajustes actuales:
+  `da676a9 docs: add AI memory RLS remediation plan`.
 - Base funcional conocida: `e08fa6b`.
 - La rama parte de la capa documental publicada en
   `chore/ai-context-governance`.
@@ -29,7 +30,7 @@ consultó Supabase real.
   Next.js y enlazan la capa raíz.
 - Claude Auditor revisó la capa de gobierno incluida en `076d0c1` y no encontró
   hallazgos críticos en aquella revisión.
-- Los commits documentales `076d0c1` y `1451d79` ya existen.
+- Los commits documentales `076d0c1`, `1451d79` y `da676a9` ya existen.
 - La auditoría detectó memoria parcial en `agent_conversations`,
   `agent_memories`, `workspace_state`, `AppState.chats`, `datasetMemory` y
   `queryFeedback`.
@@ -52,6 +53,11 @@ consultó Supabase real.
 - La auditoría de coherencia confirmó que el checklist contiene únicamente
   consultas de lectura y que el plan separa contención, esquema `ai_*`,
   migración posterior y rollback.
+- Claude aprobó avanzar hacia un inventario Supabase de solo lectura y solicitó
+  ajustes menores sobre `user_profiles`, recursión RLS, Storage, atomicidad de
+  futuras policies y aislamiento entre workspaces.
+- Estos ajustes no autorizan consultar Supabase real, ejecutar SQL, activar
+  memoria automática ni modificar SISTEMA V2 / SGP-LITE.
 
 ## Verificaciones de esta tarea
 
@@ -70,9 +76,9 @@ consultó Supabase real.
 ## Próxima acción recomendada
 
 Revisar el diff documental y, si se autoriza, preparar un commit local sin
-push. La ejecución futura del inventario de solo lectura requiere una
-autorización separada. No crear ni ejecutar migraciones hasta confirmar
-policies, grants, volumen, Realtime y dependencias reales.
+push. La ejecución futura del inventario de solo lectura mantiene el requisito
+de autorización separada. No crear ni ejecutar migraciones hasta confirmar
+policies, grants, volumen, Realtime, Storage y dependencias reales.
 
 ## Cambios pendientes
 

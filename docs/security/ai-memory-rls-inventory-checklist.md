@@ -67,7 +67,8 @@ where schemaname = 'public'
   and tablename in (
     'agent_conversations',
     'agent_memories',
-    'workspace_state'
+    'workspace_state',
+    'user_profiles'
   )
 order by tablename, policyname;
 ```
@@ -80,6 +81,8 @@ Checklist:
 - [ ] Detectar `qual` o `with_check` verdaderos.
 - [ ] Identificar policies permisivas que se combinen mediante `OR`.
 - [ ] Comparar resultado con migraciones `030`, `034` y `035`.
+- [ ] Revisar las policies de `user_profiles` de las que dependen las
+  subconsultas administrativas.
 
 ## 4. Grants de tabla
 
@@ -97,7 +100,8 @@ where table_schema = 'public'
   and table_name in (
     'agent_conversations',
     'agent_memories',
-    'workspace_state'
+    'workspace_state',
+    'user_profiles'
   )
 order by table_name, grantee, privilege_type;
 ```
@@ -118,7 +122,8 @@ cross join
   (values
     ('agent_conversations'),
     ('agent_memories'),
-    ('workspace_state')
+    ('workspace_state'),
+    ('user_profiles')
   ) as tables(table_name)
 order by table_name, role_name;
 ```
@@ -129,6 +134,70 @@ Checklist:
 - [ ] Confirmar privilegios efectivos de `authenticated`.
 - [ ] Detectar grants heredados mediante `public`.
 - [ ] Verificar que grants y policies se evalúan conjuntamente.
+
+### Verificación de recursión RLS en `user_profiles`
+
+Objetivo: identificar dependencias entre policies antes de probarlas con una
+sesión autenticada.
+
+```sql
+select
+  schemaname,
+  tablename,
+  policyname,
+  cmd,
+  qual,
+  with_check
+from pg_policies
+where schemaname = 'public'
+  and (
+    tablename = 'user_profiles'
+    or (
+      tablename in ('agent_conversations', 'agent_memories')
+      and (
+        coalesce(qual, '') ilike '%user_profiles%'
+        or coalesce(with_check, '') ilike '%user_profiles%'
+      )
+    )
+  )
+order by tablename, policyname;
+```
+
+La comprobación funcional siguiente debe ejecutarse posteriormente mediante un
+cliente autenticado de prueba, no como propietario de la tabla ni con
+`service_role`. Solo devuelve booleanos y no extrae perfiles ni conversaciones:
+
+```sql
+select exists (
+  select 1
+  from public.user_profiles
+  where id = auth.uid()
+) as own_profile_visible;
+```
+
+```sql
+select exists (
+  select 1
+  from public.agent_conversations
+  limit 1
+) as any_conversation_visible;
+```
+
+```sql
+select exists (
+  select 1
+  from public.agent_memories
+  limit 1
+) as any_memory_visible;
+```
+
+Checklist:
+
+- [ ] Ejecutar con JWT de un usuario aprobado de prueba.
+- [ ] Ejecutar con JWT de un usuario pendiente de prueba.
+- [ ] Confirmar ausencia de `infinite recursion detected in policy`.
+- [ ] Confirmar que cada booleano respeta el acceso esperado del rol.
+- [ ] No usar SQL Editor como propietario para validar comportamiento RLS.
 
 ## 5. Exposición de tablas del esquema público
 
@@ -433,7 +502,68 @@ Checklist:
 - [ ] Revisar privilegios de cada vista.
 - [ ] Verificar si la vista respeta el invocador o privilegios del propietario.
 
-## 13. Dependencias del frontend
+## 13. Supabase Storage
+
+Objetivo: inventariar buckets y policies de objetos sin leer ni descargar
+archivos. Todas las consultas de esta sección son de solo lectura.
+
+Buckets:
+
+```sql
+select
+  id,
+  name,
+  public,
+  file_size_limit,
+  allowed_mime_types,
+  created_at,
+  updated_at
+from storage.buckets
+order by id;
+```
+
+Policies de `storage.objects`:
+
+```sql
+select
+  schemaname,
+  tablename,
+  policyname,
+  permissive,
+  roles,
+  cmd,
+  qual,
+  with_check
+from pg_policies
+where schemaname = 'storage'
+  and tablename = 'objects'
+order by policyname;
+```
+
+Grants efectivos de tabla:
+
+```sql
+select
+  table_schema,
+  table_name,
+  grantee,
+  privilege_type,
+  is_grantable
+from information_schema.role_table_grants
+where table_schema = 'storage'
+  and table_name in ('buckets', 'objects')
+order by table_name, grantee, privilege_type;
+```
+
+Checklist:
+
+- [ ] Identificar buckets públicos y privados.
+- [ ] Detectar policies abiertas a `public`, `anon` o `authenticated`.
+- [ ] Detectar condiciones verdaderas o acceso sin prefijo/propietario.
+- [ ] Confirmar que no se leyó ni descargó contenido de `storage.objects`.
+- [ ] No modificar buckets, objetos, policies ni grants.
+
+## 14. Dependencias del frontend
 
 Estas comprobaciones son locales y no consultan Supabase:
 
@@ -454,7 +584,7 @@ Checklist:
 - [ ] Registrar rutas Realtime y polling.
 - [ ] Identificar datos incluidos en `workspace_state`.
 
-## 14. Evidencia a conservar
+## 15. Evidencia a conservar
 
 El informe autorizado debe contener:
 
@@ -477,7 +607,7 @@ No debe contener:
 - tokens, claves o secretos;
 - dumps de tablas.
 
-## 15. Criterio de salida
+## 16. Criterio de salida
 
 El inventario se considera suficiente cuando:
 
