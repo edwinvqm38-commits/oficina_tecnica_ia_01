@@ -12,18 +12,24 @@ Se creó la primera capa formal de contexto compartido y la propuesta
 sigue limitado a documentos de gobierno; no modifica código funcional ni
 comportamiento de la aplicación.
 
+En la rama `security/ai-memory-rls-audit` se añadieron propuestas documentales
+de remediación RLS e inventario de solo lectura. No se ejecutó SQL ni se
+consultó Supabase real.
+
 ## Último estado
 
-- Rama: `chore/ai-context-governance`.
-- HEAD: `076d0c1 docs: add shared AI context governance`.
+- Rama: `security/ai-memory-rls-audit`.
+- HEAD: `1451d79 docs: add persistent AI memory architecture`.
 - Base funcional conocida: `e08fa6b`.
-- La rama parte del estado de `fix/hard-anti-hallucination`.
-- Los documentos de contexto están en la raíz y en `docs/ai/`.
+- La rama parte de la capa documental publicada en
+  `chore/ai-context-governance`.
+- Los documentos de contexto están en la raíz, `docs/ai/` y
+  `docs/security/`.
 - Los archivos de agentes dentro de `oficina-tecnica/` conservan sus reglas de
   Next.js y enlazan la capa raíz.
 - Claude Auditor revisó la capa de gobierno incluida en `076d0c1` y no encontró
   hallazgos críticos en aquella revisión.
-- El commit documental `076d0c1` ya fue creado localmente.
+- Los commits documentales `076d0c1` y `1451d79` ya existen.
 - La auditoría detectó memoria parcial en `agent_conversations`,
   `agent_memories`, `workspace_state`, `AppState.chats`, `datasetMemory` y
   `queryFeedback`.
@@ -38,17 +44,24 @@ comportamiento de la aplicación.
   Supabase real.
 - Se registraron en `DECISIONS.md` los principios de Supabase, Drive,
   Graphify/Graphiti, exclusión de Obsidian y aprobación formal.
-- No se hizo push, merge ni PR.
+- En esta tarea no se hizo commit, push, merge ni PR.
+- Se creó `docs/security/ai-memory-rls-remediation-plan.md` con una estrategia
+  de contención temporal y un modelo futuro `ai_*`.
+- Se creó `docs/security/ai-memory-rls-inventory-checklist.md` con consultas de
+  solo lectura propuestas y explícitamente no ejecutadas.
+- La auditoría de coherencia confirmó que el checklist contiene únicamente
+  consultas de lectura y que el plan separa contención, esquema `ai_*`,
+  migración posterior y rollback.
 
 ## Verificaciones de esta tarea
 
-- `git status --short`: solo muestra cambios en `CURRENT_STATE.md`,
-  `DECISIONS.md`, `HANDOFF.md`, `OPEN_ISSUES.md` y el nuevo
-  `MEMORY_ARCHITECTURE.md`.
-- `git diff --stat`: sin archivos fuera del alcance documental; el archivo
-  nuevo no aparece en esta estadística mientras permanezca sin seguimiento.
-- `git diff --check`: sin errores en archivos rastreados; el archivo nuevo
-  también se comprobó sin whitespace al final de línea.
+- Rama verificada: `security/ai-memory-rls-audit`.
+- `git status --short`: solo muestra `HANDOFF.md` y los dos documentos nuevos
+  de `docs/security/`.
+- `git diff --check`: sin errores en archivos rastreados; los dos archivos
+  nuevos también se comprobaron sin whitespace al final de línea.
+- Los bloques SQL del checklist son consultas de solo lectura propuestas y no
+  fueron ejecutados.
 - `npm run lint`: no ejecutado; el cambio es exclusivamente documental y el
   baseline global tiene errores preexistentes.
 - `npm run build`: no ejecutado; no se modificó código, configuración ni
@@ -56,16 +69,16 @@ comportamiento de la aplicación.
 
 ## Próxima acción recomendada
 
-Revisar el diff de las correcciones solicitadas por Claude y preparar el commit
-documental local, sin push. No crear SQL, tablas ni migraciones hasta que la
-arquitectura y una corrección RLS específica sean aprobadas.
+Revisar el diff documental y, si se autoriza, preparar un commit local sin
+push. La ejecución futura del inventario de solo lectura requiere una
+autorización separada. No crear ni ejecutar migraciones hasta confirmar
+policies, grants, volumen, Realtime y dependencias reales.
 
 ## Cambios pendientes
 
-- Revisión final de los ajustes documentales derivados de la auditoría de
-  Claude.
 - Escalamiento a Gerencia del riesgo RLS antes de implementar memoria
   persistente automática.
+- Autorización separada antes de consultar Supabase real.
 - Aprobación arquitectónica explícita antes de diseñar SQL o migraciones.
 - Commit de esta nueva documentación, solo cuando se autorice.
 - Push de la rama, solo cuando se autorice.
