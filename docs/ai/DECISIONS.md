@@ -15,6 +15,11 @@ se marca como sustituida y se enlaza la nueva decisión.
 | D-008 | Vigente | No tocar SISTEMA V2 / SGP-LITE sin aprobación explícita. | La integración futura no forma parte del comportamiento actual ni de esta capa documental. |
 | D-009 | Vigente | Mantener contexto compartido en documentos pequeños con responsabilidades separadas. | `CURRENT_STATE` describe hechos actuales, `HANDOFF` continuidad, `DECISIONS` decisiones y `OPEN_ISSUES` deuda. |
 | D-010 | Vigente | No modificar código funcional sin plan y aprobación. | Auditoría y propuesta preceden cualquier cambio de comportamiento. |
+| D-011 | Vigente | Supabase será la fuente oficial de memoria persistente. | Historial, resúmenes, estados de confianza, memoria estructurada y auditoría deben converger en una fuente canónica. |
+| D-012 | Vigente | Google Drive será el repositorio futuro de archivos. | Supabase conservará referencias, metadatos, vínculos y permisos; los archivos no deben persistirse como base64 en la memoria. |
+| D-013 | Vigente | Obsidian no se usará por ahora. | Los mocks actuales no definen la arquitectura persistente ni se diseñarán flujos dependientes de vaults o carpetas. |
+| D-014 | Futura | Graphify/Graphiti podrá evaluarse como capa auxiliar de grafo. | No sustituirá a Supabase y solo se considerará después de estabilizar identidad, permisos y memoria trazable. |
+| D-015 | Vigente | Toda conversación relevante se guarda automáticamente, pero la persistencia no equivale a validación. | Una memoria solo se convierte en decisión o criterio oficial mediante aprobación formal explícita; leer, callar o responder “ok” no aprueba. |
 
 ## Criterios para nuevas decisiones
 

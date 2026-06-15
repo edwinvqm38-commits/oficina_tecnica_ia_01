@@ -13,6 +13,7 @@ issue debe cerrarse solo después de verificar código, pruebas y Git.
 | OI-006 | Pendiente | Siguiente fase de Mesa multiagente. | Existe `RoundtableView`, pero la ampliación de orquestación, decisiones y responsabilidades sigue separada. |
 | OI-007 | Pendiente | Pruebas automatizadas. | No se encontraron archivos de test para el pipeline crítico. Priorizar router, registry, filtros comerciales, alcance y validación. |
 | OI-008 | Abierto | Pérdida de continuidad si `HANDOFF.md` no se actualiza. | Hacer la actualización parte obligatoria del cierre y de la revisión previa al commit. |
+| OI-009 | Crítico | RLS reportada como abierta en `agent_conversations` y `agent_memories`. | El inventario auditado reporta políticas `allow all`, rol `public`, comando `ALL` y condición `qual: true`. Si siguen vigentes, cualquier cliente con anon key podría acceder o modificar conversaciones y memorias. Es un riesgo de seguridad presente que debe escalarse a Gerencia. No modificar Supabase sin aprobación explícita; diseñar y aprobar una corrección RLS específica antes de poblar o ampliar memoria persistente. |
 
 ## No incluidos en el alcance actual
 

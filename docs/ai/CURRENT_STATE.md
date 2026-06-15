@@ -29,6 +29,15 @@ La rama base contiene una primera implementación funcional en varias capas:
 
 El feedback correctivo se conserva solo en memoria del proceso.
 
+## Arquitectura de memoria
+
+`docs/ai/MEMORY_ARCHITECTURE.md` existe como propuesta en revisión, pendiente
+de aprobación y commit. La auditoría identificó un riesgo crítico: las políticas
+RLS reportadas para `agent_conversations` y `agent_memories` están abiertas a
+`public` con comando `ALL` y `qual: true`. Este riesgo debe confirmarse y
+resolverse mediante una intervención aprobada antes de habilitar captura
+automática de memoria persistente.
+
 ## Consultas comerciales
 
 El commit `e08fa6b` introdujo el arreglo básico para consultas por estado
