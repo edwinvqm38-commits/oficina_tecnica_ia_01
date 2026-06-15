@@ -10,6 +10,12 @@
 // If Supabase isn't configured, everything still works — it just stays local.
 
 import { getSupabaseClient } from "../supabase/client";
+import {
+  persistenceFailure,
+  persistenceSuccess,
+  type PersistenceIssue,
+  type PersistenceResult,
+} from "../supabase/persistenceErrors";
 import { AppState, mergeWithSeed, pickSharedChats, redactProviderKeys, seedState } from "./types";
 
 const LOCAL_KEY = "oficina-tecnica:state:v1";
@@ -35,16 +41,22 @@ export function saveLocal(state: AppState) {
   }
 }
 
-export async function loadRemote(): Promise<AppState | null> {
+export async function loadRemote(): Promise<PersistenceResult<AppState | null>> {
   const supabase = getSupabaseClient();
-  if (!supabase) return null;
-  const { data, error } = await supabase
-    .from("workspace_state")
-    .select("state")
-    .eq("id", WORKSPACE_ID)
-    .maybeSingle();
-  if (error || !data) return null;
-  return mergeWithSeed(data.state as Partial<AppState>);
+  if (!supabase) return persistenceSuccess(null);
+
+  try {
+    const { data, error } = await supabase
+      .from("workspace_state")
+      .select("state")
+      .eq("id", WORKSPACE_ID)
+      .maybeSingle();
+    if (error) return persistenceFailure("workspace-read", error);
+    if (!data) return persistenceSuccess(null);
+    return persistenceSuccess(mergeWithSeed(data.state as Partial<AppState>));
+  } catch (error) {
+    return persistenceFailure("workspace-read", error);
+  }
 }
 
 let pendingSync: ReturnType<typeof setTimeout> | null = null;
@@ -57,24 +69,35 @@ let pendingSync: ReturnType<typeof setTimeout> | null = null;
  * via the shared backend. `onSettled` (if given) is called with whether the
  * write succeeded, once the debounced write actually runs.
  */
-export function saveRemote(state: AppState, onSettled?: (ok: boolean) => void) {
+export function saveRemote(
+  state: AppState,
+  onSettled?: (result: PersistenceResult<void>) => void
+) {
   const supabase = getSupabaseClient();
-  if (!supabase) return;
+  if (!supabase) {
+    onSettled?.(persistenceSuccess(undefined));
+    return;
+  }
   if (pendingSync) clearTimeout(pendingSync);
   // Debounce writes so rapid local interactions don't flood the database.
-  pendingSync = setTimeout(() => {
+  pendingSync = setTimeout(async () => {
     const syncable: AppState = {
       ...state,
       chats: pickSharedChats(state.chats),
       modelConnections: redactProviderKeys(state.modelConnections),
     };
-    void supabase
-      .from("workspace_state")
-      .upsert({ id: WORKSPACE_ID, state: syncable, updated_at: new Date().toISOString() })
-      .then(({ error }) => {
-        if (error) console.warn("[store] remote sync failed", error.message);
-        onSettled?.(!error);
-      });
+    try {
+      const { error } = await supabase
+        .from("workspace_state")
+        .upsert({ id: WORKSPACE_ID, state: syncable, updated_at: new Date().toISOString() });
+      onSettled?.(
+        error
+          ? persistenceFailure("workspace-write", error)
+          : persistenceSuccess(undefined)
+      );
+    } catch (error) {
+      onSettled?.(persistenceFailure("workspace-write", error));
+    }
   }, 800);
 }
 
@@ -87,7 +110,10 @@ export function isRemoteConfigured(): boolean {
  * user posting in Mesa de trabajo) and invokes `onChange` with the merged
  * remote state. Returns an unsubscribe function.
  */
-export function subscribeRemote(onChange: (state: AppState) => void): () => void {
+export function subscribeRemote(
+  onChange: (state: AppState) => void,
+  onIssue?: (issue: PersistenceIssue) => void
+): () => void {
   const supabase = getSupabaseClient();
   if (!supabase) return () => {};
 
@@ -101,7 +127,11 @@ export function subscribeRemote(onChange: (state: AppState) => void): () => void
         if (newState) onChange(mergeWithSeed(newState));
       }
     )
-    .subscribe();
+    .subscribe((status, error) => {
+      if (status !== "CHANNEL_ERROR" && status !== "TIMED_OUT") return;
+      const result = persistenceFailure<void>("workspace-realtime", error ?? status);
+      if (!result.ok) onIssue?.(result.issue);
+    });
 
   return () => {
     supabase.removeChannel(channel);

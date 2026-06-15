@@ -10,6 +10,7 @@ import {
   useState,
 } from "react";
 import { APPROVALS, SKILLS } from "../data";
+import type { PersistenceIssue, PersistenceOperation } from "../supabase/persistenceErrors";
 import type { ApprovalStatus, ChatMessage, KnowledgeNote, Project, Skill, SkillStatus } from "../types";
 import { isRemoteConfigured, loadLocal, loadRemote, saveLocal, saveRemote, subscribeRemote } from "./persistence";
 import {
@@ -36,6 +37,9 @@ type StoreActions = {
   /** True once persisted state (local or remote) has finished loading. */
   ready: boolean;
   remoteConfigured: boolean;
+  persistenceIssue: PersistenceIssue | null;
+  reportPersistenceIssue: (issue: PersistenceIssue) => void;
+  clearPersistenceIssue: (operation?: PersistenceOperation) => void;
 
   // Approvals
   decideApproval: (id: string, decision: ApprovalStatus, meta?: { title?: string; summary?: string }) => void;
@@ -94,8 +98,20 @@ function logTimeline(
 export function StoreProvider({ children }: { children: React.ReactNode }) {
   const [state, setState] = useState<AppState>(() => seedState());
   const [ready, setReady] = useState(false);
+  const [persistenceIssue, setPersistenceIssue] = useState<PersistenceIssue | null>(null);
   const remoteConfigured = useMemo(() => isRemoteConfigured(), []);
   const hydrated = useRef(false);
+
+  const reportPersistenceIssue = useCallback((issue: PersistenceIssue) => {
+    setPersistenceIssue(issue);
+  }, []);
+
+  const clearPersistenceIssue = useCallback((operation?: PersistenceOperation) => {
+    setPersistenceIssue((current) => {
+      if (!current || (operation && current.operation !== operation)) return current;
+      return null;
+    });
+  }, []);
 
   // Hydrate: prefer remote (if configured), fall back to local cache. The
   // remote `workspace_state` row only ever carries the shared `roundtable`
@@ -109,9 +125,15 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
       const local = loadLocal();
       if (!cancelled) setState(local);
       if (remoteConfigured) {
-        const remote = await loadRemote();
-        if (!cancelled && remote) {
-          setState((prev) => ({ ...remote, chats: mergeChats(prev.chats, remote.chats) }));
+        const result = await loadRemote();
+        if (!cancelled && result.ok) {
+          clearPersistenceIssue("workspace-read");
+          const remoteState = result.data;
+          if (remoteState) {
+            setState((prev) => ({ ...remoteState, chats: mergeChats(prev.chats, remoteState.chats) }));
+          }
+        } else if (!cancelled && !result.ok) {
+          reportPersistenceIssue(result.issue);
         }
       }
       if (!cancelled) {
@@ -122,7 +144,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
     return () => {
       cancelled = true;
     };
-  }, [remoteConfigured]);
+  }, [clearPersistenceIssue, remoteConfigured, reportPersistenceIssue]);
 
   // Persist on every change (after initial hydration, so we don't overwrite
   // the saved state with the seed during the first render).
@@ -133,14 +155,16 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
     // as "sent" immediately (nothing to wait on), so there's nothing to
     // reconcile here.
     if (remoteConfigured) {
-      saveRemote(state, (ok) => {
+      saveRemote(state, (result) => {
+        if (result.ok) clearPersistenceIssue("workspace-write");
+        else reportPersistenceIssue(result.issue);
         setState((s) => {
-          const chats = updateChatStatuses(s.chats, ok ? "sent" : "failed");
+          const chats = updateChatStatuses(s.chats, result.ok ? "sent" : "failed");
           return chats === s.chats ? s : { ...s, chats };
         });
       });
     }
-  }, [state, remoteConfigured]);
+  }, [clearPersistenceIssue, reportPersistenceIssue, state, remoteConfigured]);
 
   // Live-sync shared chats (e.g. Mesa de trabajo) across users: when another
   // client saves the workspace state, merge their `chats` into ours so new
@@ -149,13 +173,17 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
   // other state or dropping messages not yet round-tripped.
   useEffect(() => {
     if (!remoteConfigured) return;
-    return subscribeRemote((remote) => {
-      setState((s) => {
-        const chats = mergeChats(s.chats, remote.chats);
-        return chats === s.chats ? s : { ...s, chats };
-      });
-    });
-  }, [remoteConfigured]);
+    return subscribeRemote(
+      (remote) => {
+        clearPersistenceIssue("workspace-realtime");
+        setState((s) => {
+          const chats = mergeChats(s.chats, remote.chats);
+          return chats === s.chats ? s : { ...s, chats };
+        });
+      },
+      reportPersistenceIssue
+    );
+  }, [clearPersistenceIssue, remoteConfigured, reportPersistenceIssue]);
 
   // Fallback poll: Realtime subscriptions can silently fail to deliver
   // (publication/replication not configured, dropped connection, etc.), so
@@ -165,16 +193,22 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     if (!remoteConfigured) return;
     const interval = setInterval(() => {
-      void loadRemote().then((remote) => {
-        if (!remote) return;
+      void loadRemote().then((result) => {
+        if (!result.ok) {
+          reportPersistenceIssue(result.issue);
+          return;
+        }
+        clearPersistenceIssue("workspace-read");
+        const remoteState = result.data;
+        if (!remoteState) return;
         setState((s) => {
-          const chats = mergeChats(s.chats, remote.chats);
+          const chats = mergeChats(s.chats, remoteState.chats);
           return chats === s.chats ? s : { ...s, chats };
         });
       });
     }, 5000);
     return () => clearInterval(interval);
-  }, [remoteConfigured]);
+  }, [clearPersistenceIssue, remoteConfigured, reportPersistenceIssue]);
 
   const notify = useCallback<StoreActions["notify"]>((n) => {
     const full: Notification = { id: uid("NTF"), ts: Date.now(), read: false, ...n };
@@ -367,6 +401,9 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
       state,
       ready,
       remoteConfigured,
+      persistenceIssue,
+      reportPersistenceIssue,
+      clearPersistenceIssue,
       decideApproval,
       approvalStatus,
       setSkillState,
@@ -391,6 +428,9 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
       state,
       ready,
       remoteConfigured,
+      persistenceIssue,
+      reportPersistenceIssue,
+      clearPersistenceIssue,
       decideApproval,
       approvalStatus,
       setSkillState,

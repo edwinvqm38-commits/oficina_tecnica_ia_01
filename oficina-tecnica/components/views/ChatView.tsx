@@ -4,7 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import { PageHeader } from "../shell/PageHeader";
 import { useStore } from "../../lib/store/StoreProvider";
 import { agentById } from "../../lib/data";
-import { agentAvatarClass } from "./shared";
+import { agentAvatarClass, PersistenceNotice } from "./shared";
 import { sendChatWithFallback } from "../../lib/llm/providers";
 import { routeRequest } from "../../lib/llm/modelRouter";
 import { getAgentModelOverride } from "../../lib/llm/agentModels";
@@ -142,7 +142,15 @@ function TypingDots({ agentId, modelLabel }: { agentId: string; modelLabel?: str
 }
 
 export function ChatView() {
-  const { state, appendChat, chatFor, seedThreadFromLegacy, ready } = useStore();
+  const {
+    appendChat,
+    chatFor,
+    seedThreadFromLegacy,
+    ready,
+    persistenceIssue,
+    reportPersistenceIssue,
+    clearPersistenceIssue,
+  } = useStore();
   const { session } = useSession(false);
   const [agentId, setAgentId] = useState("ic");
   const [input, setInput] = useState("");
@@ -191,6 +199,23 @@ export function ChatView() {
       window.localStorage.setItem(flag, "1");
     }
   }, [ready, userKey, seedThreadFromLegacy]);
+
+  function persistConversation(...args: Parameters<typeof saveConversation>) {
+    void saveConversation(...args).then((result) => {
+      if (result.ok) clearPersistenceIssue("conversation-write");
+      else reportPersistenceIssue(result.issue);
+    });
+  }
+
+  async function readConversationHistory(...args: Parameters<typeof loadConversationHistory>) {
+    const result = await loadConversationHistory(...args);
+    if (result.ok) {
+      clearPersistenceIssue("conversation-read");
+      return result.data;
+    }
+    reportPersistenceIssue(result.issue);
+    return [];
+  }
 
   async function send(text?: string, inputCtx?: ChatCtx) {
     const raw = (text ?? input).trim();
@@ -248,7 +273,7 @@ export function ChatView() {
       appendChat(threadKey, { role: "agent", text: pipeline.deterministicAnswer, agentId, modelLabel: "datos/Supabase" });
       // Memoria del dataset mostrado (solo desde datos reales / determinístico).
       recordDisplayedDataset(threadKey, pipeline.results, pipeline.intent);
-      saveConversation(session?.email ?? "anonymous", agentId, parsed.cleanText, pipeline.deterministicAnswer, "datos/Supabase", routing.complexity).catch(() => {});
+      persistConversation(session?.email ?? "anonymous", agentId, parsed.cleanText, pipeline.deterministicAnswer, "datos/Supabase", routing.complexity);
       setBusy(false);
       setTypingModel(undefined);
       return;
@@ -261,7 +286,7 @@ export function ChatView() {
       const label = pipeline.responseSource === "supabase" ? "datos/Supabase" : "datos/Sistema";
       appendChat(threadKey, { role: "agent", text: pipeline.fallbackAnswer, agentId, modelLabel: label });
       if (isClarif) {
-        saveConversation(session?.email ?? "anonymous", agentId, parsed.cleanText, pipeline.fallbackAnswer, label, routing.complexity).catch(() => {});
+        persistConversation(session?.email ?? "anonymous", agentId, parsed.cleanText, pipeline.fallbackAnswer, label, routing.complexity);
       }
       setBusy(false);
       setTypingModel(undefined);
@@ -296,7 +321,7 @@ export function ChatView() {
     // the model into anchoring on stale context instead of the live thread.
     const ctxProjectId = inputCtx?.project?.id;
     const [supabaseHistory, localHistory] = await Promise.all([
-      simple || hasAttachments || !ctxProjectId ? Promise.resolve([]) : loadConversationHistory(userId, agentId, ctxProjectId, 8),
+      simple || hasAttachments || !ctxProjectId ? Promise.resolve([]) : readConversationHistory(userId, agentId, ctxProjectId, 8),
       Promise.resolve(chatFor(threadKey)),
     ]);
 
@@ -333,7 +358,7 @@ export function ChatView() {
         }
       }
       appendChat(threadKey, { role: "agent", text: finalText, agentId, modelLabel: label, modelSuggestion: routing.suggestion });
-      saveConversation(session?.email ?? "anonymous", agentId, parsed.cleanText, finalText, label, routing.complexity).catch(() => {});
+      persistConversation(session?.email ?? "anonymous", agentId, parsed.cleanText, finalText, label, routing.complexity);
     } catch (err) {
       const msg = err instanceof Error ? err.message : "Error desconocido";
       appendChat(threadKey, { role: "agent", text: `No pude conectar con ningún proveedor de IA. ${msg}\n\nVe a Conexiones para configurar una API key gratuita.`, agentId, isError: true });
@@ -406,6 +431,13 @@ export function ChatView() {
             </div>
           </div>
 
+          {persistenceIssue && (
+            <PersistenceNotice
+              message={persistenceIssue.userMessage}
+              onDismiss={() => clearPersistenceIssue()}
+            />
+          )}
+
           <div ref={scrollRef} style={{ flex: 1, overflowY: "auto", padding: 14, display: "flex", flexDirection: "column", gap: 12, background: "var(--bg-muted)" }}>
             {showHelp && <HelpPanel onClose={() => setShowHelp(false)} />}
             {thread.length === 0 && !showHelp && (
@@ -446,7 +478,6 @@ export function ChatView() {
           </div>
         </div>
       </div>
-      {state.notifications.length === 0 && null}
     </>
   );
 }

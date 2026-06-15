@@ -55,3 +55,41 @@ export function ProgressFill({ status, progress }: { status: ProjectStatus; prog
 export function agentAvatarClass(agentId: string) {
   return ["gg", "ic", "pm", "ie"].includes(agentId) ? `agent-avatar--${agentId}` : "agent-avatar--future";
 }
+
+export function PersistenceNotice({
+  message,
+  onDismiss,
+}: {
+  message: string;
+  onDismiss: () => void;
+}) {
+  return (
+    <div
+      role="status"
+      aria-live="polite"
+      style={{
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "space-between",
+        gap: 12,
+        padding: "8px 12px",
+        background: "var(--amber-bg)",
+        borderBottom: "1px solid var(--amber-border)",
+        color: "var(--amber-text)",
+        fontSize: 11.5,
+        lineHeight: 1.45,
+      }}
+    >
+      <span>{message}</span>
+      <button
+        type="button"
+        className="btn btn--ghost btn--sm"
+        onClick={onDismiss}
+        aria-label="Cerrar aviso de persistencia"
+        style={{ flexShrink: 0, color: "inherit" }}
+      >
+        Cerrar
+      </button>
+    </div>
+  );
+}

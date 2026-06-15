@@ -5,7 +5,7 @@ import { PageHeader } from "../shell/PageHeader";
 import { useStore, useSkillsWithOverrides } from "../../lib/store/StoreProvider";
 import { agentById, AGENTS, PROJECTS } from "../../lib/data";
 import type { Skill } from "../../lib/types";
-import { agentAvatarClass } from "./shared";
+import { agentAvatarClass, PersistenceNotice } from "./shared";
 import { sendChatWithFallback } from "../../lib/llm/providers";
 import { routeRequest } from "../../lib/llm/modelRouter";
 import { getAgentModelOverride } from "../../lib/llm/agentModels";
@@ -360,7 +360,15 @@ function HandRaise({ agentId, modelLabel }: { agentId: string; modelLabel?: stri
 }
 
 export function RoundtableView() {
-  const { state, appendChat, chatFor, notify } = useStore();
+  const {
+    state,
+    appendChat,
+    chatFor,
+    notify,
+    persistenceIssue,
+    reportPersistenceIssue,
+    clearPersistenceIssue,
+  } = useStore();
   const skills = useSkillsWithOverrides();
   const { session } = useSession(false);
   const { enabled: aiAssist, toggle: toggleAiAssist } = useAiAssist();
@@ -445,6 +453,23 @@ export function RoundtableView() {
     }
     if (changed) saveNotifiedMentions(seen);
   }, [thread, session?.email, currentUserSlug, notify]);
+
+  function persistConversation(...args: Parameters<typeof saveConversation>) {
+    void saveConversation(...args).then((result) => {
+      if (result.ok) clearPersistenceIssue("conversation-write");
+      else reportPersistenceIssue(result.issue);
+    });
+  }
+
+  async function readConversationHistory(...args: Parameters<typeof loadConversationHistory>) {
+    const result = await loadConversationHistory(...args);
+    if (result.ok) {
+      clearPersistenceIssue("conversation-read");
+      return result.data;
+    }
+    reportPersistenceIssue(result.issue);
+    return [];
+  }
 
   async function send(rawText?: string, inputCtx?: ChatCtx) {
     const raw = (rawText ?? input).trim();
@@ -588,9 +613,9 @@ export function RoundtableView() {
         if (pipeline.shouldUseDeterministicAnswer) {
           // Memoria del dataset mostrado (solo desde datos reales / determinístico).
           recordDisplayedDataset(ROUNDTABLE_THREAD, pipeline.results, pipeline.intent);
-          saveConversation(userId, primary, parsed.cleanText, text, label, routing.complexity, activeProject?.id).catch(() => {});
+          persistConversation(userId, primary, parsed.cleanText, text, label, routing.complexity, activeProject?.id);
         } else if (isClarif) {
-          saveConversation(userId, primary, parsed.cleanText, text, label, routing.complexity, activeProject?.id).catch(() => {});
+          persistConversation(userId, primary, parsed.cleanText, text, label, routing.complexity, activeProject?.id);
         }
         setHands([]);
         setBusy(false);
@@ -647,7 +672,7 @@ export function RoundtableView() {
       // anchoring on stale context instead of the live conversation.
       const supabaseHistory = simple || hasAttachments || !activeProject?.id
         ? []
-        : await loadConversationHistory(userId, agId, activeProject.id, 6).catch(() => []);
+        : await readConversationHistory(userId, agId, activeProject.id, 6);
 
       const messages: ChatMessage[] = [
         { role: "system", content: sysPrompt + HUMANIZE_CTX + buildAgentProfileContext(agId) + skillsCtx + platformCtx + projectCtx + requirementCtx + autoCodeCtx + attachmentCtx + toneCtx + brevityCtx + coordinatorCtx },
@@ -671,7 +696,7 @@ export function RoundtableView() {
           }
         }
         appendChat(ROUNDTABLE_THREAD, { role: "agent", agentId: agId, text: finalText, modelLabel: label, modelSuggestion: agRouting.suggestion });
-        saveConversation(userId, agId, parsed.cleanText + fileCtx, finalText, label, agRouting.complexity, activeProject?.id).catch(() => {});
+        persistConversation(userId, agId, parsed.cleanText + fileCtx, finalText, label, agRouting.complexity, activeProject?.id);
       } catch (err) {
         appendChat(ROUNDTABLE_THREAD, {
           role: "agent", agentId: agId,
@@ -752,6 +777,13 @@ export function RoundtableView() {
               )}
             </div>
           </div>
+
+          {persistenceIssue && (
+            <PersistenceNotice
+              message={persistenceIssue.userMessage}
+              onDismiss={() => clearPersistenceIssue()}
+            />
+          )}
 
           <div ref={scrollRef} style={{ flex: 1, overflowY: "auto", padding: 14, display: "flex", flexDirection: "column", gap: 10, background: "var(--bg-muted)" }}>
             {showHelp && <HelpPanel onClose={() => setShowHelp(false)} />}
