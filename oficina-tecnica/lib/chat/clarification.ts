@@ -119,35 +119,67 @@ function extractEntity(text: string): string | null {
 
 // ── Constructores de opciones por tópico ─────────────────────────────────────
 
-function electricalOptions(): ClarificationOption[] {
-  return [
-    {
-      id: "1",
-      label: "Ítems eléctricos en requerimiento_items",
-      intent: "items_electricos_requerimientos",
-      source: "requerimiento_items",
-      notImplementedNote:
-        "El cruce de ítems eléctricos sobre todo el log de requerimientos aún no está conectado al contexto IA. Si me das un código RQ-XXXX, reviso los ítems de ese requerimiento.",
+// Opciones eléctricas CONTEXTUALES: si la memoria tiene un RQ o proyecto
+// verificado, la opción 1 se adapta a ese alcance ("ítems eléctricos del RQ
+// anterior" / "del proyecto anterior"). La opción de catálogo siempre existe.
+function electricalOptions(memory: DatasetMemory): ClarificationOption[] {
+  const rqCode = memory.lastVerifiedRequirementCode;
+  const projCode = memory.lastVerifiedProjectCode ?? memory.lastVerifiedCotizacionCode;
+
+  const catalogOpt: ClarificationOption = {
+    id: "0",
+    label: "Recursos eléctricos del catálogo",
+    intent: "clasificar_recursos_electricos",
+    source: "recursos",
+    resolvedQuery: "recursos eléctricos del catálogo",
+    explanation: "Clasifica el catálogo de recursos (Supabase) e identifica los eléctricos.",
+  };
+
+  const opts: ClarificationOption[] = [];
+  if (rqCode) {
+    opts.push({
+      id: "0", label: `Ítems eléctricos del RQ anterior (${rqCode})`,
+      intent: "items_electricos_rq", source: "requerimiento_items",
+      resolvedQuery: rqCode,
+      explanation: "Trae los ítems del último requerimiento consultado y marca los eléctricos.",
+    });
+    opts.push(catalogOpt);
+    opts.push({
+      id: "0", label: "Ítems eléctricos de todo el log de requerimientos",
+      intent: "items_electricos_log", source: "requerimientos",
+      notImplementedNote: "El cruce de ítems eléctricos sobre todo el log de requerimientos aún no está conectado al contexto IA.",
+      explanation: "Buscaría ítems eléctricos en todos los requerimientos.",
+    });
+  } else if (projCode) {
+    opts.push({
+      id: "0", label: `Ítems eléctricos del proyecto anterior (${projCode})`,
+      intent: "items_electricos_proyecto", source: "requerimientos",
+      notImplementedNote: "El cruce de ítems eléctricos por proyecto aún no está conectado al contexto IA.",
+      explanation: "Buscaría ítems eléctricos en los RQ de ese proyecto.",
+    });
+    opts.push({
+      id: "0", label: `RQ del proyecto ${projCode} que contienen ítems eléctricos`,
+      intent: "rq_con_items_electricos", source: "requerimientos",
+      notImplementedNote: "Filtrar RQ por el tipo de sus ítems aún no está implementado en el contexto IA.",
+      explanation: "Listaría los RQ del proyecto con ítems eléctricos.",
+    });
+    opts.push(catalogOpt);
+  } else {
+    opts.push({
+      id: "0", label: "Ítems eléctricos en requerimiento_items",
+      intent: "items_electricos_requerimientos", source: "requerimiento_items",
+      notImplementedNote: "El cruce de ítems eléctricos sobre todo el log de requerimientos aún no está conectado al contexto IA. Si me das un código RQ-XXXX, reviso los ítems de ese requerimiento.",
       explanation: "Usa los ítems reales del log de requerimientos.",
-    },
-    {
-      id: "2",
-      label: "Recursos eléctricos del catálogo",
-      intent: "clasificar_recursos_electricos",
-      source: "recursos",
-      resolvedQuery: "recursos eléctricos del catálogo",
-      explanation: "Clasifica el catálogo de recursos (Supabase) e identifica los eléctricos.",
-    },
-    {
-      id: "3",
-      label: "Requerimientos que tengan ítems eléctricos",
-      intent: "requerimientos_con_items_electricos",
-      source: "requerimientos",
-      notImplementedNote:
-        "Filtrar requerimientos por el tipo de sus ítems (eléctrico) aún no está implementado en el contexto IA.",
+    });
+    opts.push(catalogOpt);
+    opts.push({
+      id: "0", label: "Requerimientos que tengan ítems eléctricos",
+      intent: "requerimientos_con_items_electricos", source: "requerimientos",
+      notImplementedNote: "Filtrar requerimientos por el tipo de sus ítems (eléctrico) aún no está implementado en el contexto IA.",
       explanation: "Busca requerimientos cuyos ítems sean eléctricos.",
-    },
-  ];
+    });
+  }
+  return opts.slice(0, 3).map((o, i) => ({ ...o, id: `${i + 1}` }));
 }
 
 function latestEntityOptions(entity: string): ClarificationOption[] {
@@ -318,7 +350,7 @@ export function shouldAskClarification(cleanText: string, memory: DatasetMemory)
   // tampoco preguntamos: lo resuelve el clasificador.
   const electricalDataQuery = ELECTRIC_RE.test(t) && (PRICE_RE.test(t) || DATA_NOUN_RE.test(t));
   if (electricalDataQuery && !wantsElectricalClassification(t, hadRecursos)) {
-    const options = electricalOptions();
+    const options = electricalOptions(memory);
     return {
       ask: true,
       options,

@@ -24,11 +24,19 @@ export interface DatasetMemory {
   lastVerifiedProjectCode?: string;
   lastVerifiedRequirementCode?: string;
   lastVerifiedCotizacionCode?: string;
+  /** Última orden de compra verificada (OC-XXXX). */
+  lastVerifiedOC?: string;
+  /** Último cliente verificado desde datos reales (no texto libre del LLM). */
+  lastVerifiedClient?: string;
   lastDisplayedDataset?: DisplayedDataset;
   /** Total REAL de coincidencias (no la muestra recortada a 20). */
   lastDisplayedTotal?: number;
   lastDisplayedSource?: DisplayedSource;
   lastDisplayedIntent?: string;
+  /** Último agente que respondió con datos reales (para "lo que dijo IC"). */
+  lastAgent?: "ic" | "pm" | "ie" | "gg";
+  /** Confianza de la última resolución de intención (0..1). */
+  confidence?: number;
   /** Aclaración pendiente: si el siguiente mensaje elige una opción, se resuelve. */
   pendingClarification?: PendingClarification;
 }
@@ -101,7 +109,11 @@ export function extractDatasetMemory(results: ContextToolResult[], intent: strin
         patch.lastDisplayedDataset = "cotizaciones";
         patch.lastDisplayedTotal = r.total;
         patch.lastDisplayedSource = "Supabase";
-        if (r.records.length === 1) patch.lastVerifiedCotizacionCode = r.records[0].codigo;
+        if (r.records.length === 1) {
+          patch.lastVerifiedCotizacionCode = r.records[0].codigo;
+          if (r.records[0].cliente_nombre) patch.lastVerifiedClient = r.records[0].cliente_nombre;
+          if (r.records[0].oc) patch.lastVerifiedOC = r.records[0].oc;
+        }
         break;
       case "proyecto":
         patch.lastVerifiedProjectCode = r.code;
