@@ -9,9 +9,23 @@ const MAX_PDF_PAGES = 20;
 const MAX_OCR_PAGES = 3;
 
 export type ExtractProgress = (message: string) => void;
+export type ExtractionStatus = "extracted" | "unsupported" | "error";
 
 function truncate(text: string): string {
   return text.length > MAX_CHARS ? text.slice(0, MAX_CHARS) + "\n…(contenido truncado)" : text;
+}
+
+// Extraction always returns a descriptive string (even on failure — see the
+// `[Tipo: nombre — ...]` markers below), so the UI/agent-context status is
+// derived from those markers rather than threading a second return value
+// through every extractor branch.
+const UNSUPPORTED_MARKERS = ["adjunto para referencia", "sin texto extraíble", "sin datos legibles", "sin texto detectado", "vacío o sin texto extraíble"];
+const ERROR_MARKERS = ["error al leer:", "OCR falló:"];
+
+export function classifyExtractionStatus(content: string): ExtractionStatus {
+  if (ERROR_MARKERS.some((m) => content.includes(m))) return "error";
+  if (UNSUPPORTED_MARKERS.some((m) => content.includes(m))) return "unsupported";
+  return "extracted";
 }
 
 export async function extractFileContent(file: File, onProgress?: ExtractProgress): Promise<string> {

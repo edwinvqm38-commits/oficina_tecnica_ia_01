@@ -15,9 +15,10 @@ import {
   type StandardPermissionKey,
 } from "@/lib/sgp/modulePermissionsCatalog";
 import { supabase } from "@/lib/sgp/supabaseClient";
+import { AdminDataViewerPanel } from "./AdminDataViewerPanel";
 
 type AdminFilter = "all" | "pending" | "approved" | "rejected" | "inactive";
-type AdminSection = "users" | "permissions";
+type AdminSection = "users" | "permissions" | "datos";
 type PermissionFormState = {
   can_view: boolean;
   can_create: boolean;
@@ -55,6 +56,7 @@ const FILTERS: Array<{ label: string; value: AdminFilter }> = [
 const SECTIONS: Array<{ label: string; value: AdminSection }> = [
   { label: "Usuarios", value: "users" },
   { label: "Permisos", value: "permissions" },
+  { label: "Datos", value: "datos" },
 ];
 const MODULE_PREPARING_MESSAGE = "Módulo preparado para fase posterior.";
 
@@ -970,7 +972,7 @@ export default function AdministradorContent() {
           </button>
         ))}
       </div>
-      {content}
+      {section === "datos" && isAdmin ? <AdminDataViewerPanel /> : content}
     </section>
   );
 }

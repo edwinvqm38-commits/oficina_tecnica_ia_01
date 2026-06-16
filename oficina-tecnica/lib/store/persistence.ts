@@ -10,10 +10,16 @@
 // If Supabase isn't configured, everything still works — it just stays local.
 
 import { getSupabaseClient } from "../supabase/client";
-import { AppState, mergeWithSeed, pickSharedChats, redactProviderKeys, seedState } from "./types";
+import { AppState, mergeWithSeed, pickSharedChats, redactProviderKeys, seedState, stripAttachmentData } from "./types";
 
 const LOCAL_KEY = "oficina-tecnica:state:v1";
 const WORKSPACE_ID = "default"; // single shared workspace for this deployment
+
+function logPersistence(operation: "workspace-read" | "workspace-write", category: "network" | "ok", detail?: string) {
+  const payload = { category, operation, ...(detail ? { detail } : {}) };
+  if (category === "network") console.warn("[persistence]", payload);
+  else console.debug("[persistence]", payload);
+}
 
 export function loadLocal(): AppState {
   if (typeof window === "undefined") return seedState();
@@ -38,24 +44,38 @@ export function saveLocal(state: AppState) {
 export async function loadRemote(): Promise<AppState | null> {
   const supabase = getSupabaseClient();
   if (!supabase) return null;
-  const { data, error } = await supabase
-    .from("workspace_state")
-    .select("state")
-    .eq("id", WORKSPACE_ID)
-    .maybeSingle();
-  if (error || !data) return null;
-  return mergeWithSeed(data.state as Partial<AppState>);
+  try {
+    const { data, error } = await supabase
+      .from("workspace_state")
+      .select("state")
+      .eq("id", WORKSPACE_ID)
+      .maybeSingle();
+    if (error) {
+      logPersistence("workspace-read", "network", error.message);
+      return null;
+    }
+    if (!data) return null;
+    return mergeWithSeed(data.state as Partial<AppState>);
+  } catch (err) {
+    logPersistence("workspace-read", "network", err instanceof Error ? err.message : "unknown");
+    return null;
+  }
 }
 
 let pendingSync: ReturnType<typeof setTimeout> | null = null;
+// Avoids re-sending an identical payload (e.g. an immediate realtime echo of
+// our own last write) — every skipped write is one less round trip to Supabase.
+let lastSyncedPayload: string | null = null;
 
 /**
  * Persists state to the shared `workspace_state` row. Before upserting,
  * `chats` is reduced to only the shared threads (private "Chat privado"
- * threads and legacy unscoped agent threads stay local-only) and any
- * provider API keys are redacted — neither should ever leave this browser
- * via the shared backend. `onSettled` (if given) is called with whether the
- * write succeeded, once the debounced write actually runs.
+ * threads and legacy unscoped agent threads stay local-only), attachment
+ * data URLs are stripped (only extracted text needs to be shared), and any
+ * provider API keys are redacted — none of those should ever leave this
+ * browser via the shared backend. `onSettled` (if given) is called with
+ * whether the write succeeded, once the debounced write actually runs (or
+ * immediately with `true` if the write was skipped as a no-op duplicate).
  */
 export function saveRemote(state: AppState, onSettled?: (ok: boolean) => void) {
   const supabase = getSupabaseClient();
@@ -65,17 +85,32 @@ export function saveRemote(state: AppState, onSettled?: (ok: boolean) => void) {
   pendingSync = setTimeout(() => {
     const syncable: AppState = {
       ...state,
-      chats: pickSharedChats(state.chats),
+      chats: stripAttachmentData(pickSharedChats(state.chats)),
       modelConnections: redactProviderKeys(state.modelConnections),
     };
+    const payload = JSON.stringify(syncable);
+    if (payload === lastSyncedPayload) {
+      onSettled?.(true);
+      return;
+    }
     void supabase
       .from("workspace_state")
       .upsert({ id: WORKSPACE_ID, state: syncable, updated_at: new Date().toISOString() })
-      .then(({ error }) => {
-        if (error) console.warn("[store] remote sync failed", error.message);
-        onSettled?.(!error);
-      });
-  }, 800);
+      .then(
+        ({ error }) => {
+          if (error) {
+            logPersistence("workspace-write", "network", error.message);
+          } else {
+            lastSyncedPayload = payload;
+          }
+          onSettled?.(!error);
+        },
+        (err) => {
+          logPersistence("workspace-write", "network", err instanceof Error ? err.message : "unknown");
+          onSettled?.(false);
+        }
+      );
+  }, 1500);
 }
 
 export function isRemoteConfigured(): boolean {

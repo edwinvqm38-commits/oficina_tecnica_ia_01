@@ -359,8 +359,23 @@ function HandRaise({ agentId, modelLabel }: { agentId: string; modelLabel?: stri
   );
 }
 
+function SyncStatusBadge({ status }: { status: import("../../lib/store/types").SyncStatus }) {
+  const map = {
+    synced: { label: "✓ Sincronizado", color: "var(--green-text)", title: "La información compartida está al día." },
+    local: { label: "💾 Local", color: "var(--t3)", title: "Supabase no está configurado — trabajando solo con la copia de este dispositivo." },
+    error: { label: "⚠ Error de sincronización", color: "var(--red-text, #c00)", title: "No se pudo recuperar/guardar la información compartida. Puedes continuar con la copia guardada en este dispositivo; se reintentará automáticamente." },
+    retrying: { label: "↻ Sincronizando…", color: "var(--amber-text)", title: "Guardando/recuperando la información compartida…" },
+  } as const;
+  const m = map[status];
+  return (
+    <span title={m.title} style={{ fontSize: 10, fontWeight: 600, color: m.color, whiteSpace: "nowrap" }}>
+      {m.label}
+    </span>
+  );
+}
+
 export function RoundtableView() {
-  const { state, appendChat, chatFor, notify } = useStore();
+  const { state, appendChat, chatFor, notify, syncStatus } = useStore();
   const skills = useSkillsWithOverrides();
   const { session } = useSession(false);
   const { enabled: aiAssist, toggle: toggleAiAssist } = useAiAssist();
@@ -613,9 +628,12 @@ export function RoundtableView() {
     }
 
     // File attachments from ChatAutoInput
-    const fileCtx = (inputCtx?.attachments ?? []).map((f) =>
-      `\n\n--- Archivo adjunto: ${f.name} (${Math.round(f.size / 1024)}KB) ---\n${f.content}\n---`
-    ).join("");
+    const fileCtx = (inputCtx?.attachments ?? []).map((f) => {
+      const estado = f.extractionStatus === "error" ? "error al extraer"
+        : f.extractionStatus === "unsupported" ? "sin texto extraíble"
+        : "extraído correctamente";
+      return `\n\n--- Archivo adjunto: ${f.name} ---\nARCHIVO ADJUNTO:\nNombre: ${f.name}\nTipo: ${f.type || "desconocido"}\nTamaño: ${Math.round(f.size / 1024)}KB\nEstado de extracción: ${estado}\nContenido extraído:\n${f.content}\n---`;
+    }).join("");
 
     // Tell the agent how to read the "Archivo adjunto" block(s) appended to
     // the user's message, and how to react when extraction yielded little
@@ -739,6 +757,7 @@ export function RoundtableView() {
             </div>
             <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
               <span className="badge badge--green">IA activa</span>
+              <SyncStatusBadge status={syncStatus} />
               <button
                 className="btn btn--ghost btn--sm"
                 style={{ fontSize: 10, color: aiAssist ? "var(--blue)" : "var(--t3)" }}

@@ -10,7 +10,7 @@ import {
   fetchRequirementsByProject, searchCotizaciones, cotizacionToProject,
 } from "../../lib/chat/contextQuery";
 import { detectInlineCodes } from "../../lib/chat/messageUtils";
-import { extractFileContent } from "../../lib/chat/fileExtraction";
+import { extractFileContent, classifyExtractionStatus } from "../../lib/chat/fileExtraction";
 
 export type { ChatCtx };
 
@@ -353,16 +353,31 @@ export function ChatAutoInput({ value, onChange, onSubmit, placeholder, disabled
           extractFileContent(file, (msg) => setProcessingMsg(msg)),
           readFileAsDataUrl(file),
         ]);
-        setAttachments((prev) => [...prev, { name: file.name, type: file.type || "unknown", content, size: file.size, dataUrl }]);
+        const extractionStatus = classifyExtractionStatus(content);
+        const attachment: FileAttachment = { name: file.name, type: file.type || "unknown", content, size: file.size, dataUrl, extractionStatus };
+        // Re-selecting/replacing the same file name should overwrite the previous
+        // attachment rather than append a duplicate chip.
+        setAttachments((prev) => [...prev.filter((a) => a.name !== file.name), attachment]);
       }
     } finally {
       setProcessingFiles(false);
       setProcessingMsg(null);
+      // Browsers don't fire onChange again for the same file unless the input
+      // value is cleared, which is what blocked re-uploading/replacing a file.
+      if (fileRef.current) fileRef.current.value = "";
     }
   }
 
   function submit() {
     if (disabled || processingFiles) return;
+    const problematic = attachments.filter((a) => a.extractionStatus && a.extractionStatus !== "extracted");
+    if (problematic.length > 0) {
+      const names = problematic.map((a) => a.name).join(", ");
+      const ok = window.confirm(
+        `No se pudo extraer texto legible de: ${names}.\nEl agente no tendrá el contenido de estos archivos. ¿Enviar igualmente?`
+      );
+      if (!ok) return;
+    }
     const fullCtx: ChatCtx = { ...ctx, attachments: attachments.length ? attachments : undefined };
     onSubmit(value.trim(), fullCtx);
     setAttachments([]);
@@ -426,14 +441,21 @@ export function ChatAutoInput({ value, onChange, onSubmit, placeholder, disabled
       {/* Attachment chips */}
       {attachments.length > 0 && (
         <div style={{ display: "flex", flexWrap: "wrap", gap: 5, padding: "4px 2px" }}>
-          {attachments.map((a) => (
-            <span key={a.name} style={{ display: "inline-flex", alignItems: "center", gap: 5, background: "#fdf4ff", color: "#7e22ce", border: "1px solid #e9d5ff", borderRadius: 6, padding: "2px 8px 2px 10px", fontSize: 11.5, fontWeight: 600 }}>
-              <span>📎</span>
-              <span style={{ maxWidth: 120, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{a.name}</span>
-              <span style={{ fontWeight: 400, fontSize: 10 }}>{Math.round(a.size / 1024)}KB</span>
-              <button onClick={() => removeAttachment(a.name)} style={{ background: "none", border: "none", cursor: "pointer", color: "#c084fc", fontSize: 12, lineHeight: 1, padding: "0 0 0 2px" }}>×</button>
-            </span>
-          ))}
+          {attachments.map((a) => {
+            const statusLabel = a.extractionStatus === "error" ? "⚠ error"
+              : a.extractionStatus === "unsupported" ? "⚠ sin texto"
+              : "✓ extraído";
+            const statusColor = a.extractionStatus === "error" || a.extractionStatus === "unsupported" ? "#b45309" : "#16a34a";
+            return (
+              <span key={a.name} style={{ display: "inline-flex", alignItems: "center", gap: 5, background: "#fdf4ff", color: "#7e22ce", border: "1px solid #e9d5ff", borderRadius: 6, padding: "2px 8px 2px 10px", fontSize: 11.5, fontWeight: 600 }}>
+                <span>📎</span>
+                <span style={{ maxWidth: 120, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{a.name}</span>
+                <span style={{ fontWeight: 400, fontSize: 10 }}>{Math.round(a.size / 1024)}KB</span>
+                <span title="Estado de extracción" style={{ fontWeight: 600, fontSize: 9.5, color: statusColor }}>{statusLabel}</span>
+                <button onClick={() => removeAttachment(a.name)} style={{ background: "none", border: "none", cursor: "pointer", color: "#c084fc", fontSize: 12, lineHeight: 1, padding: "0 0 0 2px" }}>×</button>
+              </span>
+            );
+          })}
         </div>
       )}
 

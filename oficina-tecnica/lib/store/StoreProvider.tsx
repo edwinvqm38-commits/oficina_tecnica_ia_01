@@ -20,6 +20,7 @@ import {
   ProviderConnection,
   redactProviderKeys,
   seedState,
+  SyncStatus,
   updateChatStatuses,
 } from "./types";
 
@@ -36,6 +37,8 @@ type StoreActions = {
   /** True once persisted state (local or remote) has finished loading. */
   ready: boolean;
   remoteConfigured: boolean;
+  /** "synced" | "local" | "error" | "retrying" — for a small sync indicator in the UI. */
+  syncStatus: SyncStatus;
 
   // Approvals
   decideApproval: (id: string, decision: ApprovalStatus, meta?: { title?: string; summary?: string }) => void;
@@ -95,6 +98,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
   const [state, setState] = useState<AppState>(() => seedState());
   const [ready, setReady] = useState(false);
   const remoteConfigured = useMemo(() => isRemoteConfigured(), []);
+  const [syncStatus, setSyncStatus] = useState<SyncStatus>(() => (remoteConfigured ? "retrying" : "local"));
   const hydrated = useRef(false);
 
   // Hydrate: prefer remote (if configured), fall back to local cache. The
@@ -110,8 +114,13 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
       if (!cancelled) setState(local);
       if (remoteConfigured) {
         const remote = await loadRemote();
-        if (!cancelled && remote) {
-          setState((prev) => ({ ...remote, chats: mergeChats(prev.chats, remote.chats) }));
+        if (!cancelled) {
+          if (remote) {
+            setState((prev) => ({ ...remote, chats: mergeChats(prev.chats, remote.chats) }));
+            setSyncStatus("synced");
+          } else {
+            setSyncStatus("error");
+          }
         }
       }
       if (!cancelled) {
@@ -133,7 +142,9 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
     // as "sent" immediately (nothing to wait on), so there's nothing to
     // reconcile here.
     if (remoteConfigured) {
+      setSyncStatus("retrying");
       saveRemote(state, (ok) => {
+        setSyncStatus(ok ? "synced" : "error");
         setState((s) => {
           const chats = updateChatStatuses(s.chats, ok ? "sent" : "failed");
           return chats === s.chats ? s : { ...s, chats };
@@ -367,6 +378,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
       state,
       ready,
       remoteConfigured,
+      syncStatus,
       decideApproval,
       approvalStatus,
       setSkillState,
@@ -391,6 +403,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
       state,
       ready,
       remoteConfigured,
+      syncStatus,
       decideApproval,
       approvalStatus,
       setSkillState,

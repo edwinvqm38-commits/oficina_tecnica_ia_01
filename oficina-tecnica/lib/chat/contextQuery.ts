@@ -9,6 +9,8 @@ export interface FileAttachment {
   size: number;
   /** Base64 data URL, only populated for small files (used for in-chat download). */
   dataUrl?: string;
+  /** Outcome of client-side text extraction; see lib/chat/fileExtraction.ts. */
+  extractionStatus?: "extracted" | "unsupported" | "error";
 }
 
 // ── Requirement ─────────────────────────────────────────────────────────────

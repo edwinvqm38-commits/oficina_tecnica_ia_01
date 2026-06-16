@@ -11,6 +11,9 @@ import type {
 
 export type NotificationKind = "info" | "success" | "warning" | "danger";
 
+/** Status of the connection to the shared `workspace_state` backend, for a small sync indicator in the UI. */
+export type SyncStatus = "synced" | "local" | "error" | "retrying";
+
 export type Notification = {
   id: string;
   kind: NotificationKind;
@@ -121,6 +124,29 @@ export function pickSharedChats(chats: AppState["chats"]): AppState["chats"] {
   const result: AppState["chats"] = {};
   for (const key of SHARED_CHAT_THREADS) {
     if (chats[key]) result[key] = chats[key];
+  }
+  return result;
+}
+
+/**
+ * Strips the base64 `dataUrl` (up to a few MB per file) from message
+ * attachments before the state is sent to the shared backend — only the
+ * extracted text content and metadata need to be shared; the downloadable
+ * data URL is a local-only convenience and a major egress cost otherwise.
+ */
+export function stripAttachmentData(chats: AppState["chats"]): AppState["chats"] {
+  const result: AppState["chats"] = {};
+  for (const key of Object.keys(chats)) {
+    const msgs = chats[key];
+    if (!msgs.some((m) => m.attachments?.some((a) => a.dataUrl))) {
+      result[key] = msgs;
+      continue;
+    }
+    result[key] = msgs.map((m) =>
+      m.attachments
+        ? { ...m, attachments: m.attachments.map((a) => ({ ...a, dataUrl: undefined })) }
+        : m
+    );
   }
   return result;
 }
