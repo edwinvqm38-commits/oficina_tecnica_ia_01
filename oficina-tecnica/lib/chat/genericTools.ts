@@ -10,10 +10,25 @@ import {
   buscarRequerimientosPorProyecto,
   buscarRequerimientoPorCodigo,
   buscarItemsDeRequerimiento,
+  buscarRequerimientos,
+  buscarCotizaciones,
+  obtenerResumenProyecto,
+  buscarRecursos,
+  clasificarRecursosElectricos,
   DEFAULT_CONTEXT_LIMIT,
+  type ContextToolResult,
 } from "./contextTools";
-import type { RequirementSummary, RequirementItemSummary } from "./contextQuery";
+import type { RequirementSummary, RequirementItemSummary, RequerimientoSearchFilters, CotizacionSearchFilters } from "./contextQuery";
 import type { GenericQueryOptions, QueryStatus } from "./crossIntentRegistry";
+
+function estadoLabel(status: QueryStatus | undefined): string | undefined {
+  switch (status) {
+    case "pendiente": return "Pendiente";
+    case "en_proceso": return "En proceso";
+    case "atendido": return "Atendido";
+    default: return undefined;
+  }
+}
 
 // ── Normalización de estado ──────────────────────────────────────────────────
 function normEstado(estado: string | null | undefined): QueryStatus | "otro" {
@@ -81,6 +96,40 @@ export async function queryRequirementItems(options: GenericQueryOptions): Promi
     items: itemsRes.status === "success" ? itemsRes.records : [],
     message: itemsRes.message,
   };
+}
+
+// ── queryGlobalRequirementLog ────────────────────────────────────────────────
+/** Log de requerimientos con filtro simple por estado (sin análisis transversal). */
+export async function queryGlobalRequirementLog(options: GenericQueryOptions): Promise<ContextToolResult> {
+  const filters: RequerimientoSearchFilters = {};
+  const estado = estadoLabel(options.status);
+  if (estado) filters.estado = estado;
+  return buscarRequerimientos(filters, options.limitRequirements ?? DEFAULT_CONTEXT_LIMIT);
+}
+
+// ── queryClientProjects ──────────────────────────────────────────────────────
+/** Cotizaciones de un cliente / por estado (cruces RQ↔cliente quedan pendientes). */
+export async function queryClientProjects(options: GenericQueryOptions): Promise<ContextToolResult> {
+  const filters: CotizacionSearchFilters = {};
+  if (options.client) filters.q = options.client;
+  const estado = options.status === "ganada" ? "Ganada" : estadoLabel(options.status);
+  if (estado) filters.estado = estado;
+  return buscarCotizaciones(filters, options.limitRequirements ?? DEFAULT_CONTEXT_LIMIT);
+}
+
+// ── queryProjectSummary ──────────────────────────────────────────────────────
+/** Resumen de proyecto por código (cascada cotización → RQ → histórico). */
+export async function queryProjectSummary(options: GenericQueryOptions): Promise<ContextToolResult> {
+  const code = options.projectCode ?? options.cotizacionCode ?? options.ocCode;
+  if (!code) return { source: "proyecto", status: "empty", query: {}, code: "", reference: { source: "none" }, records: [], total: 0 };
+  return obtenerResumenProyecto(code);
+}
+
+// ── queryCatalogResources ────────────────────────────────────────────────────
+/** Catálogo de recursos: clasificación técnica si se pide, si no listado filtrado. */
+export async function queryCatalogResources(options: GenericQueryOptions): Promise<ContextToolResult> {
+  if (options.classification === "electrico") return clasificarRecursosElectricos();
+  return buscarRecursos({}, options.limitItems ?? DEFAULT_CONTEXT_LIMIT);
 }
 
 // ── analyzeRequirementItems (puro, determinístico) ───────────────────────────

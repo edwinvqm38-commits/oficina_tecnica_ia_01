@@ -28,6 +28,9 @@ import {
   type PendingClarification,
   type ClarificationOption,
 } from "@/lib/chat/clarification";
+import { resolveScope, hasConcreteScope } from "@/lib/chat/scopeResolver";
+import { matchCrossIntent, type CrossIntentMatch } from "@/lib/chat/crossIntentRegistry";
+import { executeCrossIntent, type CrossIntentOutcome } from "@/lib/chat/crossIntentExecutor";
 import {
   buscarCotizaciones,
   buscarCotizacionPorCodigo,
@@ -289,6 +292,37 @@ function summarize(results: ContextToolResult[]): ContextResultSummary[] {
   return results.map((r) => ({ source: r.source, status: r.status, total: r.total, message: r.message }));
 }
 
+// Envuelve el resultado del ejecutor cruzado en un ContextPipelineResult.
+function buildCrossIntentResult(
+  cleanText: string,
+  baseDecision: ContextRoutingDecision,
+  match: CrossIntentMatch,
+  outcome: CrossIntentOutcome,
+): ContextPipelineResult {
+  const decision: ContextRoutingDecision = { ...baseDecision, intent: match.tool, confidence: match.confidence, reason: match.reason };
+  const det = Boolean(outcome.deterministicAnswer);
+  const result: ContextPipelineResult = {
+    block: "",
+    decision,
+    results: outcome.results,
+    hasData: hasRealData(outcome.results),
+    intent: decision.intent,
+    confidence: match.confidence,
+    isDataQuestion: true,
+    toolsCalled: [match.tool],
+    resultsSummary: summarize(outcome.results),
+    shouldBlockModelAnswer: !det,
+    fallbackAnswer: outcome.fallbackAnswer,
+    shouldUseDeterministicAnswer: det,
+    deterministicAnswer: outcome.deterministicAnswer,
+    isClarification: outcome.isClarification,
+    pendingClarification: outcome.pendingClarification,
+    clarificationOptions: outcome.pendingClarification?.options,
+  };
+  debugPipeline(cleanText, result);
+  return result;
+}
+
 // Resultado de pipeline para una aclaración (pregunta de opciones o respuesta a
 // una opción no ejecutable): bloquea el LLM y responde con `answer`. No es una
 // respuesta de Supabase, así que la vista la etiqueta como `datos/Sistema`.
@@ -429,9 +463,22 @@ export async function runContextPipeline(
   const decision = detectContextIntent(cleanText, memory);
 
   // Sin herramientas que ejecutar: o no es pregunta de datos, o es una pregunta
-  // de tabla sin filtro (needs_clarification). finalizePipeline decide si se
-  // bloquea con una aclaración o se deja pasar al LLM normal.
+  // de tabla sin filtro (needs_clarification). Antes de delegar, probamos la cola
+  // de intenciones cruzadas — solo cuando hay un alcance CONCRETO resuelto
+  // ("este RQ", "este proyecto", "ese cliente"), para no tocar los flujos que el
+  // router estándar ya resuelve ni las consultas vagas (que ya pasan por la
+  // aclaración o el LLM).
   if (decision.toolsToCall.length === 0) {
+    if (!opts.skipClarification) {
+      const scope = resolveScope(cleanText, memory);
+      if (hasConcreteScope(scope)) {
+        const match = matchCrossIntent(cleanText, scope);
+        if (match) {
+          const outcome = await executeCrossIntent(cleanText, scope, match);
+          if (outcome) return buildCrossIntentResult(cleanText, decision, match, outcome);
+        }
+      }
+    }
     return finalizePipeline(cleanText, decision, [], "", opts);
   }
 
