@@ -45,7 +45,14 @@ export function useApprovedUsers(): ApprovedUser[] {
 
   useEffect(() => {
     if (cache) return;
-    if (!inFlight) inFlight = fetchApprovedUsers().then((u) => { cache = u; return u; });
+    if (!inFlight) inFlight = fetchApprovedUsers().then((u) => {
+      if (u.length > 0) {
+        cache = u;
+      } else {
+        inFlight = null;
+      }
+      return u;
+    });
     let cancelled = false;
     inFlight.then((u) => { if (!cancelled) setUsers(u); });
     return () => { cancelled = true; };
