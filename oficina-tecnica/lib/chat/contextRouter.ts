@@ -31,6 +31,8 @@ import {
 import { resolveScope, hasConcreteScope } from "@/lib/chat/scopeResolver";
 import { matchCrossIntent, type CrossIntentMatch } from "@/lib/chat/crossIntentRegistry";
 import { executeCrossIntent, type CrossIntentOutcome } from "@/lib/chat/crossIntentExecutor";
+import { detectCorrection, recordQueryFeedback } from "@/lib/chat/queryFeedback";
+import type { AgentId } from "@/lib/chat/agentProfiles";
 import {
   buscarCotizaciones,
   buscarCotizacionPorCodigo,
@@ -284,6 +286,8 @@ export interface ContextPipelineOptions {
   isValidationQuestion?: boolean;
   /** Memoria del último dataset mostrado en el hilo (para seguimientos). */
   memory?: DatasetMemory;
+  /** Agente que responde (para aclaración adaptada y feedback). */
+  agentId?: AgentId;
   /** Interno: evita re-evaluar aclaración al resolver una opción (anti-recursión). */
   skipClarification?: boolean;
 }
@@ -413,6 +417,28 @@ export async function runContextPipeline(
 ): Promise<ContextPipelineResult> {
   const memory = opts.memory ?? {};
 
+  // ── (A0) Corrección de fuente del usuario ──────────────────────────────────
+  // "eso no era recursos, era requerimientos": re-enrutamos a la fuente correcta
+  // y guardamos el feedback para mejorar futuras detecciones (no para inventar).
+  if (!opts.skipClarification) {
+    const corr = detectCorrection(cleanText);
+    if (corr) {
+      recordQueryFeedback({
+        originalQuery: cleanText,
+        detectedIntent: memory.lastDisplayedIntent ?? "desconocido",
+        correctedByUser: corr.correctedSource,
+        finalIntent: corr.correctedSource,
+        sourceUsed: corr.correctedSource,
+        agent: opts.agentId ?? "gg",
+        success: true,
+      });
+      const resolved = await runContextPipeline(corr.resolvedQuery, {
+        ...opts, skipClarification: true, memory: { ...memory, pendingClarification: undefined },
+      });
+      return { ...resolved, clarificationResolved: true };
+    }
+  }
+
   // ── (A) Resolver una aclaración pendiente ──────────────────────────────────
   // Si hay una aclaración pendiente y el mensaje elige una opción ("1",
   // "la de recursos"), resolvemos y ejecutamos esa consulta — sin mandar "1" al
@@ -421,6 +447,17 @@ export async function runContextPipeline(
   if (!opts.skipClarification && memory.pendingClarification) {
     const choice = resolveClarificationChoice(stripAgentLabelsForRouting(cleanText), memory.pendingClarification);
     if (choice) {
+      // Aprendizaje: registrar qué opción eligió el usuario para una consulta
+      // ambigua (mejora el orden de opciones futuras; nunca inventa datos).
+      recordQueryFeedback({
+        originalQuery: memory.pendingClarification.question,
+        detectedIntent: "needs_clarification",
+        selectedOption: choice.id,
+        finalIntent: choice.intent,
+        sourceUsed: choice.source === "documentos" || choice.source === "not_implemented" ? undefined : choice.source,
+        agent: opts.agentId ?? "gg",
+        success: choice.source !== "not_implemented",
+      });
       if (choice.resolvedQuery && choice.source !== "not_implemented") {
         const resolved = await runContextPipeline(choice.resolvedQuery, {
           ...opts,
@@ -444,7 +481,7 @@ export async function runContextPipeline(
 
   // ── (B) Pedir aclaración ante ambigüedad/baja confianza ────────────────────
   if (!opts.skipClarification) {
-    const cla = shouldAskClarification(cleanText, memory);
+    const cla = shouldAskClarification(cleanText, memory, opts.agentId);
     if (cla.ask) {
       const pending: PendingClarification = {
         question: cla.question,

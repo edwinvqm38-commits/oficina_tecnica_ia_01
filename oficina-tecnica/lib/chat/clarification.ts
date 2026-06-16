@@ -22,6 +22,7 @@ import {
   wantsElectricalClassification,
   stripAgentLabelsForRouting,
 } from "./messageUtils";
+import type { AgentId } from "./agentProfiles";
 
 export type ClarificationTopic = "electrical" | "latest_entity" | "previous_answer" | "dates" | "guides";
 
@@ -90,7 +91,9 @@ const ELECTRIC_RE = /\bel[eé]ctric[oa]s?\b/i;
 // Señales de que "eléctrico" se refiere a datos/catálogo (no a una pregunta
 // normativa/técnica como "qué protecciones eléctricas aplican en 22kV").
 const PRICE_RE = /\bm[aá]s\s+car[oa]s?\b|\bm[aá]s\s+barat[oa]s?\b|\bcost[oa]s?\b|\bprecios?\b|\bvalor(?:es|izad)\b/i;
-const DATA_NOUN_RE = /\b[íi]tems?\b|\bpartidas?\b|\bmateriales?\b|\bequipos?\b|\brecursos?\b/i;
+// Sin \b inicial: en JS (sin flag /u) \b no reconoce el borde antes de "í"
+// acentuada, así que "\b[íi]tems" no matchea "ítems". Usamos subcadena.
+const DATA_NOUN_RE = /[íi]tems?|partidas?|materiales?|equipos?|recursos?/i;
 const PREVIOUS_RE = /\blo\s+anterior\b|\besa\s+tabla\b|\blo\s+que\s+mostraste\b|\brespuestas?\s+anteriores?\b|\bqu[eé]\s+(?:opinas|piensas|dices)\b/i;
 const DATES_RE = /\bfechas?\b/i;
 const GUIDES_RE = /\bgu[ií]as?\b/i;
@@ -323,6 +326,56 @@ function guidesOptions(memory: DatasetMemory): ClarificationOption[] {
   ];
 }
 
+// Opciones eléctricas ADAPTADAS POR AGENTE (sección 7 del spec). Cada agente
+// enmarca las interpretaciones según su especialidad. El catálogo siempre es
+// ejecutable; los cruces ítem-sobre-log/proyecto se marcan honestamente.
+function agentElectricalOptions(memory: DatasetMemory, agent: AgentId): ClarificationOption[] | null {
+  const rqCode = memory.lastVerifiedRequirementCode;
+  const projCode = memory.lastVerifiedProjectCode ?? memory.lastVerifiedCotizacionCode;
+  const catalog: ClarificationOption = {
+    id: "0", label: "Recursos eléctricos del catálogo", intent: "clasificar_recursos_electricos",
+    source: "recursos", resolvedQuery: "recursos eléctricos del catálogo",
+    explanation: "Clasifica el catálogo de recursos e identifica los eléctricos.",
+  };
+  const catalogCaros: ClarificationOption = {
+    ...catalog, label: "Recursos eléctricos más caros del catálogo",
+    explanation: "Clasifica el catálogo eléctrico (el ranking por precio del catálogo es aproximado).",
+  };
+  const itemsRq: ClarificationOption = rqCode
+    ? { id: "0", label: `Ítems eléctricos del RQ anterior (${rqCode})`, intent: "items_electricos_rq", source: "requerimiento_items", resolvedQuery: rqCode, explanation: "Clasifica los ítems del último RQ consultado." }
+    : { id: "0", label: "Ítems eléctricos de requerimientos", intent: "items_electricos", source: "requerimiento_items", notImplementedNote: "Indícame un código RQ-XXXX y clasifico/analizo sus ítems eléctricos.", explanation: "Ítems eléctricos de un requerimiento." };
+
+  let opts: ClarificationOption[];
+  switch (agent) {
+    case "ic":
+      opts = [
+        { ...itemsRq, label: rqCode ? `Ítems eléctricos más caros del RQ ${rqCode}` : "Ítems eléctricos más caros de requerimientos" },
+        catalogCaros,
+        { id: "0", label: "RQ con mayor costo eléctrico", intent: "rq_mayor_costo_electrico", source: "requerimientos", notImplementedNote: "El ranking de RQ por costo eléctrico (cruce ítem↔log) aún no está implementado.", explanation: "Requerimientos ordenados por costo de sus ítems eléctricos." },
+      ];
+      break;
+    case "pm":
+      opts = [
+        { id: "0", label: "RQ con ítems eléctricos pendientes", intent: "rq_electricos_pendientes", source: "requerimientos", notImplementedNote: "El cruce de RQ por ítems eléctricos + estado aún no está implementado.", explanation: "Impacto en cronograma de RQ eléctricos pendientes." },
+        { id: "0", label: "Proyectos con más RQ eléctricos", intent: "proyectos_rq_electricos", source: "requerimientos", notImplementedNote: "El cruce proyecto↔RQ eléctricos aún no está implementado.", explanation: "Dónde se concentran los RQ eléctricos." },
+        catalog,
+      ];
+      break;
+    case "ie":
+      opts = [
+        itemsRq,
+        catalog,
+        { id: "0", label: "Ítems dudosos que requieren revisión técnica", intent: "items_dudosos", source: "recursos", resolvedQuery: "recursos eléctricos del catálogo", explanation: "Marca los recursos eléctricos dudosos para revisión." },
+      ];
+      break;
+    default: // gg u otros → marco económico/ejecutivo simple
+      opts = projCode
+        ? [{ id: "0", label: `Resumen eléctrico del proyecto ${projCode}`, intent: "resumen_proyecto", source: "proyecto", resolvedQuery: `resumen del proyecto ${projCode}`, explanation: "Resumen ejecutivo con foco eléctrico." }, catalog]
+        : [itemsRq, catalog];
+  }
+  return opts.slice(0, 3).map((o, i) => ({ ...o, id: `${i + 1}` }));
+}
+
 // ── Decisión: ¿debemos pedir aclaración? ──────────────────────────────────────
 
 /**
@@ -330,7 +383,7 @@ function guidesOptions(memory: DatasetMemory): ClarificationOption[] {
  * interpretaciones accionables. Devuelve `ask:false` cuando la consulta es
  * inequívoca (código o fuente explícita) o cuando no hay ≥2 interpretaciones.
  */
-export function shouldAskClarification(cleanText: string, memory: DatasetMemory): ClarificationDecision {
+export function shouldAskClarification(cleanText: string, memory: DatasetMemory, agent?: AgentId): ClarificationDecision {
   // Quita prefijos de rol ("Ingeniero de Costos ...") para no confundir la
   // detección de entidad/fuente con el nombre del agente.
   const t = stripAgentLabelsForRouting(cleanText).trim();
@@ -350,7 +403,8 @@ export function shouldAskClarification(cleanText: string, memory: DatasetMemory)
   // tampoco preguntamos: lo resuelve el clasificador.
   const electricalDataQuery = ELECTRIC_RE.test(t) && (PRICE_RE.test(t) || DATA_NOUN_RE.test(t));
   if (electricalDataQuery && !wantsElectricalClassification(t, hadRecursos)) {
-    const options = electricalOptions(memory);
+    // Opciones adaptadas al agente (sección 7); si no hay agente, genéricas.
+    const options = (agent && agentElectricalOptions(memory, agent)) || electricalOptions(memory);
     return {
       ask: true,
       options,

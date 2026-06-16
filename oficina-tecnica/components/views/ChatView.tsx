@@ -18,6 +18,7 @@ import type { ChatCtx } from "../../lib/chat/contextQuery";
 import { runContextPipeline, type ContextPipelineResult } from "../../lib/chat/contextRouter";
 import { validateLlmAnswer, buildBlockedAnswer } from "../../lib/chat/contextValidation";
 import { getDatasetMemory, recordDisplayedDataset, updateDatasetMemory } from "../../lib/chat/datasetMemory";
+import { buildAgentPriorityCtx, type AgentId } from "../../lib/chat/agentProfiles";
 import { useSession } from "../../lib/auth/useSession";
 import { saveConversation, loadConversationHistory } from "../../lib/memory/conversationMemory";
 
@@ -237,6 +238,7 @@ export function ChatView() {
       pipeline = await runContextPipeline(ref.text, {
         isValidationQuestion: ref.isValidationQuestion,
         memory: getDatasetMemory(threadKey),
+        agentId: agentId as AgentId,
       });
       autoCodeCtx = pipeline.block;
 
@@ -283,7 +285,7 @@ export function ChatView() {
       ? `\n\nEl usuario adjuntó ${(inputCtx?.attachments?.length ?? 0) === 1 ? "un archivo" : `${inputCtx?.attachments?.length} archivos`} a este mensaje. Su contenido (texto extraído) viene al final, en bloques "--- Archivo adjunto: <nombre> ---". Básate en ese contenido para responder a lo que pregunta el usuario sobre el/los archivo(s) — NO respondas con un saludo genérico ni ignores el adjunto. Si el contenido extraído está vacío, es muy corto o dice "sin texto extraíble" (típico de planos/imágenes escaneadas), dilo explícitamente, indica qué archivo es (nombre) y pide al usuario un resumen, las páginas/secciones clave o una versión más legible para poder ayudar. El archivo adjunto de este mensaje es la fuente principal: ignora archivos o documentos mencionados en historial previo salvo que el usuario los nombre explícitamente.`
       : "";
 
-    const systemPrompt = (AGENT_SYSTEM_PROMPTS[agentId] ?? AGENT_SYSTEM_PROMPTS.ic) + HUMANIZE_CTX + ctxPrompt + autoCodeCtx + attachmentCtx;
+    const systemPrompt = (AGENT_SYSTEM_PROMPTS[agentId] ?? AGENT_SYSTEM_PROMPTS.ic) + HUMANIZE_CTX + buildAgentPriorityCtx(agentId) + ctxPrompt + autoCodeCtx + attachmentCtx;
 
     // Load Supabase memory (older conversations) only for non-trivial
     // messages, but always read this thread's local history — it's already

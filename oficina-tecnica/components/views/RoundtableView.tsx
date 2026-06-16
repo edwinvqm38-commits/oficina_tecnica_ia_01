@@ -17,6 +17,7 @@ import type { ChatCtx } from "../../lib/chat/contextQuery";
 import { runContextPipeline, type ContextPipelineResult } from "../../lib/chat/contextRouter";
 import { validateLlmAnswer, buildBlockedAnswer } from "../../lib/chat/contextValidation";
 import { getDatasetMemory, recordDisplayedDataset, updateDatasetMemory } from "../../lib/chat/datasetMemory";
+import { buildAgentPriorityCtx, type AgentId } from "../../lib/chat/agentProfiles";
 import { MdText } from "../chat/MdText";
 import { HelpPanel } from "../chat/HelpPanel";
 import { ChatAutoInput } from "../chat/ChatAutoInput";
@@ -568,6 +569,7 @@ export function RoundtableView() {
       pipeline = await runContextPipeline(ref.text, {
         isValidationQuestion: ref.isValidationQuestion,
         memory: getDatasetMemory(ROUNDTABLE_THREAD),
+        agentId: responders[0] as AgentId,
       });
       autoCodeCtx = pipeline.block;
 
@@ -655,7 +657,7 @@ export function RoundtableView() {
         : await loadConversationHistory(userId, agId, activeProject.id, 6).catch(() => []);
 
       const messages: ChatMessage[] = [
-        { role: "system", content: sysPrompt + HUMANIZE_CTX + skillsCtx + platformCtx + projectCtx + requirementCtx + autoCodeCtx + attachmentCtx + toneCtx + brevityCtx + coordinatorCtx },
+        { role: "system", content: sysPrompt + HUMANIZE_CTX + buildAgentPriorityCtx(agId) + skillsCtx + platformCtx + projectCtx + requirementCtx + autoCodeCtx + attachmentCtx + toneCtx + brevityCtx + coordinatorCtx },
         ...supabaseHistory.map((m) => ({ role: m.role as "user" | "assistant", content: m.content })),
         ...buildThreadHistory(agId),
         { role: "user", content: parsed.cleanText + fileCtx },
