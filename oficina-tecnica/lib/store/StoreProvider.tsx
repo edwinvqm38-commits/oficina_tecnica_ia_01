@@ -9,8 +9,10 @@ import {
   useRef,
   useState,
 } from "react";
+import { usePathname } from "next/navigation";
 import { APPROVALS, SKILLS } from "../data";
 import type { ApprovalStatus, ChatMessage, KnowledgeNote, Project, Skill, SkillStatus } from "../types";
+import { getSupabaseClient } from "../supabase/client";
 import { isRemoteConfigured, loadLocal, loadRemote, saveLocal, saveRemote, subscribeRemote } from "./persistence";
 import {
   AppState,
@@ -32,6 +34,13 @@ function uid(prefix = "id") {
 // chats and Mesa de trabajo alike, so persisted state (localStorage and
 // `workspace_state`) and rendered history don't grow unbounded over time.
 const MAX_THREAD_MESSAGES = 200;
+
+// Routes that render without an authenticated session — the shared
+// `workspace_state` backend must never be hit here (no session = no
+// permission to read/write it, and /login in particular doesn't need it).
+const PUBLIC_ROUTES = ["/login"];
+
+type SessionState = "checking" | "authenticated" | "unauthenticated";
 
 type StoreActions = {
   /** True once persisted state (local or remote) has finished loading. */
@@ -100,19 +109,58 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
   const remoteConfigured = useMemo(() => isRemoteConfigured(), []);
   const [syncStatus, setSyncStatus] = useState<SyncStatus>(() => (remoteConfigured ? "retrying" : "local"));
   const hydrated = useRef(false);
+  const pathname = usePathname();
+  const isPublicRoute = PUBLIC_ROUTES.includes(pathname ?? "");
 
-  // Hydrate: prefer remote (if configured), fall back to local cache. The
-  // remote `workspace_state` row only ever carries the shared `roundtable`
-  // thread (see pickSharedChats) — private "Chat privado" threads and
-  // legacy unscoped agent threads live only in this browser's local cache,
-  // so we keep the locally-loaded `chats` and just merge the remote
-  // `roundtable` into it instead of replacing `chats` wholesale.
+  // Tracks whether there's an authenticated Supabase session, so the shared
+  // `workspace_state` backend is never read/written on public routes or
+  // before a session exists (e.g. while /login is rendering).
+  const [sessionState, setSessionState] = useState<SessionState>(() => (remoteConfigured ? "checking" : "unauthenticated"));
   useEffect(() => {
+    // remoteConfigured already reflects whether getSupabaseClient() is
+    // non-null (see isRemoteConfigured), and the state initializer above
+    // already set "unauthenticated" for the !remoteConfigured case — so
+    // there's nothing to do here when it's false, and no need to call
+    // setState synchronously from the effect body.
+    if (!remoteConfigured) return;
+    const supabase = getSupabaseClient();
+    if (!supabase) return;
+    let cancelled = false;
+    supabase.auth.getSession().then(({ data }) => {
+      if (!cancelled) setSessionState(data.session ? "authenticated" : "unauthenticated");
+    });
+    const { data: listener } = supabase.auth.onAuthStateChange((_event, session) => {
+      setSessionState(session ? "authenticated" : "unauthenticated");
+    });
+    return () => {
+      cancelled = true;
+      listener.subscription.unsubscribe();
+    };
+  }, [remoteConfigured]);
+
+  const canSyncRemote = remoteConfigured && !isPublicRoute && sessionState === "authenticated";
+
+  // Hydrate: prefer remote (if configured, route isn't public, and there's a
+  // session), fall back to local cache. The remote `workspace_state` row
+  // only ever carries the shared `roundtable` thread (see pickSharedChats)
+  // — private "Chat privado" threads and legacy unscoped agent threads live
+  // only in this browser's local cache, so we keep the locally-loaded
+  // `chats` and just merge the remote `roundtable` into it instead of
+  // replacing `chats` wholesale.
+  //
+  // Runs exactly once (guarded by `hydrated.current`): while on a public
+  // route or before the session check resolves, it waits without touching
+  // the remote backend; once a session is confirmed it performs the actual
+  // hydration and never repeats it (e.g. signing out afterwards must not
+  // re-trigger a local reload that would clobber live state).
+  useEffect(() => {
+    if (hydrated.current) return;
+    if (!isPublicRoute && remoteConfigured && sessionState === "checking") return;
     let cancelled = false;
     (async () => {
       const local = loadLocal();
       if (!cancelled) setState(local);
-      if (remoteConfigured) {
+      if (canSyncRemote) {
         const remote = await loadRemote();
         if (!cancelled) {
           if (remote) {
@@ -122,6 +170,8 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
             setSyncStatus("error");
           }
         }
+      } else {
+        setSyncStatus("local");
       }
       if (!cancelled) {
         hydrated.current = true;
@@ -131,17 +181,17 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
     return () => {
       cancelled = true;
     };
-  }, [remoteConfigured]);
+  }, [remoteConfigured, isPublicRoute, sessionState, canSyncRemote]);
 
   // Persist on every change (after initial hydration, so we don't overwrite
   // the saved state with the seed during the first render).
   useEffect(() => {
     if (!hydrated.current) return;
     saveLocal(state);
-    // When there's no shared backend, appendChat already marks "gg" messages
-    // as "sent" immediately (nothing to wait on), so there's nothing to
-    // reconcile here.
-    if (remoteConfigured) {
+    // When there's no shared backend (or no session/public route), appendChat
+    // already marks "gg" messages as "sent" immediately (nothing to wait
+    // on), so there's nothing to reconcile here.
+    if (canSyncRemote) {
       setSyncStatus("retrying");
       saveRemote(state, (ok) => {
         setSyncStatus(ok ? "synced" : "error");
@@ -151,7 +201,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
         });
       });
     }
-  }, [state, remoteConfigured]);
+  }, [state, canSyncRemote]);
 
   // Live-sync shared chats (e.g. Mesa de trabajo) across users: when another
   // client saves the workspace state, merge their `chats` into ours so new
@@ -159,14 +209,14 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
   // message id) to avoid clobbering this client's own in-flight edits to
   // other state or dropping messages not yet round-tripped.
   useEffect(() => {
-    if (!remoteConfigured) return;
+    if (!canSyncRemote) return;
     return subscribeRemote((remote) => {
       setState((s) => {
         const chats = mergeChats(s.chats, remote.chats);
         return chats === s.chats ? s : { ...s, chats };
       });
     });
-  }, [remoteConfigured]);
+  }, [canSyncRemote]);
 
   // Fallback poll: Realtime subscriptions can silently fail to deliver
   // (publication/replication not configured, dropped connection, etc.), so
@@ -174,7 +224,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
   // mergeChats returns the same `chats` reference when there's nothing new,
   // so this is a no-op (no re-render, no re-save) when nothing changed.
   useEffect(() => {
-    if (!remoteConfigured) return;
+    if (!canSyncRemote) return;
     const interval = setInterval(() => {
       void loadRemote().then((remote) => {
         if (!remote) return;
@@ -185,7 +235,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
       });
     }, 5000);
     return () => clearInterval(interval);
-  }, [remoteConfigured]);
+  }, [canSyncRemote]);
 
   const notify = useCallback<StoreActions["notify"]>((n) => {
     const full: Notification = { id: uid("NTF"), ts: Date.now(), read: false, ...n };
