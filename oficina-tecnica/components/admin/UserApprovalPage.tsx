@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { supabase } from "@/lib/supabaseClient";
+import { fetchUserProfiles, updateUserProfile } from "@/lib/data/repositories/userProfilesRepository";
 import type { AppStatus, AppRole, UserProfile } from "../sgp/auth/AuthContext";
 
 const STATUS_LABEL: Record<AppStatus, string> = {
@@ -31,15 +31,23 @@ export function UserApprovalPage({ adminEmail }: { adminEmail: string }) {
 
   async function loadUsers() {
     setLoading(true);
-    const { data, error: err } = await supabase
-      .from("user_profiles")
-      .select("*")
-      .order("created_at", { ascending: false });
-    if (err) { setError(err.message); } else { setUsers((data ?? []) as UserProfile[]); }
+    try {
+      const rows = await fetchUserProfiles();
+      setUsers(rows as unknown as UserProfile[]);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Error al cargar usuarios.");
+    }
     setLoading(false);
   }
 
   useEffect(() => { loadUsers(); }, []);
+
+  // Update the affected row in local state instead of re-fetching the whole
+  // list after every action — avoids one full `user_profiles` download per
+  // approve/reject/role-change click (PLAN EGRESO CERO Fase 1A).
+  function applyLocalUpdate(userId: string, patch: Partial<UserProfile>) {
+    setUsers((current) => current.map((u) => (u.id === userId ? { ...u, ...patch } : u)));
+  }
 
   async function setStatus(userId: string, status: AppStatus, role?: AppRole) {
     setWorking(userId);
@@ -49,17 +57,23 @@ export function UserApprovalPage({ adminEmail }: { adminEmail: string }) {
       approved_at: status === "approved" ? new Date().toISOString() : undefined,
     };
     if (role) update.role = role;
-    const { error: err } = await supabase.from("user_profiles").update(update).eq("id", userId);
-    if (err) alert(`Error: ${err.message}`);
-    else await loadUsers();
+    try {
+      await updateUserProfile(userId, update);
+      applyLocalUpdate(userId, update);
+    } catch (err) {
+      alert(`Error: ${err instanceof Error ? err.message : "desconocido"}`);
+    }
     setWorking(null);
   }
 
   async function setRole(userId: string, role: AppRole) {
     setWorking(userId);
-    const { error: err } = await supabase.from("user_profiles").update({ role }).eq("id", userId);
-    if (err) alert(`Error: ${err.message}`);
-    else await loadUsers();
+    try {
+      await updateUserProfile(userId, { role });
+      applyLocalUpdate(userId, { role });
+    } catch (err) {
+      alert(`Error: ${err instanceof Error ? err.message : "desconocido"}`);
+    }
     setWorking(null);
   }
 

@@ -15,6 +15,7 @@ import {
   type StandardPermissionKey,
 } from "@/lib/sgp/modulePermissionsCatalog";
 import { supabase } from "@/lib/sgp/supabaseClient";
+import { fetchUserProfiles, updateUserProfile } from "@/lib/data/repositories/userProfilesRepository";
 import { AdminDataViewerPanel } from "./AdminDataViewerPanel";
 
 type AdminFilter = "all" | "pending" | "approved" | "rejected" | "inactive";
@@ -229,27 +230,21 @@ export default function AdministradorContent() {
     setLoading(true);
     setError("");
 
-    const { data, error: profilesError } = await supabase
-      .from("user_profiles")
-      .select("id,email,full_name,role,status,is_super_admin,approved_by,approved_at,rejected_reason,metadata,created_at,updated_at")
-      .order("created_at", { ascending: false });
-
-    setLoading(false);
-
-    if (profilesError) {
+    try {
+      const rows = (await fetchUserProfiles()) as unknown as AdminUserProfile[];
+      setProfiles(rows);
+      setSelectedRole((current) => {
+        const next = { ...current };
+        for (const row of rows) {
+          if (!next[row.id]) next[row.id] = row.role ?? "consulta";
+        }
+        return next;
+      });
+    } catch {
       setError("No se pudieron cargar usuarios. Revisa las politicas RLS de user_profiles para administradores.");
-      return;
+    } finally {
+      setLoading(false);
     }
-
-    const rows = (data ?? []) as AdminUserProfile[];
-    setProfiles(rows);
-    setSelectedRole((current) => {
-      const next = { ...current };
-      for (const row of rows) {
-        if (!next[row.id]) next[row.id] = row.role ?? "consulta";
-      }
-      return next;
-    });
   }, [isAdmin]);
 
   useEffect(() => {
@@ -461,19 +456,23 @@ export default function AdministradorContent() {
       setError("");
       setMessage("");
 
-      const { error: updateError } = await supabase.from("user_profiles").update(payload).eq("id", profileItem.id);
-
-      if (updateError) {
+      try {
+        await updateUserProfile(profileItem.id, payload);
+      } catch {
         setActionLoadingId(null);
         setError(`No se pudo actualizar ${profileItem.email ?? "usuario"}. Revisa RLS o permisos de administrador.`);
         return;
       }
 
-      await loadProfiles();
+      // Merge the patch into local state instead of re-fetching the full
+      // user_profiles list after every action (PLAN EGRESO CERO Fase 1A).
+      setProfiles((current) =>
+        current.map((p) => (p.id === profileItem.id ? { ...p, ...payload } : p)),
+      );
       setActionLoadingId(null);
       setMessage(successMessage);
     },
-    [loadProfiles],
+    [],
   );
 
   const approveProfile = useCallback(

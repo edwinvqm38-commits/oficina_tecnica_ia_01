@@ -223,6 +223,12 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
   // periodically re-fetch the shared chats and merge in anything new.
   // mergeChats returns the same `chats` reference when there's nothing new,
   // so this is a no-op (no re-render, no re-save) when nothing changed.
+  //
+  // Interval is intentionally long (90s, not the original 5s): this is only
+  // a safety net for the rare case where Realtime silently drops a message,
+  // not the primary sync path. Every tick downloads the full `workspace_state`
+  // row, so 5s polling per open tab was a major contributor to Supabase
+  // egress (PLAN EGRESO CERO Fase 1A) despite the table itself being tiny.
   useEffect(() => {
     if (!canSyncRemote) return;
     const interval = setInterval(() => {
@@ -233,7 +239,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
           return chats === s.chats ? s : { ...s, chats };
         });
       });
-    }, 5000);
+    }, 90000);
     return () => clearInterval(interval);
   }, [canSyncRemote]);
 
