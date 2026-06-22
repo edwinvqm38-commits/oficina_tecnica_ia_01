@@ -4,6 +4,50 @@ import { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import { supabase } from "@/lib/supabaseClient";
 
+// Classifies a raw Supabase Auth error message into a category so the UI can
+// show an accurate message instead of always saying "credenciales
+// incorrectas" — e.g. a Cloudflare 522 in front of Supabase surfaces to the
+// browser as a CORS-less network failure ("Failed to fetch"), which is a
+// service-availability problem, not a wrong password.
+type AuthErrorCategory = "network" | "credentials" | "unknown";
+
+function classifyAuthError(message: string): AuthErrorCategory {
+  const m = message.trim().toLowerCase();
+  if (
+    !m ||
+    m.includes("failed to fetch") ||
+    m.includes("err_failed") ||
+    m.includes("networkerror") ||
+    m.includes("load failed") ||
+    m.includes("fetch")
+  ) {
+    return "network";
+  }
+  if (m.includes("invalid login credentials")) {
+    return "credentials";
+  }
+  return "unknown";
+}
+
+const NETWORK_ERROR_MESSAGE =
+  "No se pudo conectar con el servicio de autenticación. Supabase puede estar temporalmente restringido por cuota o no disponible. Intenta nuevamente más tarde o revisa el estado del proyecto.";
+const CREDENTIALS_ERROR_MESSAGE = "Credenciales incorrectas. Verifica tu correo y contraseña.";
+const OAUTH_ERROR_MESSAGE = "No se pudo iniciar sesión con Google. Revisa la configuración del proveedor o el estado de Supabase Auth.";
+const UNKNOWN_ERROR_MESSAGE = "Ocurrió un error inesperado al iniciar sesión. Intenta nuevamente.";
+
+function getPasswordLoginErrorMessage(error: { message?: string } | null | undefined): string {
+  const category = classifyAuthError(error?.message ?? "");
+  if (category === "network") return NETWORK_ERROR_MESSAGE;
+  if (category === "credentials") return CREDENTIALS_ERROR_MESSAGE;
+  return UNKNOWN_ERROR_MESSAGE;
+}
+
+function getOAuthErrorMessage(error: { message?: string } | null | undefined): string {
+  const category = classifyAuthError(error?.message ?? "");
+  if (category === "network") return NETWORK_ERROR_MESSAGE;
+  return OAUTH_ERROR_MESSAGE;
+}
+
 export default function LoginPage() {
   const router = useRouter();
   const [tab, setTab] = useState<"login" | "register">("login");
@@ -48,7 +92,7 @@ export default function LoginPage() {
 
     const { error: authError } = await supabase.auth.signInWithPassword({ email: email.trim(), password });
     if (authError) {
-      setError("Credenciales incorrectas. Verifica tu correo y contraseña.");
+      setError(getPasswordLoginErrorMessage(authError));
       setLoading(false);
     } else {
       router.replace("/");
@@ -57,10 +101,17 @@ export default function LoginPage() {
 
   async function handleGoogleSignIn() {
     setError(""); setSuccess("");
-    await supabase.auth.signInWithOAuth({
+    setLoading(true);
+    const { error: authError } = await supabase.auth.signInWithOAuth({
       provider: "google",
       options: { redirectTo: `${window.location.origin}/auth/callback` },
     });
+    if (authError) {
+      setError(getOAuthErrorMessage(authError));
+      setLoading(false);
+    }
+    // On success the browser navigates away to Google, so there's nothing to
+    // reset here — loading stays true until the page unloads.
   }
 
   return (
@@ -300,6 +351,7 @@ export default function LoginPage() {
           <button
             type="button"
             onClick={handleGoogleSignIn}
+            disabled={loading}
             style={{
               width: "100%",
               display: "flex",
@@ -314,7 +366,7 @@ export default function LoginPage() {
               fontSize: 14,
               fontWeight: 600,
               fontFamily: "var(--font)",
-              cursor: "pointer",
+              cursor: loading ? "not-allowed" : "pointer",
               marginBottom: 18,
             }}
           >
