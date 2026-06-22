@@ -5,6 +5,29 @@
 lectura de código (`supabase/sql/*.sql`, `lib/sgp/*Repository.ts`,
 `lib/store/persistence.ts`) — no por consulta directa a Supabase.
 
+## 0. Control de alcance (FUERA DE ALCANCE — leer primero)
+
+Las siguientes tablas, módulos y funciones quedan **explícitamente FUERA
+DEL ALCANCE** de MIGRATION-0 y de cualquier fase futura de migración,
+**salvo aprobación expresa y por escrito del usuario** para cada una:
+
+- **Requerimientos** y cualquier tabla relacionada.
+- **Códigos RQ** y su lógica de generación/numeración.
+- **Propuesta Técnica** (`technical_proposals` y sus tablas relacionadas).
+- **Importación histórica** (`historical_import_batches`,
+  `historical_import_issues` y su flujo).
+- **Permisos globales** / `admin_module_permissions`.
+- Las funciones `createRequerimientoFromCotizacion` y
+  `createRequerimientoWithData`.
+- **SISTEMA V2 / SGP-LITE** en su totalidad.
+- **Datos reales de producción** (filas reales): nunca se exportan,
+  copian ni versionan en esta documentación.
+
+> **NO MIGRAR / NO TOCAR** ninguno de los elementos anteriores hasta
+> confirmación explícita del usuario. Su aparición más abajo en este
+> documento es **solo inventario informativo**, no una autorización para
+> migrarlos o modificarlos.
+
 ## 1. Estado de confirmación de cada tabla
 
 El inventario solicitado incluye 11 elementos. Tras revisar el código
@@ -31,10 +54,39 @@ del usuario** pero son relevantes para una migración completa:
 tablas relacionadas), `user_access_requests`, `agent_conversations_memories`
 (`030_*.sql`), `historical_import_batches`/`historical_import_issues`.
 
+> ⚠️ **NO MIGRAR / NO TOCAR hasta confirmación explícita del usuario.**
+> Varias de estas tablas pertenecen a módulos sensibles marcados como
+> fuera de alcance en la sección 0: `technical_proposals` (+ relacionadas)
+> = **Propuesta Técnica**; `admin_module_permissions` = **permisos
+> globales**; `historical_import_batches`/`historical_import_issues` =
+> **importación histórica**. Se listan aquí únicamente como inventario
+> informativo. No se modelan, copian ni migran sin aprobación expresa.
+
 > Antes de iniciar MIGRATION-1, se recomienda exportar el schema real
 > completo desde el Dashboard de Supabase (Database → Schema Visualizer o
 > `pg_dump --schema-only`) para confirmar el inventario exacto, en lugar
 > de inferirlo solo del código de la aplicación.
+
+### Nota de seguridad — uso de `pg_dump --schema-only`
+
+El uso de `pg_dump --schema-only` (cuando llegue ese momento, no en esta
+fase) está sujeto a estas reglas estrictas:
+
+- Solo se permite para exportar **estructura** (DDL), **nunca datos**
+  (no usar `--data-only` ni un dump completo sobre tablas reales).
+- Debe ejecutarse con **credenciales controladas por el usuario**, no
+  embebidas en el repo ni en este entorno.
+- Debe ejecutarse **fuera del repositorio** (en `/backups/` o `/exports/`,
+  ya cubiertos por `.gitignore`, o fuera del árbol de trabajo).
+- El resultado **no debe versionarse en Git** bajo ninguna circunstancia.
+- No debe incluir datos reales.
+- No debe incluir credenciales, *connection strings*, `anon key` ni
+  `service_role key`.
+- Cualquier archivo temporal generado debe quedar **fuera de Git** y estar
+  cubierto por `.gitignore`.
+- Antes de usar el schema exportado para MIGRATION-1, debe **revisarse
+  manualmente** (que no contenga secretos, datos ni objetos fuera de
+  alcance).
 
 ## 2. Matriz de migración
 

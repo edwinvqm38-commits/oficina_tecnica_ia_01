@@ -38,6 +38,15 @@ reales — solo criterios de verificación.
 - [ ] Se documentó cualquier diferencia intencional respecto al schema
       original (ej. normalización de `workspace_state`).
 
+> **Nota de seguridad sobre `pg_dump --schema-only`:** solo para exportar
+> estructura (DDL), nunca datos. Debe ejecutarse con credenciales
+> controladas por el usuario, **fuera del repositorio**, y su resultado
+> **no se versiona en Git**. No debe contener datos reales, credenciales,
+> *connection strings*, `anon key` ni `service_role key`. Cualquier
+> archivo temporal queda fuera de Git (cubierto por `.gitignore`) y el
+> schema exportado se **revisa manualmente** antes de usarlo en
+> MIGRATION-1. (Ver detalle en `DATA_MAPPING.md`.)
+
 ## D. Migración de datos (MIGRATION-3)
 
 - [ ] Conteo de filas por tabla coincide entre Supabase y Neon (origen
