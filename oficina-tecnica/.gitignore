@@ -39,3 +39,14 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# PLAN EGRESO CERO / MIGRATION-0 — real backups, exports and raw/private data
+# must never reach GitHub. Only code, schema and documentation belong here.
+/backups/
+/exports/
+/data/raw/
+/data/private/
+*.dump
+*.backup
+*.csv
+*.xlsx
