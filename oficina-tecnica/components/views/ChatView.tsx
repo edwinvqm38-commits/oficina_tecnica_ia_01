@@ -7,7 +7,6 @@ import { agentById } from "../../lib/data";
 import { agentAvatarClass } from "./shared";
 import { sendChatWithFallback } from "../../lib/llm/providers";
 import { routeRequest } from "../../lib/llm/modelRouter";
-import { getAgentModelOverride } from "../../lib/llm/agentModels";
 import type { ChatMessage } from "../../lib/llm/providers";
 import { parseInput, isSimpleMessage, HUMANIZE_CTX } from "../../lib/chat/messageUtils";
 import { MdText } from "../chat/MdText";
@@ -17,7 +16,7 @@ import { buildContextPrompt, buildRequirementItemsPrompt, fetchRequirementItems 
 import type { ChatCtx } from "../../lib/chat/contextQuery";
 import { runContextPipeline } from "../../lib/chat/contextRouter";
 import { useSession } from "../../lib/auth/useSession";
-import { saveConversation, loadConversationHistory } from "../../lib/memory/conversationMemory";
+import { saveConversation, loadConversationHistory, loadAgentMemories, buildAgentMemoryPrompt, saveAgentMemory } from "../../lib/memory/conversationMemory";
 
 const CHAT_AGENTS = ["ic", "pm", "ie", "gg"];
 
@@ -25,6 +24,14 @@ const CHAT_AGENTS = ["ic", "pm", "ie", "gg"];
 // loaded from Supabase history) shouldn't render hundreds of MessageBubble
 // (and MdText) instances on mount. Older messages are revealed on demand.
 const VISIBLE_MESSAGES_STEP = 50;
+const MEMORY_DAYS = 5;
+
+const AGENT_LEARNING_CTX = `\n\nMemoria y aprendizaje:
+- Recuerda solo el contexto reciente que recibes en esta conversación y en la memoria de los ultimos 5 dias.
+- Si el usuario te quiere enseñar algo, pídele datos concretos: criterio, ejemplo, formato esperado, excepciones y cuándo aplicar esa regla.
+- Cuando falten datos para responder bien, no inventes. Pide exactamente lo que necesitas para aprender o para consultar mejor la base.
+- Si el usuario pide informacion historica o registros, primero usa el contexto real consultado de Supabase; si no aparece, di que necesitas buscar con codigo, cliente, fecha, proyecto o palabra clave.
+- Habla como un profesional de tu especialidad, con criterio humano: breve, natural, responsable y sin sonar a plantilla.`;
 
 const STARTERS: Record<string, string[]> = {
   ic: ["Presupuesto de tendido de cable 138kV", "Analiza esta desviación de costo", "¿Qué contingencia recomiendas?"],
@@ -205,7 +212,7 @@ export function ChatView() {
     setInput("");
     setBusy(true);
 
-    const routing = routeRequest(parsed.cleanText, getAgentModelOverride(agentId));
+    const routing = routeRequest(parsed.cleanText);
     setTypingModel(routing.modelLabel);
 
     let ctxPrompt = inputCtx ? buildContextPrompt(inputCtx) : "";
@@ -218,6 +225,7 @@ export function ChatView() {
     const hasAttachments = (inputCtx?.attachments?.length ?? 0) > 0;
     const simple = isSimpleMessage(parsed.cleanText) && !inputCtx?.project && !inputCtx?.requirement && !hasAttachments;
     const userId = session?.email ?? "anonymous";
+    const ctxProjectId = inputCtx?.project?.id;
 
     // Real-data context: detect intent → query Supabase → build the
     // "--- CONTEXTO REAL CONSULTADO ---" block. Centralized in
@@ -239,7 +247,12 @@ export function ChatView() {
       ? `\n\nEl usuario adjuntó ${(inputCtx?.attachments?.length ?? 0) === 1 ? "un archivo" : `${inputCtx?.attachments?.length} archivos`} a este mensaje. Su contenido (texto extraído) viene al final, en bloques "--- Archivo adjunto: <nombre> ---". Básate en ese contenido para responder a lo que pregunta el usuario sobre el/los archivo(s) — NO respondas con un saludo genérico ni ignores el adjunto. Si el contenido extraído está vacío, es muy corto o dice "sin texto extraíble" (típico de planos/imágenes escaneadas), dilo explícitamente, indica qué archivo es (nombre) y pide al usuario un resumen, las páginas/secciones clave o una versión más legible para poder ayudar. El archivo adjunto de este mensaje es la fuente principal: ignora archivos o documentos mencionados en historial previo salvo que el usuario los nombre explícitamente.`
       : "";
 
-    const systemPrompt = (AGENT_SYSTEM_PROMPTS[agentId] ?? AGENT_SYSTEM_PROMPTS.ic) + HUMANIZE_CTX + ctxPrompt + autoCodeCtx + attachmentCtx;
+    const agentMemories = simple
+      ? []
+      : await loadAgentMemories(agentId, ctxProjectId, 8, MEMORY_DAYS).catch(() => []);
+    const memoryCtx = buildAgentMemoryPrompt(agentMemories);
+
+    const systemPrompt = (AGENT_SYSTEM_PROMPTS[agentId] ?? AGENT_SYSTEM_PROMPTS.ic) + HUMANIZE_CTX + AGENT_LEARNING_CTX + memoryCtx + ctxPrompt + autoCodeCtx + attachmentCtx;
 
     // Load Supabase memory (older conversations) only for non-trivial
     // messages, but always read this thread's local history — it's already
@@ -250,9 +263,8 @@ export function ChatView() {
     // project (chip), and scoped to it — otherwise it tends to surface old,
     // unrelated conversations right before the current message, confusing
     // the model into anchoring on stale context instead of the live thread.
-    const ctxProjectId = inputCtx?.project?.id;
     const [supabaseHistory, localHistory] = await Promise.all([
-      simple || hasAttachments || !ctxProjectId ? Promise.resolve([]) : loadConversationHistory(userId, agentId, ctxProjectId, 8),
+      simple || hasAttachments ? Promise.resolve([]) : loadConversationHistory(userId, agentId, ctxProjectId, 10, MEMORY_DAYS),
       Promise.resolve(chatFor(threadKey)),
     ]);
 
@@ -276,10 +288,13 @@ export function ChatView() {
     ];
 
     try {
-      const { response, actualConfig } = await sendChatWithFallback(messages, routing.config);
+      const { response, actualConfig } = await sendChatWithFallback(messages, routing.config, routing.complexity);
       const label = `${actualConfig.provider}/${response.model}`;
       appendChat(threadKey, { role: "agent", text: response.content, agentId, modelLabel: label, modelSuggestion: routing.suggestion });
       saveConversation(session?.email ?? "anonymous", agentId, parsed.cleanText, response.content, label, routing.complexity).catch(() => {});
+      if (!simple && parsed.cleanText.length > 40) {
+        saveAgentMemory(agentId, `Usuario consulto: ${parsed.cleanText.slice(0, 280)}. Respuesta/enfoque: ${response.content.slice(0, 420)}`, "context", ctxProjectId, routing.complexity === "simple" ? 1 : 2).catch(() => {});
+      }
     } catch (err) {
       const msg = err instanceof Error ? err.message : "Error desconocido";
       appendChat(threadKey, { role: "agent", text: `No pude conectar con ningún proveedor de IA. ${msg}\n\nVe a Conexiones para configurar una API key gratuita.`, agentId, isError: true });

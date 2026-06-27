@@ -8,7 +8,6 @@ import type { Skill } from "../../lib/types";
 import { agentAvatarClass } from "./shared";
 import { sendChatWithFallback } from "../../lib/llm/providers";
 import { routeRequest } from "../../lib/llm/modelRouter";
-import { getAgentModelOverride } from "../../lib/llm/agentModels";
 import type { ChatMessage } from "../../lib/llm/providers";
 import { parseInput, isSimpleMessage, isTeamMessage, hasClearIntent, slugForUser, HUMANIZE_CTX } from "../../lib/chat/messageUtils";
 import type { UserDirectory } from "../../lib/chat/messageUtils";
@@ -19,7 +18,7 @@ import { MdText } from "../chat/MdText";
 import { HelpPanel } from "../chat/HelpPanel";
 import { ChatAutoInput } from "../chat/ChatAutoInput";
 import { useSession } from "../../lib/auth/useSession";
-import { saveConversation, loadConversationHistory } from "../../lib/memory/conversationMemory";
+import { saveConversation, loadConversationHistory, loadAgentMemories, buildAgentMemoryPrompt, saveAgentMemory } from "../../lib/memory/conversationMemory";
 import { colorForEmail, initialsFor } from "../../lib/presence/avatar";
 import { useApprovedUsers, type ApprovedUser } from "../../lib/presence/useApprovedUsers";
 import { useRoomPresence, presenceStatus, type RoomPresenceEntry } from "../../lib/presence/useRoomPresence";
@@ -46,6 +45,12 @@ const ROUNDTABLE_THREAD = "roundtable";
 // Cap how many messages get mounted in the DOM at once — long shared threads
 // shouldn't render hundreds of RTMessage (and MdText) instances on mount.
 const VISIBLE_MESSAGES_STEP = 50;
+const MEMORY_DAYS = 5;
+const AGENT_LEARNING_CTX = `\n\nMemoria y aprendizaje:
+- Usa solo memoria reciente de los ultimos 5 dias y el contexto real consultado.
+- Si necesitas aprender una regla, formato o criterio interno de la empresa, pide al usuario la informacion concreta que falta.
+- No inventes historicos ni codigos. Si el usuario pide registros, solicita codigo, cliente, proyecto, fecha o palabra clave cuando no haya contexto suficiente.
+- Responde como profesional humano de tu especialidad: natural, tecnico cuando corresponde, breve y con criterio.`;
 
 // Mesa de trabajo is a shared room: all users see the same conversation, so
 // the agents' long-term memory for it is stored under one shared id instead
@@ -609,22 +614,29 @@ export function RoundtableView() {
       // anchoring on stale context instead of the live conversation.
       const supabaseHistory = simple || hasAttachments || !activeProject?.id
         ? []
-        : await loadConversationHistory(userId, agId, activeProject.id, 6).catch(() => []);
+        : await loadConversationHistory(userId, agId, activeProject.id, 6, MEMORY_DAYS).catch(() => []);
+      const agentMemories = simple
+        ? []
+        : await loadAgentMemories(agId, activeProject?.id, 6, MEMORY_DAYS).catch(() => []);
+      const memoryCtx = buildAgentMemoryPrompt(agentMemories);
 
       const messages: ChatMessage[] = [
-        { role: "system", content: sysPrompt + HUMANIZE_CTX + skillsCtx + platformCtx + projectCtx + requirementCtx + autoCodeCtx + attachmentCtx + toneCtx + brevityCtx + coordinatorCtx },
+        { role: "system", content: sysPrompt + HUMANIZE_CTX + AGENT_LEARNING_CTX + memoryCtx + skillsCtx + platformCtx + projectCtx + requirementCtx + autoCodeCtx + attachmentCtx + toneCtx + brevityCtx + coordinatorCtx },
         ...supabaseHistory.map((m) => ({ role: m.role as "user" | "assistant", content: m.content })),
         ...buildThreadHistory(agId),
         { role: "user", content: parsed.cleanText + fileCtx },
       ];
 
-      const agRouting = routeRequest(parsed.cleanText, getAgentModelOverride(agId));
+      const agRouting = routeRequest(parsed.cleanText);
 
       try {
-        const { response, actualConfig } = await sendChatWithFallback(messages, agRouting.config);
+        const { response, actualConfig } = await sendChatWithFallback(messages, agRouting.config, agRouting.complexity);
         const label = `${actualConfig.provider}/${response.model}`;
         appendChat(ROUNDTABLE_THREAD, { role: "agent", agentId: agId, text: response.content, modelLabel: label, modelSuggestion: agRouting.suggestion });
         saveConversation(userId, agId, parsed.cleanText + fileCtx, response.content, label, agRouting.complexity, activeProject?.id).catch(() => {});
+        if (!simple && parsed.cleanText.length > 40) {
+          saveAgentMemory(agId, `En mesa se consulto: ${parsed.cleanText.slice(0, 280)}. Enfoque/respuesta de ${agId.toUpperCase()}: ${response.content.slice(0, 420)}`, "context", activeProject?.id, agRouting.complexity === "simple" ? 1 : 2).catch(() => {});
+        }
       } catch (err) {
         appendChat(ROUNDTABLE_THREAD, {
           role: "agent", agentId: agId,

@@ -30,9 +30,20 @@ export type UserProfile = {
 export type AuthUser = { id: string; email: string };
 
 const ADMIN_EMAIL = "edwin.qm@outlook.com";
+const AUTH_BYPASS_ENABLED = false;
 
 const EMPTY_USER: AuthUser = { id: "", email: "" };
 const EMPTY_PROFILE: UserProfile = {};
+const DEMO_USER: AuthUser = { id: "local-auth-bypass-user", email: ADMIN_EMAIL };
+const DEMO_PROFILE: UserProfile = {
+  id: DEMO_USER.id,
+  email: DEMO_USER.email,
+  full_name: "Usuario Demo",
+  role: "admin",
+  status: "approved",
+  is_super_admin: true,
+  metadata: { auth_bypass: true },
+};
 
 type AuthContextValue = {
   user: AuthUser;
@@ -44,9 +55,9 @@ type AuthContextValue = {
 };
 
 export function useAuth(): AuthContextValue {
-  const [user, setUser] = useState<AuthUser>(EMPTY_USER);
-  const [profile, setProfile] = useState<UserProfile>(EMPTY_PROFILE);
-  const [accessStatus, setAccessStatus] = useState<AccessStatus>("loading");
+  const [user, setUser] = useState<AuthUser>(AUTH_BYPASS_ENABLED ? DEMO_USER : EMPTY_USER);
+  const [profile, setProfile] = useState<UserProfile>(AUTH_BYPASS_ENABLED ? DEMO_PROFILE : EMPTY_PROFILE);
+  const [accessStatus, setAccessStatus] = useState<AccessStatus>(AUTH_BYPASS_ENABLED ? "approved" : "loading");
 
   const loadProfile = useCallback(async (currentUser: AuthUser) => {
     if (!currentUser.id) {
@@ -78,6 +89,8 @@ export function useAuth(): AuthContextValue {
   }, []);
 
   useEffect(() => {
+    if (AUTH_BYPASS_ENABLED) return;
+
     let cancelled = false;
 
     supabase.auth.getSession().then(({ data }) => {
@@ -104,9 +117,25 @@ export function useAuth(): AuthContextValue {
   const normalizedEmail = (profile.email ?? user.email ?? "").trim().toLowerCase();
   const isAdmin = profile.is_super_admin === true || profile.role === "admin" || normalizedEmail === ADMIN_EMAIL;
 
-  const refreshProfile = useCallback(() => loadProfile(user), [loadProfile, user]);
+  const refreshProfile = useCallback(async () => {
+    if (AUTH_BYPASS_ENABLED) {
+      setUser(DEMO_USER);
+      setProfile(DEMO_PROFILE);
+      setAccessStatus("approved");
+      return;
+    }
+
+    await loadProfile(user);
+  }, [loadProfile, user]);
 
   const signOut = useCallback(async () => {
+    if (AUTH_BYPASS_ENABLED) {
+      setUser(DEMO_USER);
+      setProfile(DEMO_PROFILE);
+      setAccessStatus("approved");
+      return;
+    }
+
     await supabase.auth.signOut();
   }, []);
 

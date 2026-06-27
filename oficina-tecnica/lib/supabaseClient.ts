@@ -32,6 +32,41 @@ export function getSupabaseClient(): SupabaseClient | null {
 
 const DEMO_ERROR = "Supabase no configurado — modo demo activo.";
 
+function createDemoChannel() {
+  return {
+    on: () => createDemoChannel(),
+    subscribe: () => createDemoChannel(),
+    track: async () => "ok",
+    untrack: async () => "ok",
+    presenceState: () => ({}),
+  };
+}
+
+function createDemoQuery() {
+  const result = async () => ({ data: null, count: 0, error: new Error(DEMO_ERROR) });
+  const query = {
+    select: () => query,
+    insert: () => query,
+    update: () => query,
+    delete: () => query,
+    upsert: () => query,
+    eq: () => query,
+    neq: () => query,
+    ilike: () => query,
+    like: () => query,
+    in: () => query,
+    not: () => query,
+    or: () => query,
+    order: () => query,
+    limit: () => query,
+    range: () => query,
+    single: result,
+    maybeSingle: result,
+    then: result().then.bind(result()),
+  };
+  return query;
+}
+
 // Proxy so existing call sites can keep doing `supabase.from(...)` /
 // `supabase.auth...` without checking for null, while still resolving the
 // underlying client lazily (env vars are read at call time, not at import).
@@ -39,14 +74,17 @@ export const supabase: SupabaseClient = new Proxy({} as SupabaseClient, {
   get(_target, prop) {
     const client = getSupabaseClient();
     if (!client) {
-      if (prop === "from" || prop === "rpc" || prop === "storage") {
-        return () => ({
-          select: () => ({ data: null, error: new Error(DEMO_ERROR) }),
-          insert: () => ({ data: null, error: new Error(DEMO_ERROR) }),
-          update: () => ({ data: null, error: new Error(DEMO_ERROR) }),
-          delete: () => ({ data: null, error: new Error(DEMO_ERROR) }),
-          upsert: () => ({ data: null, error: new Error(DEMO_ERROR) }),
-        });
+      if (prop === "from" || prop === "rpc") {
+        return () => createDemoQuery();
+      }
+      if (prop === "storage") {
+        return {
+          from: () => ({
+            upload: async () => ({ data: null, error: new Error(DEMO_ERROR) }),
+            createSignedUrl: async () => ({ data: null, error: new Error(DEMO_ERROR) }),
+            remove: async () => ({ data: null, error: new Error(DEMO_ERROR) }),
+          }),
+        };
       }
       if (prop === "auth") {
         return {
@@ -56,6 +94,12 @@ export const supabase: SupabaseClient = new Proxy({} as SupabaseClient, {
           signUp: async () => ({ data: null, error: new Error(DEMO_ERROR) }),
           signOut: async () => ({ error: null }),
         };
+      }
+      if (prop === "channel") {
+        return () => createDemoChannel();
+      }
+      if (prop === "removeChannel" || prop === "removeAllChannels") {
+        return async () => [];
       }
       return undefined;
     }

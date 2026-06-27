@@ -165,6 +165,7 @@ async function sendCloudflareChat(messages: ChatMessage[], config: ModelConfig):
 export async function sendChatWithFallback(
   messages: ChatMessage[],
   primaryConfig: ModelConfig,
+  complexity: "simple" | "technical" | "analytical" | "generative" = "simple",
 ): Promise<{ response: LLMResponse; actualConfig: ModelConfig; usedFallback: boolean }> {
   try {
     const response = await sendChat(messages, primaryConfig);
@@ -172,14 +173,16 @@ export async function sendChatWithFallback(
   } catch { /* fall through */ }
 
   // Cloud providers: try server proxy (Vercel env vars) first, then localStorage key as fallback
+  const deep = complexity !== "simple";
   const CLOUD_FALLBACKS: Array<{ provider: LLMProvider; lsKey: string; model: string }> = [
-    { provider: "gemini",      lsKey: "ot:apikey:gemini",      model: "gemini-flash-latest" },
-    { provider: "groq",        lsKey: "ot:apikey:groq",        model: "llama-3.1-8b-instant" },
-    { provider: "sambanova",   lsKey: "ot:apikey:sambanova",   model: "Meta-Llama-3.1-70B-Instruct" },
-    { provider: "openrouter",  lsKey: "ot:apikey:openrouter",  model: "meta-llama/llama-3.1-8b-instruct:free" },
-    { provider: "cerebras",    lsKey: "ot:apikey:cerebras",    model: "llama3.1-8b" },
-    { provider: "mistral",     lsKey: "ot:apikey:mistral",     model: "mistral-small-latest" },
-    { provider: "together",    lsKey: "ot:apikey:together",    model: "meta-llama/Meta-Llama-3.1-8B-Instruct-Turbo" },
+    { provider: "gemini",      lsKey: "ot:apikey:gemini",      model: deep ? "gemini-pro-latest" : "gemini-flash-latest" },
+    { provider: "openai",      lsKey: "ot:apikey:openai",      model: deep ? "gpt-4o" : "gpt-4o-mini" },
+    { provider: "cerebras",    lsKey: "ot:apikey:cerebras",    model: deep ? "llama3.1-70b" : "llama3.1-8b" },
+    { provider: "mistral",     lsKey: "ot:apikey:mistral",     model: deep ? "mistral-large-latest" : "mistral-small-latest" },
+    { provider: "groq",        lsKey: "ot:apikey:groq",        model: deep ? "llama-3.1-70b-versatile" : "llama-3.1-8b-instant" },
+    { provider: "sambanova",   lsKey: "ot:apikey:sambanova",   model: deep ? "DeepSeek-R1" : "Meta-Llama-3.1-70B-Instruct" },
+    { provider: "openrouter",  lsKey: "ot:apikey:openrouter",  model: deep ? "meta-llama/llama-3.1-70b-instruct:free" : "meta-llama/llama-3.1-8b-instruct:free" },
+    { provider: "together",    lsKey: "ot:apikey:together",    model: deep ? "meta-llama/Meta-Llama-3.1-70B-Instruct-Turbo" : "meta-llama/Meta-Llama-3.1-8B-Instruct-Turbo" },
     { provider: "huggingface", lsKey: "ot:apikey:huggingface", model: "meta-llama/Llama-3.1-8B-Instruct" },
   ];
 

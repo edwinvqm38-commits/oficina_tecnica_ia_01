@@ -9,6 +9,8 @@ export type ConversationMessage = {
   complexity?: string;
 };
 
+const DEFAULT_MEMORY_DAYS = 5;
+
 export async function saveConversation(
   userId: string,
   agentId: string,
@@ -29,13 +31,16 @@ export async function loadConversationHistory(
   userId: string,
   agentId: string,
   projectId?: string,
-  limit = 20
+  limit = 20,
+  days = DEFAULT_MEMORY_DAYS
 ): Promise<ConversationMessage[]> {
+  const since = new Date(Date.now() - days * 24 * 60 * 60 * 1000).toISOString();
   let query = supabase
     .from("agent_conversations")
     .select("role, content, agent_id, project_id, model_used, complexity")
     .eq("user_id", userId)
     .eq("agent_id", agentId)
+    .gte("created_at", since)
     .order("created_at", { ascending: false })
     .limit(limit);
 
@@ -73,4 +78,33 @@ export async function saveAgentMemory(
     content,
     importance,
   });
+}
+
+export async function loadAgentMemories(
+  agentId: string,
+  projectId?: string,
+  limit = 8,
+  days = DEFAULT_MEMORY_DAYS
+): Promise<string[]> {
+  const since = new Date(Date.now() - days * 24 * 60 * 60 * 1000).toISOString();
+  let query = supabase
+    .from("agent_memories")
+    .select("content")
+    .eq("agent_id", agentId)
+    .gte("created_at", since)
+    .order("importance", { ascending: false })
+    .order("created_at", { ascending: false })
+    .limit(limit);
+
+  if (projectId) query = query.eq("project_id", projectId);
+
+  const { data, error } = await query;
+  if (error || !data) return [];
+
+  return (data as Array<{ content: string }>).map((row) => row.content).filter(Boolean);
+}
+
+export function buildAgentMemoryPrompt(memories: string[]): string {
+  if (!memories.length) return "";
+  return `\n\nMemoria reciente del agente (ultimos ${DEFAULT_MEMORY_DAYS} dias; usala como contexto, no la repitas literal):\n${memories.map((m) => `- ${m}`).join("\n")}`;
 }
