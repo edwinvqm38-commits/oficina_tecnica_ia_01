@@ -1,6 +1,8 @@
 // Server-side LLM proxy — reads keys from Vercel env vars so all users benefit without needing their own keys.
 // Returns 503 when the requested provider is not configured, so the client can fall back to direct calls.
 
+import { apiAuthErrorResponse, assertRateLimit, requireApprovedUser } from "@/lib/api/serverAuth";
+
 type ProviderCfg = {
   envKey: string;
   baseUrl: string;
@@ -20,6 +22,14 @@ const PROVIDER_CONFIG: Record<string, ProviderCfg> = {
 };
 
 export async function POST(request: Request) {
+  let authContext: Awaited<ReturnType<typeof requireApprovedUser>>;
+  try {
+    authContext = await requireApprovedUser(request, { moduleKey: "chat", action: "view" });
+    assertRateLimit(`llm:${authContext.userId}`, { limit: 40, windowMs: 60_000, label: "consultas IA" });
+  } catch (error) {
+    return apiAuthErrorResponse(error);
+  }
+
   const body = await request.json() as { messages: unknown; provider: string; model: string; maxTokens?: number };
   const { messages, provider, model } = body;
   const maxTokens = typeof body.maxTokens === "number"

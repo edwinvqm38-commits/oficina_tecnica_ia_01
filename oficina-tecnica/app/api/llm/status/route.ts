@@ -1,6 +1,13 @@
 // Returns which providers are configured via Vercel env vars — used by Conexiones page.
+import { apiAuthErrorResponse, requireApprovedUser } from "@/lib/api/serverAuth";
 
-export async function GET() {
+export async function GET(request: Request) {
+  try {
+    await requireApprovedUser(request, { moduleKey: "chat", action: "view" });
+  } catch (error) {
+    return apiAuthErrorResponse(error);
+  }
+
   return Response.json({
     gemini:      !!(process.env.GEMINI_API_KEY ?? process.env.NEXT_PUBLIC_GEMINI_API_KEY),
     groq:        !!process.env.GROQ_API_KEY,

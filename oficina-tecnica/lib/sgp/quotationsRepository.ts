@@ -2,6 +2,7 @@ import { demoData, type Cotizacion } from "@/lib/sgp/demoData";
 import { readHistoricalImportQuality } from "@/lib/sgp/historicalImportQuality";
 import { normalizeCotizacionEconomicSummary } from "@/lib/sgp/quotationEconomics";
 import { supabase } from "@/lib/sgp/supabaseClient";
+import { authFetch } from "@/lib/api/authFetch";
 
 export type QuotationsDataSource = "supabase" | "demo";
 
@@ -442,7 +443,7 @@ function buildCreateCotizacionPayload(row: Cotizacion, options: CreateCotizacion
 }
 
 async function createQuotationDriveMetadata(quotationCode: string): Promise<Record<string, unknown>> {
-  const response = await fetch("/api/drive/quotation-folders", {
+  const response = await authFetch("/api/drive/quotation-folders", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ quotationCode }),

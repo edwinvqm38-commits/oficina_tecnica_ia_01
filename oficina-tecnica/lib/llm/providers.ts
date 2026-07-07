@@ -1,4 +1,6 @@
 // Supported LLM providers
+import { authFetch } from "@/lib/api/authFetch";
+
 export type LLMProvider =
   | "openai"
   | "anthropic"
@@ -46,7 +48,7 @@ export async function sendChat(messages: ChatMessage[], config: ModelConfig): Pr
 
   // Try server-side proxy (uses Vercel env vars → shared for all users)
   try {
-    const res = await fetch("/api/llm/chat", {
+    const res = await authFetch("/api/llm/chat", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({

@@ -11,6 +11,7 @@ import {
 } from "@/lib/gmail/gmailClient";
 import { userContextFromRequest } from "@/lib/gmail/supabaseServer";
 import type { SupabaseClient } from "@supabase/supabase-js";
+import { apiAuthErrorResponse, assertRateLimit } from "@/lib/api/serverAuth";
 
 export const runtime = "nodejs";
 
@@ -72,6 +73,15 @@ export async function POST(request: NextRequest) {
     if (!entityType || !entityCode) throw new Error("Falta vincular el correo a una cotización o requerimiento.");
 
     const { supabase, userEmail } = await userContextFromRequest(request);
+    assertRateLimit(`gmail-send:${userEmail.toLowerCase()}`, { limit: 20, windowMs: 60 * 60_000, label: "envío de correos" });
+    const moduleKey = entityType === "requirement" ? "requerimientos" : "cotizaciones";
+    const { data: canSend, error: permissionError } = await supabase.rpc("can_use_module", {
+      p_module: moduleKey,
+      p_action: "view",
+    });
+    if (permissionError) throw permissionError;
+    if (canSend !== true) throw new Error("No tienes permiso para enviar correos de este módulo.");
+
     let accountIdForThread: string | null = null;
     let fromEmail = "";
     let accessToken = "";
@@ -161,6 +171,9 @@ export async function POST(request: NextRequest) {
       threadId: sent.threadId,
     });
   } catch (error) {
+    if (error instanceof Error && /sesión|aprobado|permiso|límite/i.test(error.message)) {
+      return apiAuthErrorResponse(error);
+    }
     return NextResponse.json(
       { error: error instanceof Error ? error.message : "No se pudo enviar el correo por Gmail." },
       { status: 400 },

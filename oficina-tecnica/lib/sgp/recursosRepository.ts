@@ -1,5 +1,6 @@
 import { demoData, type Recurso, type ResourceFileMeta } from "@/lib/sgp/demoData";
 import { supabase } from "@/lib/sgp/supabaseClient";
+import { authFetch } from "@/lib/api/authFetch";
 
 export type RecursosDataSource = "supabase" | "demo";
 export type RecursoSortField =
@@ -855,7 +856,7 @@ export async function uploadResourceFile(
   form.append("entityCode", resourceId);
   form.append("category", category);
 
-  const response = await fetch("/api/drive/upload", {
+  const response = await authFetch("/api/drive/upload", {
     method: "POST",
     body: form,
   });

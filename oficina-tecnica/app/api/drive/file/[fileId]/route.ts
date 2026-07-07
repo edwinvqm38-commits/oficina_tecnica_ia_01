@@ -1,5 +1,6 @@
-import { NextResponse } from "next/server";
+import { NextRequest, NextResponse } from "next/server";
 import { getGoogleDriveAccessToken } from "@/lib/googleDrive/driveClient";
+import { apiAuthErrorResponse, requireApprovedUser } from "@/lib/api/serverAuth";
 
 export const runtime = "nodejs";
 
@@ -13,7 +14,7 @@ function isSafeDriveFileId(value: string): boolean {
   return /^[A-Za-z0-9_-]{10,}$/.test(value);
 }
 
-export async function GET(_request: Request, context: RouteContext) {
+export async function GET(request: NextRequest, context: RouteContext) {
   const { fileId } = await context.params;
   const normalizedFileId = fileId.trim();
 
@@ -22,6 +23,7 @@ export async function GET(_request: Request, context: RouteContext) {
   }
 
   try {
+    await requireApprovedUser(request);
     const accessToken = await getGoogleDriveAccessToken();
     const response = await fetch(`${DRIVE_API_URL}/${encodeURIComponent(normalizedFileId)}?alt=media&supportsAllDrives=true`, {
       headers: {
@@ -41,6 +43,9 @@ export async function GET(_request: Request, context: RouteContext) {
       },
     });
   } catch (error) {
+    if (error instanceof Error && /sesión|aprobado|permiso|límite/i.test(error.message)) {
+      return apiAuthErrorResponse(error);
+    }
     return NextResponse.json(
       { error: error instanceof Error ? error.message : "No se pudo leer el archivo desde Google Drive." },
       { status: 500 },

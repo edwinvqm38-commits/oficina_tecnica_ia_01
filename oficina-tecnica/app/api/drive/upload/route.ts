@@ -7,6 +7,7 @@ import {
   safeDriveName,
   uploadDriveFile,
 } from "@/lib/googleDrive/driveClient";
+import { apiAuthErrorResponse, assertRateLimit, requireApprovedUser } from "@/lib/api/serverAuth";
 
 export const runtime = "nodejs";
 
@@ -54,6 +55,8 @@ async function ensureEntityFolder(accessToken: string, entityType: DriveEntityTy
 
 export async function POST(request: NextRequest) {
   try {
+    const authContext = await requireApprovedUser(request, { moduleKey: "recursos", action: "upload" });
+    assertRateLimit(`drive-upload:${authContext.userId}`, { limit: 30, windowMs: 10 * 60_000, label: "subida de archivos" });
     const form = await request.formData();
     const file = form.get("file");
     const entityTypeRaw = String(form.get("entityType") ?? "resource");
@@ -93,6 +96,9 @@ export async function POST(request: NextRequest) {
       web_content_link: uploaded.webContentLink ?? null,
     });
   } catch (error) {
+    if (error instanceof Error && /sesión|aprobado|permiso|límite/i.test(error.message)) {
+      return apiAuthErrorResponse(error);
+    }
     return NextResponse.json(
       { error: error instanceof Error ? error.message : "No se pudo subir el archivo a Google Drive." },
       { status: 500 },

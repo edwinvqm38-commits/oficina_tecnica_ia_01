@@ -7,6 +7,7 @@ import {
   listDriveFilesInFolder,
   safeDriveName,
 } from "@/lib/googleDrive/driveClient";
+import { apiAuthErrorResponse, requireApprovedUser } from "@/lib/api/serverAuth";
 
 export const runtime = "nodejs";
 
@@ -35,6 +36,7 @@ function normalizeCodes(value: unknown): string[] {
 
 export async function POST(request: NextRequest) {
   try {
+    await requireApprovedUser(request, { moduleKey: "recursos", action: "view" });
     const body = (await request.json().catch(() => ({}))) as { resourceCodes?: unknown };
     const resourceCodes = normalizeCodes(body.resourceCodes);
     if (resourceCodes.length === 0) {
@@ -69,6 +71,9 @@ export async function POST(request: NextRequest) {
 
     return NextResponse.json<ResourceImagesResponse>({ images });
   } catch (error) {
+    if (error instanceof Error && /sesión|aprobado|permiso|límite/i.test(error.message)) {
+      return apiAuthErrorResponse(error);
+    }
     return NextResponse.json(
       { error: error instanceof Error ? error.message : "No se pudieron resolver imágenes de recursos en Drive." },
       { status: 500 },

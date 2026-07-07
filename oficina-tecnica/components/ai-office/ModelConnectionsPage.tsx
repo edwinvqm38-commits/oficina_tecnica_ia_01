@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { authFetch } from "@/lib/api/authFetch";
 
 const API_KEY_FIELDS: { label: string; key: string; placeholder: string; envVar: string }[] = [
   { label: "Gemini (Google)",   key: "ot:apikey:gemini",      placeholder: "AIza…",                    envVar: "GEMINI_API_KEY" },
@@ -58,7 +59,7 @@ function ServerStatusSection() {
   const [status, setStatus] = useState<Record<string, boolean> | null>(null);
 
   useEffect(() => {
-    fetch("/api/llm/status").then((r) => r.json()).then(setStatus).catch(() => null);
+    authFetch("/api/llm/status").then((r) => r.json()).then(setStatus).catch(() => null);
   }, []);
 
   if (!status) return null;

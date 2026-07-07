@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { authFetch } from "@/lib/api/authFetch";
 
 type ProviderInfo = {
   id: string;
@@ -107,7 +108,7 @@ function ServerStatusSection() {
   const [status, setStatus] = useState<Record<string, boolean> | null>(null);
 
   useEffect(() => {
-    fetch("/api/llm/status")
+    authFetch("/api/llm/status")
       .then((r) => r.json())
       .then(setStatus)
       .catch(() => null);

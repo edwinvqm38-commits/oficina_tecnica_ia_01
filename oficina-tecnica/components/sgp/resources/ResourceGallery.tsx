@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState } from "react";
 import type { Recurso, ResourceFileMeta } from "@/lib/sgp/demoData";
 import { FieldLabelIcon } from "@/components/sgp/ui/FieldLabelIcon";
 import { StatusBadge } from "@/components/sgp/StatusBadge";
+import { authFetch } from "@/lib/api/authFetch";
 
 type ResourceGalleryProps = {
   rows: Recurso[];
@@ -61,6 +62,57 @@ function resourceImage(resource: Recurso, resolvedImages: Record<string, Resolve
   return resolved?.fileId ? internalDriveFileUrl(resolved.fileId) : "";
 }
 
+function SecureDriveImage({ src, alt }: { src: string; alt: string }) {
+  const [blobUrl, setBlobUrl] = useState("");
+  const [failed, setFailed] = useState(false);
+
+  useEffect(() => {
+    if (!src.startsWith("/api/drive/file/")) {
+      setBlobUrl(src);
+      setFailed(false);
+      return;
+    }
+
+    let active = true;
+    setFailed(false);
+    authFetch(src)
+      .then((response) => {
+        if (!response.ok) throw new Error("No se pudo leer imagen.");
+        return response.blob();
+      })
+      .then((blob) => {
+        if (!active) return;
+        const nextUrl = URL.createObjectURL(blob);
+        setBlobUrl((previous) => {
+          if (previous?.startsWith("blob:")) URL.revokeObjectURL(previous);
+          return nextUrl;
+        });
+      })
+      .catch(() => {
+        if (active) setFailed(true);
+      });
+
+    return () => {
+      active = false;
+      setBlobUrl((previous) => {
+        if (previous?.startsWith("blob:")) URL.revokeObjectURL(previous);
+        return "";
+      });
+    };
+  }, [src]);
+
+  if (failed || !blobUrl) {
+    return (
+      <div className="flex h-full w-full items-center justify-center text-stone-400">
+        <FieldLabelIcon icon="image" label={failed ? "Sin acceso" : "Cargando"} className="text-xs font-semibold" />
+      </div>
+    );
+  }
+
+  // eslint-disable-next-line @next/next/no-img-element
+  return <img src={blobUrl} alt={alt} className="max-h-full max-w-full object-contain" loading="lazy" />;
+}
+
 function matchesResource(resource: Recurso, query: string): boolean {
   if (!query) return true;
   const haystack = normalizeSearch(
@@ -112,7 +164,7 @@ export function ResourceGallery({ rows, loading = false, onEdit, canEdit = false
     const unresolvedCodes = missingImageCodes.filter((code) => !resolvedImages[code]);
     if (unresolvedCodes.length === 0) return;
     const controller = new AbortController();
-    fetch("/api/drive/resource-images", {
+    authFetch("/api/drive/resource-images", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ resourceCodes: unresolvedCodes }),
@@ -178,8 +230,7 @@ export function ResourceGallery({ rows, loading = false, onEdit, canEdit = false
                 >
                   <div className="flex aspect-[2/1] items-center justify-center bg-stone-50 p-3">
                     {imageUrl ? (
-                      // eslint-disable-next-line @next/next/no-img-element
-                      <img src={imageUrl} alt={resource.descripcion} className="max-h-full max-w-full object-contain" loading="lazy" />
+                      <SecureDriveImage src={imageUrl} alt={resource.descripcion} />
                     ) : (
                       <div className="flex h-full w-full items-center justify-center text-stone-400">
                         <FieldLabelIcon icon="image" label="Sin imagen" className="text-xs font-semibold" />
