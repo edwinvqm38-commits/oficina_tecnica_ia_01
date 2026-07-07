@@ -50,10 +50,10 @@ export type TechnicalProposalDraftLike = {
     documento_codigo: string;
     documento_tipo: "PT";
     revision: "REV00";
-    subcarpeta_revision: "01_REV00";
+    subcarpeta_revision: "02_PROPUESTA";
     archivo_docx: string;
     archivo_pdf: string;
-    estructura_documental_version: "cotizacion_v1";
+    estructura_documental_version: "cotizacion_drive_v2";
   };
   mode: "cliente" | "interno";
   work_status: "Borrador" | "En proceso" | "Completado";
@@ -148,7 +148,7 @@ export function buildTechnicalProposalRpcPayload(
     code,
     document_type: "PT",
     revision: draft.metadata.revision || "REV00",
-    revision_folder: draft.metadata.subcarpeta_revision || "01_REV00",
+    revision_folder: draft.metadata.subcarpeta_revision || "02_PROPUESTA",
     status: "Borrador",
     mode: draft.mode,
     work_status: draft.work_status,

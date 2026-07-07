@@ -1,5 +1,6 @@
 import { demoData, type Cotizacion } from "@/lib/sgp/demoData";
 import { readHistoricalImportQuality } from "@/lib/sgp/historicalImportQuality";
+import { normalizeCotizacionEconomicSummary } from "@/lib/sgp/quotationEconomics";
 import { supabase } from "@/lib/sgp/supabaseClient";
 
 export type QuotationsDataSource = "supabase" | "demo";
@@ -27,7 +28,7 @@ export type UpdateCotizacionOptions = {
 export class CreateCotizacionError extends Error {
   constructor(
     message: string,
-    public readonly code: "missing_required_fields" | "duplicate_code" | "supabase_error",
+    public readonly code: "missing_required_fields" | "duplicate_code" | "supabase_error" | "drive_error",
   ) {
     super(message);
     this.name = "CreateCotizacionError";
@@ -140,6 +141,7 @@ const QUOTATIONS_SELECT = `
   created_by,
   updated_by
 `;
+const MAX_CLIENT_COTIZACIONES_ROWS = 300;
 
 function hasSupabaseConfig(): boolean {
   return Boolean(process.env.NEXT_PUBLIC_SUPABASE_URL && process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY);
@@ -278,6 +280,28 @@ function removeUndefinedValues<T extends Record<string, unknown>>(payload: T): T
   return Object.fromEntries(Object.entries(payload).filter(([, value]) => value !== undefined)) as T;
 }
 
+function readEconomicSummaryFromMetadata(metadata: Record<string, unknown> | null): Cotizacion["resumen_economico"] {
+  const raw = metadata?.resumen_economico;
+  if (!Array.isArray(raw)) return [];
+  const summary: Cotizacion["resumen_economico"] = [];
+  raw.forEach((item) => {
+    if (!item || typeof item !== "object") return;
+    const record = item as Record<string, unknown>;
+    const tipoRecurso = normalizeString(record.tipo_recurso);
+    if (!tipoRecurso) return;
+    summary.push({
+      tipo_recurso: tipoRecurso,
+      base: toFiniteNumber(record.base, 0),
+      oferta: toFiniteNumber(record.oferta, 0),
+      margen_ofertado_manual:
+        record.margen_ofertado_manual === null || record.margen_ofertado_manual === undefined
+          ? null
+          : toFiniteNumber(record.margen_ofertado_manual, 0),
+    });
+  });
+  return summary;
+}
+
 function mapSupabaseCotizacion(row: SupabaseCotizacion): CotizacionWithSupabaseMetadata {
   const quality = readHistoricalImportQuality(row.metadata);
   return {
@@ -307,7 +331,7 @@ function mapSupabaseCotizacion(row: SupabaseCotizacion): CotizacionWithSupabaseM
     prioridad: mapPrioridad(normalizeString(row.prioridad)),
     avance: Number(row.avance ?? 0),
     observaciones: normalizeString(row.observaciones),
-    resumen_economico: [],
+    resumen_economico: readEconomicSummaryFromMetadata(row.metadata),
     monto: Number(row.monto ?? 0),
     flat_mensual: Boolean(row.flat_mensual),
     fecha_inicio_analisis: toIsoDate(row.fecha_inicio_analisis),
@@ -383,9 +407,19 @@ function buildCreateCotizacionPayload(row: Cotizacion, options: CreateCotizacion
     ? {
         codigo_madre: writableFields.codigo,
         revision_actual: "REV00",
-        estructura_documental_version: "cotizacion_v1",
-        documentos_principales: ["PT", "PE", "CRO", "ORG", "HGR"],
-        carpetas_base: ["00_CONTROL", "01_REV00", "03_ENVIO_CLIENTE"],
+        estructura_documental_version: "cotizacion_drive_v2",
+        documentos_principales: ["PT", "PE", "CRO", "ORG", "HGR", "ANEXOS"],
+        carpetas_base: [
+          "00_CONTROL",
+          "01_DOCUMENTOS_CLIENTE",
+          "02_PROPUESTA",
+          "03_REQUERIMIENTOS",
+          "04_COTIZACIONES_PROVEEDORES",
+          "05_ANALISIS_Y_COSTOS",
+          "06_REVISION_GERENCIA",
+          "07_ENVIO_CLIENTE",
+          "99_ARCHIVO",
+        ],
       }
     : {};
 
@@ -401,9 +435,31 @@ function buildCreateCotizacionPayload(row: Cotizacion, options: CreateCotizacion
       created_by_email: toNullableString(options.userEmail),
       initial_status: "Borrador",
       ...initialMetadata,
+      resumen_economico: normalizeCotizacionEconomicSummary(row),
       draft_fields: buildDraftFields(row),
     },
   };
+}
+
+async function createQuotationDriveMetadata(quotationCode: string): Promise<Record<string, unknown>> {
+  const response = await fetch("/api/drive/quotation-folders", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ quotationCode }),
+  });
+  const result = (await response.json().catch(() => ({}))) as {
+    drive?: Record<string, unknown>;
+    error?: string;
+  };
+
+  if (!response.ok || !result.drive) {
+    throw new CreateCotizacionError(
+      result.error ?? "No se pudo crear la estructura documental en Google Drive.",
+      "drive_error",
+    );
+  }
+
+  return result.drive;
 }
 
 function buildUpdateCotizacionPayload(
@@ -421,17 +477,18 @@ function buildUpdateCotizacionPayload(
       app_source: normalizeString(metadata.app_source) || "sgp-lite",
       updated_from: "cotizaciones_workspace",
       updated_by_email: toNullableString(options.userEmail),
+      resumen_economico: normalizeCotizacionEconomicSummary(row),
     },
   };
 }
 
-async function fetchAllCotizaciones(): Promise<SupabaseCotizacion[]> {
+async function fetchAllCotizaciones(): Promise<{ rows: SupabaseCotizacion[]; truncated: boolean }> {
   const batchSize = 1000;
   let from = 0;
   const rows: SupabaseCotizacion[] = [];
 
-  while (true) {
-    const to = from + batchSize - 1;
+  while (rows.length < MAX_CLIENT_COTIZACIONES_ROWS) {
+    const to = Math.min(from + batchSize - 1, MAX_CLIENT_COTIZACIONES_ROWS - 1);
     const { data, error } = await supabase
       .from("cotizaciones")
       .select(QUOTATIONS_SELECT)
@@ -448,7 +505,7 @@ async function fetchAllCotizaciones(): Promise<SupabaseCotizacion[]> {
     from += batchSize;
   }
 
-  return rows;
+  return { rows, truncated: rows.length >= MAX_CLIENT_COTIZACIONES_ROWS };
 }
 
 export async function createCotizacion(
@@ -478,9 +535,18 @@ export async function createCotizacion(
     throw new CreateCotizacionError(`Ya existe una cotización con el código ${payload.codigo}.`, "duplicate_code");
   }
 
+  const googleDriveMetadata = await createQuotationDriveMetadata(payload.codigo);
+  const payloadWithDriveMetadata = {
+    ...payload,
+    metadata: {
+      ...payload.metadata,
+      google_drive: googleDriveMetadata,
+    },
+  };
+
   const { data, error } = await supabase
     .from("cotizaciones")
-    .insert(payload)
+    .insert(payloadWithDriveMetadata)
     .select(QUOTATIONS_SELECT)
     .single();
 
@@ -634,12 +700,15 @@ export async function listCotizaciones(): Promise<QuotationsListResult> {
   }
 
   try {
-    const data = await fetchAllCotizaciones();
+    const { rows: data, truncated } = await fetchAllCotizaciones();
     const rows = data.map(mapSupabaseCotizacion);
     return {
       rows,
       total: rows.length,
       source: "supabase",
+      warning: truncated
+        ? `Lectura limitada a ${MAX_CLIENT_COTIZACIONES_ROWS} cotizaciones para proteger egress. Usa filtros/búsqueda para cargas grandes.`
+        : undefined,
     };
   } catch (error) {
     const rows = demoData.listCotizaciones();

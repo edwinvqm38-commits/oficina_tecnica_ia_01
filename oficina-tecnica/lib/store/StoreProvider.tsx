@@ -30,7 +30,7 @@ function uid(prefix = "id") {
 // Cap how many messages each chat thread keeps in state — applies to private
 // chats and Mesa de trabajo alike, so persisted state (localStorage and
 // `workspace_state`) and rendered history don't grow unbounded over time.
-const MAX_THREAD_MESSAGES = 200;
+const MAX_THREAD_MESSAGES = 120;
 
 type StoreActions = {
   /** True once persisted state (local or remote) has finished loading. */
@@ -49,6 +49,7 @@ type StoreActions = {
   // Chats
   appendChat: (agentId: string, message: Omit<ChatMessage, "id" | "time"> & { time?: string }) => ChatMessage;
   chatFor: (agentId: string) => ChatMessage[];
+  trimChatThread: (agentId: string, keep?: number) => void;
   /** One-time migration: copies `chats[fromKey]` into `chats[toKey]` if `toKey` is empty and `fromKey` has messages. No-op otherwise. */
   seedThreadFromLegacy: (fromKey: string, toKey: string) => void;
 
@@ -157,25 +158,6 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
     });
   }, [remoteConfigured]);
 
-  // Fallback poll: Realtime subscriptions can silently fail to deliver
-  // (publication/replication not configured, dropped connection, etc.), so
-  // periodically re-fetch the shared chats and merge in anything new.
-  // mergeChats returns the same `chats` reference when there's nothing new,
-  // so this is a no-op (no re-render, no re-save) when nothing changed.
-  useEffect(() => {
-    if (!remoteConfigured) return;
-    const interval = setInterval(() => {
-      void loadRemote().then((remote) => {
-        if (!remote) return;
-        setState((s) => {
-          const chats = mergeChats(s.chats, remote.chats);
-          return chats === s.chats ? s : { ...s, chats };
-        });
-      });
-    }, 5000);
-    return () => clearInterval(interval);
-  }, [remoteConfigured]);
-
   const notify = useCallback<StoreActions["notify"]>((n) => {
     const full: Notification = { id: uid("NTF"), ts: Date.now(), read: false, ...n };
     setState((s) => ({ ...s, notifications: [full, ...s.notifications].slice(0, 50) }));
@@ -247,6 +229,14 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
   }, [remoteConfigured]);
 
   const chatFor = useCallback<StoreActions["chatFor"]>((agentId) => state.chats[agentId] || [], [state.chats]);
+
+  const trimChatThread = useCallback<StoreActions["trimChatThread"]>((agentId, keep = 24) => {
+    setState((s) => {
+      const current = s.chats[agentId] || [];
+      if (current.length <= keep) return s;
+      return { ...s, chats: { ...s.chats, [agentId]: current.slice(-keep) } };
+    });
+  }, []);
 
   const seedThreadFromLegacy = useCallback<StoreActions["seedThreadFromLegacy"]>((fromKey, toKey) => {
     setState((s) => {
@@ -374,6 +364,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
       addCustomSkill,
       appendChat,
       chatFor,
+      trimChatThread,
       seedThreadFromLegacy,
       proposeKnowledge,
       validateKnowledge,
@@ -398,6 +389,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
       addCustomSkill,
       appendChat,
       chatFor,
+      trimChatThread,
       seedThreadFromLegacy,
       proposeKnowledge,
       validateKnowledge,

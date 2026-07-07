@@ -1,15 +1,19 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { useSearchParams } from "next/navigation";
 import { useAuth } from "@/components/sgp/auth/AuthContext";
 import { ResourceFormModal } from "@/components/sgp/resources/ResourceFormModal";
+import { ResourceGallery } from "@/components/sgp/resources/ResourceGallery";
 import { ResourcesTable } from "@/components/sgp/resources/ResourcesTable";
 import { demoData, type Recurso, type ResourceFileMeta } from "@/lib/sgp/demoData";
 import { getModulePermissions, type ModulePermissions } from "@/lib/sgp/modulePermissionsRepository";
 import { createProposalLogoDraft, readProposalLogos, writeProposalLogos, type ProposalLogo, type ProposalLogoEntityType } from "@/lib/sgp/proposalLogos";
 import {
   createRecurso,
+  getNextResourceDraftCode,
   listAllRecursos,
+  listRecursos,
   listRecursosFilterOptions,
   uploadResourceFile,
   createResourceFileSignedUrl,
@@ -79,46 +83,7 @@ function safeUuid(): string {
   return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
 }
 
-function normalizeSearchText(value: string): string {
-  return value
-    .normalize("NFD")
-    .replace(/[\u0300-\u036f]/g, "")
-    .toLowerCase()
-    .trim();
-}
-
-function includesFilter(value: string, query: string): boolean {
-  const normalizedQuery = normalizeSearchText(query);
-  if (!normalizedQuery) return true;
-  return normalizeSearchText(value).includes(normalizedQuery);
-}
-
-function sortResources(rows: Recurso[], sortBy: RecursoSortField, sortDirection: RecursoSortDirection): Recurso[] {
-  const keyMap: Record<RecursoSortField, keyof Recurso> = {
-    codigo_recurso: "codigo_recurso",
-    descripcion: "descripcion",
-    tipo_recurso_nombre: "tipo_recurso",
-    precio_unitario_ref: "precio_unitario_ref",
-    estado: "estado",
-    proveedor_nombre: "proveedor",
-    marca_nombre: "marca",
-    fecha_actualizacion: "fecha_actualizacion",
-  };
-  const key = keyMap[sortBy];
-  const direction = sortDirection === "desc" ? -1 : 1;
-
-  return [...rows].sort((a, b) => {
-    const av = a[key];
-    const bv = b[key];
-    const an = Number(av);
-    const bn = Number(bv);
-    if (Number.isFinite(an) && Number.isFinite(bn)) return (an - bn) * direction;
-    return String(av ?? "").localeCompare(String(bv ?? ""), "es", { sensitivity: "base" }) * direction;
-  });
-}
-
-function emptyResourceDraft(): Recurso {
-  const code = demoData.nextResourceDraftCode();
+function emptyResourceDraft(code: string): Recurso {
   return {
     id: `rec-${safeUuid()}`,
     codigo_recurso: code,
@@ -142,19 +107,24 @@ function emptyResourceDraft(): Recurso {
     resourceFiles: {
       fichaTecnica: null,
       imagen: null,
+      cotizacion: null,
       fichasTecnicas: [],
       imagenes: [],
+      cotizaciones: [],
       archivos: [],
     },
   };
 }
 
 export default function RecursosPage() {
+  const searchParams = useSearchParams();
   const { profile, user } = useAuth();
   const [resources, setResources] = useState<Recurso[]>([]);
+  const [totalResources, setTotalResources] = useState(0);
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState<(typeof PAGE_SIZE_OPTIONS)[number]>(10);
   const [filters, setFilters] = useState<RecursosColumnFilters>(EMPTY_FILTERS);
+  const [debouncedFilters, setDebouncedFilters] = useState<RecursosColumnFilters>(EMPTY_FILTERS);
   const [sortBy, setSortBy] = useState<RecursoSortField>("codigo_recurso");
   const [sortDirection, setSortDirection] = useState<RecursoSortDirection>("asc");
   const [modalOpen, setModalOpen] = useState(false);
@@ -166,8 +136,13 @@ export default function RecursosPage() {
   const [refreshKey, setRefreshKey] = useState(0);
   const [permissionsLoading, setPermissionsLoading] = useState(true);
   const [modulePermissions, setModulePermissions] = useState<ModulePermissions | null>(null);
-  const [activeResourceView, setActiveResourceView] = useState<"resources" | "logos">("resources");
+  const [activeResourceView, setActiveResourceView] = useState<"resources" | "gallery" | "logos">("resources");
   const [logos, setLogos] = useState<ProposalLogo[]>([]);
+  const [galleryResources, setGalleryResources] = useState<Recurso[]>([]);
+  const [galleryLoading, setGalleryLoading] = useState(false);
+  const [galleryLoaded, setGalleryLoaded] = useState(false);
+  const restoredResourceCodeRef = useRef<string | null>(null);
+  const openedResourceCodeRef = useRef<string | null>(null);
 
   const catalogs = useMemo(() => demoData.listCatalogSummary(), []);
   const currentUserEmail = (profile.email ?? user.email ?? "").trim().toLowerCase();
@@ -197,32 +172,11 @@ export default function RecursosPage() {
     (modulePermissions?.can_edit === true || modulePermissions?.can_upload_files === true || isElevatedResourceUser);
   const canOpenResourceModal = canEditResource || canManageResourceDocuments;
   const isEditingExistingResource = editing ? resources.some((item) => item.id === editing.id) : false;
-  const filteredResources = useMemo(() => {
-    const filtered = resources.filter((row) => {
-      if (!includesFilter(row.codigo_recurso, filters.codigoRecurso)) return false;
-      if (!includesFilter(row.codigo_eka, filters.codigoEka)) return false;
-      if (!includesFilter(row.codigo_fabricante, filters.codigoFabricante)) return false;
-      if (!includesFilter(row.descripcion, filters.descripcion)) return false;
-      if (!includesFilter(row.proveedor, filters.proveedor)) return false;
-      if (!includesFilter(row.marca, filters.marca)) return false;
-      if (!includesFilter(row.modelo, filters.modelo)) return false;
-      if (filters.tipoRecurso && row.tipo_recurso !== filters.tipoRecurso) return false;
-      if (filters.estado && row.estado !== filters.estado) return false;
-      if (filters.moneda && row.moneda !== filters.moneda) return false;
-      return true;
-    });
-
-    return sortResources(filtered, sortBy, sortDirection);
-  }, [filters, resources, sortBy, sortDirection]);
-  const total = filteredResources.length;
+  const total = totalResources;
   const totalPages = Math.max(1, Math.ceil(total / pageSize));
   const rangeStart = total === 0 ? 0 : (page - 1) * pageSize + 1;
   const rangeEnd = Math.min(total, page * pageSize);
-  const pagedResources = useMemo(() => {
-    const safePage = Math.min(page, totalPages);
-    const start = (safePage - 1) * pageSize;
-    return filteredResources.slice(start, start + pageSize);
-  }, [filteredResources, page, pageSize, totalPages]);
+  const pagedResources = resources;
 
   useEffect(() => {
     let active = true;
@@ -261,6 +215,20 @@ export default function RecursosPage() {
   }, [currentUserEmail, modulePermissions]);
 
   useEffect(() => {
+    const timer = window.setTimeout(() => setDebouncedFilters(filters), 350);
+    return () => window.clearTimeout(timer);
+  }, [filters]);
+
+  useEffect(() => {
+    const resourceCode = searchParams.get("resourceCode")?.trim();
+    if (!resourceCode || restoredResourceCodeRef.current === resourceCode) return;
+    restoredResourceCodeRef.current = resourceCode;
+    setActiveResourceView("resources");
+    setPage(1);
+    setFilters((prev) => ({ ...prev, codigoRecurso: resourceCode }));
+  }, [searchParams]);
+
+  useEffect(() => {
     let active = true;
     listRecursosFilterOptions().then((result) => {
       if (!active) return;
@@ -276,10 +244,17 @@ export default function RecursosPage() {
     let active = true;
     setLoading(true);
 
-    listAllRecursos()
+    listRecursos({
+      ...debouncedFilters,
+      sortBy,
+      sortDirection,
+      page,
+      pageSize,
+    })
       .then((result) => {
         if (!active) return;
         setResources(result.rows);
+        setTotalResources(result.total);
         setDataSource(result.source);
         setWarning(result.warning ?? null);
       })
@@ -287,6 +262,7 @@ export default function RecursosPage() {
         if (!active) return;
         const fallbackRows = demoData.listRecursos();
         setResources(fallbackRows);
+        setTotalResources(fallbackRows.length);
         setDataSource("demo");
         setWarning(
           error instanceof Error
@@ -301,11 +277,52 @@ export default function RecursosPage() {
     return () => {
       active = false;
     };
-  }, [refreshKey]);
+  }, [debouncedFilters, page, pageSize, refreshKey, sortBy, sortDirection]);
+
+  useEffect(() => {
+    const resourceCode = searchParams.get("resourceCode")?.trim();
+    if (!resourceCode || loading || !resources.length || modalOpen || openedResourceCodeRef.current === resourceCode) return;
+    const target = resources.find((item) => item.codigo_recurso.toLowerCase() === resourceCode.toLowerCase());
+    if (target && canOpenResourceModal) {
+      openedResourceCodeRef.current = resourceCode;
+      openEdit(target);
+    }
+  }, [canOpenResourceModal, loading, modalOpen, resources, searchParams]);
 
   useEffect(() => {
     setLogos(readProposalLogos());
   }, []);
+
+  useEffect(() => {
+    if (activeResourceView !== "gallery" || galleryLoaded) return;
+    let active = true;
+    setGalleryLoading(true);
+    listAllRecursos()
+      .then((result) => {
+        if (!active) return;
+        setGalleryResources(result.rows);
+        setGalleryLoaded(true);
+        if (result.warning) setWarning(result.warning);
+      })
+      .catch((error: unknown) => {
+        if (!active) return;
+        const fallbackRows = demoData.listRecursos();
+        setGalleryResources(fallbackRows);
+        setGalleryLoaded(true);
+        setWarning(
+          error instanceof Error
+            ? `No se pudo cargar galería de recursos desde Supabase: ${error.message}. Se usa data demo local.`
+            : "No se pudo cargar galería de recursos desde Supabase. Se usa data demo local.",
+        );
+      })
+      .finally(() => {
+        if (active) setGalleryLoading(false);
+      });
+
+    return () => {
+      active = false;
+    };
+  }, [activeResourceView, galleryLoaded]);
 
   function persistLogos(nextLogos: ProposalLogo[]) {
     setLogos(nextLogos);
@@ -343,12 +360,14 @@ export default function RecursosPage() {
     setPage(1);
   }
 
-  function openNew() {
+  async function openNew() {
     if (!canCreateResource) {
       setWarning("Crear recursos requiere Supabase y permiso can_create en el módulo Recursos.");
       return;
     }
-    setEditing(emptyResourceDraft());
+    setWarning("Calculando siguiente código de recurso...");
+    const code = await getNextResourceDraftCode();
+    setEditing(emptyResourceDraft(code));
     setModalOpen(true);
     setWarning(null);
   }
@@ -382,11 +401,11 @@ export default function RecursosPage() {
     setSavingResource(true);
     try {
       const saved = exists ? await updateRecurso(value.id, value) : await createRecurso(value);
-      setResources((prev) => (exists ? prev.map((item) => (item.id === saved.id ? saved : item)) : [saved, ...prev]));
       setWarning(exists ? `Recurso ${saved.codigo_recurso} actualizado.` : `Recurso ${saved.codigo_recurso} creado.`);
       setModalOpen(false);
       setEditing(null);
       setRefreshKey((prev) => prev + 1);
+      setGalleryLoaded(false);
       void listRecursosFilterOptions().then((result) => setFilterOptions(result));
     } catch (error) {
       if (error instanceof RecursoWriteError) {
@@ -403,9 +422,10 @@ export default function RecursosPage() {
     if (!canManageResourceDocuments) {
       throw new Error("Subir archivos requiere permiso can_upload_files o can_edit en Recursos.");
     }
-    if (!isEditingExistingResource) {
-      throw new Error("Guarda el recurso antes de subir archivos reales.");
+    if (!isEditingExistingResource && !canCreateResource) {
+      throw new Error("Crear recursos con archivos requiere permiso can_create en Recursos.");
     }
+    if (!resourceId.trim()) throw new Error("Completa el código del recurso antes de subir archivos.");
     return uploadResourceFile(resourceId, category, file);
   }
 
@@ -432,6 +452,13 @@ export default function RecursosPage() {
             className={`h-7 rounded-md px-3 ${activeResourceView === "resources" ? "bg-teal-700 text-white" : "text-stone-600 hover:bg-stone-100"}`}
           >
             Recursos
+          </button>
+          <button
+            type="button"
+            onClick={() => setActiveResourceView("gallery")}
+            className={`h-7 rounded-md px-3 ${activeResourceView === "gallery" ? "bg-teal-700 text-white" : "text-stone-600 hover:bg-stone-100"}`}
+          >
+            Galería
           </button>
           <button
             type="button"
@@ -513,6 +540,8 @@ export default function RecursosPage() {
             </tbody>
           </table>
         </div>
+      ) : activeResourceView === "gallery" ? (
+        <ResourceGallery rows={galleryResources} loading={galleryLoading} onEdit={openEdit} canEdit={canOpenResourceModal} />
       ) : loading || permissionsLoading ? (
         <div className="rounded-xl border border-border bg-panel p-8 text-center text-xs text-muted">
           {permissionsLoading ? "Cargando permisos..." : "Cargando recursos..."}
@@ -609,7 +638,7 @@ export default function RecursosPage() {
         onSave={saveResource}
         detailsReadOnly={isEditingExistingResource && !canEditResource}
         filesReadOnly={!canManageResourceDocuments}
-        allowFilePicker={dataSource === "supabase" && isEditingExistingResource && canManageResourceDocuments}
+        allowFilePicker={dataSource === "supabase" && canManageResourceDocuments && (isEditingExistingResource || canCreateResource)}
         isSaving={savingResource}
         onUploadFile={handleUploadResourceFile}
         onOpenFile={handleOpenResourceFile}

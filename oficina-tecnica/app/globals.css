@@ -501,6 +501,8 @@ svg { display: block; flex-shrink: 0; }
 .agent-avatar--ic  { background: #1e293b; color: #fff; }
 .agent-avatar--pm  { background: #374151; color: #fff; }
 .agent-avatar--ie  { background: var(--slate-bg); color: var(--slate-text); border: 1px dashed var(--slate-border); }
+.agent-avatar--cd  { background: #0f766e; color: #fff; }
+.agent-avatar--ti  { background: #475569; color: #fff; }
 .agent-avatar--future { background: var(--bg-subtle); color: var(--t3); border: 1px dashed var(--border); }
 
 /* confidence bar */

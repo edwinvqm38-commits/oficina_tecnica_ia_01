@@ -94,7 +94,7 @@ create table if not exists public.technical_proposals (
   code text not null unique,
   document_type text not null default 'PT',
   revision text not null default 'REV00',
-  revision_folder text not null default '01_REV00',
+  revision_folder text not null default '02_PROPUESTA',
   status text not null default 'Borrador',
   mode text not null default 'cliente',
   work_status text not null default 'Borrador',
@@ -742,7 +742,7 @@ comment on column public.entity_logos.entity_key is
   'Clave normalizada de entidad para reutilizar el logo entre documentos.';
 
 comment on column public.entity_logos.storage_path is
-  'Ruta futura en Supabase Storage. Debe preferirse sobre logo_url cuando Storage este activo.';
+  'Ruta o identificador externo opcional del logo. Para archivos nuevos debe preferirse Google Drive y guardar aqui solo referencia/metadata.';
 
 comment on table public.technical_proposals is
   'Cabecera documental de Propuesta Tecnica por cotizacion y revision.';
@@ -778,7 +778,7 @@ comment on table public.technical_proposal_files is
   'Registro de imagenes, referencias y exportaciones asociadas a una Propuesta Tecnica.';
 
 comment on column public.technical_proposal_files.storage_path is
-  'Ruta futura en Supabase Storage para imagenes o exportaciones.';
+  'Ruta o identificador externo opcional. Para archivos nuevos debe preferirse Google Drive y guardar aqui solo referencia/metadata.';
 
 comment on table public.technical_proposal_events is
   'Eventos de trazabilidad operativa de la Propuesta Tecnica.';

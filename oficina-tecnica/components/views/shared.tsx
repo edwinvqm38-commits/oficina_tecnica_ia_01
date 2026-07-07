@@ -53,5 +53,5 @@ export function ProgressFill({ status, progress }: { status: ProjectStatus; prog
 }
 
 export function agentAvatarClass(agentId: string) {
-  return ["gg", "ic", "pm", "ie"].includes(agentId) ? `agent-avatar--${agentId}` : "agent-avatar--future";
+  return ["gg", "ic", "pm", "ie", "cd", "ti"].includes(agentId) ? `agent-avatar--${agentId}` : "agent-avatar--future";
 }

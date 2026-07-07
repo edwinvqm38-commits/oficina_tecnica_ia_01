@@ -6,7 +6,7 @@ import { supabase } from "@/lib/supabaseClient";
 
 export default function LoginPage() {
   const router = useRouter();
-  const [tab, setTab] = useState<"login" | "register">("login");
+  const [tab, setTab] = useState<"login" | "register" | "recover">("login");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [fullName, setFullName] = useState("");
@@ -26,6 +26,19 @@ export default function LoginPage() {
     e.preventDefault();
     setError(""); setSuccess("");
     setLoading(true);
+
+    if (tab === "recover") {
+      const { error: authError } = await supabase.auth.resetPasswordForEmail(email.trim(), {
+        redirectTo: `${window.location.origin}/auth/update-password`,
+      });
+      if (authError) {
+        setError(authError.message);
+      } else {
+        setSuccess("Te enviamos un correo para cambiar tu contraseña. Revisa tu bandeja y spam.");
+      }
+      setLoading(false);
+      return;
+    }
 
     if (tab === "register") {
       // Sign up — un perfil "pending" se crea automáticamente (trigger en
@@ -62,6 +75,15 @@ export default function LoginPage() {
       options: { redirectTo: `${window.location.origin}/auth/callback` },
     });
   }
+
+  function switchTab(nextTab: "login" | "register" | "recover") {
+    setTab(nextTab);
+    setError("");
+    setSuccess("");
+    if (nextTab !== "register") setFullName("");
+  }
+
+  const isRecover = tab === "recover";
 
   return (
     <div
@@ -270,7 +292,7 @@ export default function LoginPage() {
               <button
                 key={t}
                 type="button"
-                onClick={() => { setTab(t); setError(""); setSuccess(""); }}
+                onClick={() => switchTab(t)}
                 style={{
                   flex: 1, padding: "10px 16px", fontSize: 13, fontWeight: 600, border: "none", cursor: "pointer",
                   background: tab === t ? "var(--blue)" : "var(--bg-card)",
@@ -278,7 +300,7 @@ export default function LoginPage() {
                   fontFamily: "var(--font)",
                 }}
               >
-                {t === "login" ? "Iniciar sesión" : "Solicitar acceso"}
+              {t === "login" ? "Iniciar sesión" : "Solicitar acceso"}
               </button>
             ))}
           </div>
@@ -286,52 +308,56 @@ export default function LoginPage() {
           {/* Title */}
           <div style={{ marginBottom: 24 }}>
             <h1 style={{ color: "var(--t1)", fontSize: 22, fontWeight: 600, fontFamily: "var(--font)", margin: 0, marginBottom: 6, letterSpacing: "-0.02em" }}>
-              {tab === "login" ? "Bienvenido" : "Solicitar acceso"}
+              {isRecover ? "Recuperar contraseña" : tab === "login" ? "Bienvenido" : "Solicitar acceso"}
             </h1>
             <p style={{ color: "var(--t3)", fontSize: 13, margin: 0 }}>
-              {tab === "login" ? "Ingresa tus credenciales para acceder" : "El administrador validará tu solicitud"}
+              {isRecover ? "Te enviaremos un enlace seguro a tu correo" : tab === "login" ? "Ingresa tus credenciales para acceder" : "El administrador validará tu solicitud"}
             </p>
-            <p style={{ color: "var(--t4)", fontSize: 11.5, margin: "8px 0 0", lineHeight: 1.5 }}>
-              ¿Primera vez? Puedes registrarte con tu cuenta de Gmail. Tu acceso quedará <strong>pendiente de aprobación</strong> por el administrador y te avisaremos en cuanto puedas ingresar.
-            </p>
+            {!isRecover ? (
+              <p style={{ color: "var(--t4)", fontSize: 11.5, margin: "8px 0 0", lineHeight: 1.5 }}>
+                ¿Primera vez? Puedes registrarte con tu cuenta de Gmail. Tu acceso quedará <strong>pendiente de aprobación</strong> por el administrador y te avisaremos en cuanto puedas ingresar.
+              </p>
+            ) : null}
           </div>
 
           {/* Google sign-in */}
-          <button
-            type="button"
-            onClick={handleGoogleSignIn}
-            style={{
-              width: "100%",
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "center",
-              gap: 10,
-              border: "1px solid var(--border)",
-              background: "var(--bg-card)",
-              color: "var(--t1)",
-              borderRadius: 8,
-              padding: "10px 16px",
-              fontSize: 14,
-              fontWeight: 600,
-              fontFamily: "var(--font)",
-              cursor: "pointer",
-              marginBottom: 18,
-            }}
-          >
-            <svg width="18" height="18" viewBox="0 0 48 48" aria-hidden="true">
-              <path fill="#FFC107" d="M43.611 20.083H42V20H24v8h11.303c-1.649 4.657-6.08 8-11.303 8-6.627 0-12-5.373-12-12s5.373-12 12-12c3.059 0 5.842 1.154 7.961 3.039l5.657-5.657C34.046 6.053 29.268 4 24 4 12.955 4 4 12.955 4 24s8.955 20 20 20 20-8.955 20-20c0-1.341-.138-2.65-.389-3.917z" />
-              <path fill="#FF3D00" d="M6.306 14.691l6.571 4.819C14.655 15.108 18.961 12 24 12c3.059 0 5.842 1.154 7.961 3.039l5.657-5.657C34.046 6.053 29.268 4 24 4 16.318 4 9.656 8.337 6.306 14.691z" />
-              <path fill="#4CAF50" d="M24 44c5.166 0 9.86-1.977 13.409-5.192l-6.19-5.238C29.211 35.091 26.715 36 24 36c-5.202 0-9.619-3.317-11.283-7.946l-6.522 5.025C9.505 39.556 16.227 44 24 44z" />
-              <path fill="#1976D2" d="M43.611 20.083H42V20H24v8h11.303a12.04 12.04 0 0 1-4.087 5.571l.003-.002 6.19 5.238C36.971 39.205 44 34 44 24c0-1.341-.138-2.65-.389-3.917z" />
-            </svg>
-            Continuar con Google
-          </button>
+          {!isRecover ? (
+            <button
+              type="button"
+              onClick={handleGoogleSignIn}
+              style={{
+                width: "100%",
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                gap: 10,
+                border: "1px solid var(--border)",
+                background: "var(--bg-card)",
+                color: "var(--t1)",
+                borderRadius: 8,
+                padding: "10px 16px",
+                fontSize: 14,
+                fontWeight: 600,
+                fontFamily: "var(--font)",
+                cursor: "pointer",
+                marginBottom: 18,
+              }}
+            >
+              <svg width="18" height="18" viewBox="0 0 48 48" aria-hidden="true">
+                <path fill="#FFC107" d="M43.611 20.083H42V20H24v8h11.303c-1.649 4.657-6.08 8-11.303 8-6.627 0-12-5.373-12-12s5.373-12 12-12c3.059 0 5.842 1.154 7.961 3.039l5.657-5.657C34.046 6.053 29.268 4 24 4 12.955 4 4 12.955 4 24s8.955 20 20 20 20-8.955 20-20c0-1.341-.138-2.65-.389-3.917z" />
+                <path fill="#FF3D00" d="M6.306 14.691l6.571 4.819C14.655 15.108 18.961 12 24 12c3.059 0 5.842 1.154 7.961 3.039l5.657-5.657C34.046 6.053 29.268 4 24 4 16.318 4 9.656 8.337 6.306 14.691z" />
+                <path fill="#4CAF50" d="M24 44c5.166 0 9.86-1.977 13.409-5.192l-6.19-5.238C29.211 35.091 26.715 36 24 36c-5.202 0-9.619-3.317-11.283-7.946l-6.522 5.025C9.505 39.556 16.227 44 24 44z" />
+                <path fill="#1976D2" d="M43.611 20.083H42V20H24v8h11.303a12.04 12.04 0 0 1-4.087 5.571l.003-.002 6.19 5.238C36.971 39.205 44 34 44 24c0-1.341-.138-2.65-.389-3.917z" />
+              </svg>
+              Continuar con Google
+            </button>
+          ) : null}
 
-          <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 18 }}>
+          {!isRecover ? <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 18 }}>
             <div style={{ flex: 1, height: 1, background: "var(--border)" }} />
             <span style={{ fontSize: 11, color: "var(--t3)", textTransform: "uppercase", letterSpacing: "0.05em" }}>o con tu correo</span>
             <div style={{ flex: 1, height: 1, background: "var(--border)" }} />
-          </div>
+          </div> : null}
 
           {/* Form */}
           <form onSubmit={handleSubmit} style={{ display: "flex", flexDirection: "column", gap: 16 }}>
@@ -398,7 +424,7 @@ export default function LoginPage() {
             </div>
 
             {/* Password */}
-            <div>
+            {!isRecover ? <div>
               <label
                 htmlFor="password"
                 style={{
@@ -466,7 +492,14 @@ export default function LoginPage() {
                   {showPassword ? "⊙" : "○"}
                 </button>
               </div>
-            </div>
+              {tab === "login" ? (
+                <div style={{ marginTop: 8, textAlign: "right" }}>
+                  <button type="button" onClick={() => switchTab("recover")} style={{ background: "none", border: "none", color: "var(--blue)", fontSize: 11, cursor: "pointer", padding: 0 }}>
+                    Olvidé mi contraseña
+                  </button>
+                </div>
+              ) : null}
+            </div> : null}
 
             {/* Success / Error */}
             {success && (
@@ -519,14 +552,14 @@ export default function LoginPage() {
                   e.currentTarget.style.background = "var(--blue)";
               }}
             >
-              {loading ? (tab === "register" ? "Enviando…" : "Ingresando...") : (tab === "register" ? "Enviar solicitud" : "Ingresar")}
+              {loading ? (tab === "register" ? "Enviando…" : isRecover ? "Enviando..." : "Ingresando...") : (tab === "register" ? "Enviar solicitud" : isRecover ? "Enviar enlace de recuperación" : "Ingresar")}
             </button>
           </form>
 
           {/* Footer */}
           <p style={{ marginTop: 24, textAlign: "center", color: "var(--t4)", fontSize: 11, lineHeight: 1.5 }}>
             {tab === "login" ? "¿No tienes cuenta? " : "¿Ya tienes cuenta? "}
-            <button type="button" onClick={() => { setTab(tab === "login" ? "register" : "login"); setError(""); setSuccess(""); }} style={{ background: "none", border: "none", color: "var(--blue)", fontSize: 11, cursor: "pointer", padding: 0 }}>
+            <button type="button" onClick={() => switchTab(tab === "login" ? "register" : "login")} style={{ background: "none", border: "none", color: "var(--blue)", fontSize: 11, cursor: "pointer", padding: 0 }}>
               {tab === "login" ? "Solicitar acceso" : "Iniciar sesión"}
             </button>
           </p>

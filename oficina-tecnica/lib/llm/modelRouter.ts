@@ -14,9 +14,34 @@ export type RoutingDecision = {
 const TECHNICAL_KEYWORDS = ["presupuesto", "costo", "metrado", "ingeniería", "estructura", "análisis", "calcul", "plazo", "cronograma", "especificación", "requerimiento", "cotización", "oferta"];
 const ANALYTICAL_KEYWORDS = ["comparar", "evaluar", "decidir", "riesgo", "estrategia", "porqué", "diagnóstico", "tendencia", "histórico", "desviación", "proyección"];
 const GENERATIVE_KEYWORDS = ["redacta", "escribe", "genera", "crea", "informe", "documento", "resumen ejecutivo", "carta", "acta", "propuesta"];
+const APP_GENERATION_KEYWORDS = [
+  "html-app",
+  "aplicacion",
+  "aplicación",
+  "app ",
+  "simulador",
+  "calculadora",
+  "dashboard interactivo",
+  "prototipo",
+  "replica",
+  "réplica",
+  "mejoralo",
+  "mejóralo",
+  "similar al html",
+  "descargable",
+  "ventana completa",
+  "probarlo en la mesa",
+  "probar en la mesa",
+];
+
+function isAppGenerationRequest(text: string): boolean {
+  const lower = text.toLowerCase();
+  return APP_GENERATION_KEYWORDS.some((k) => lower.includes(k)) || /\.html\b/i.test(text) || /```html/i.test(text);
+}
 
 export function classifyRequest(text: string): RequestComplexity {
   const lower = text.toLowerCase();
+  if (isAppGenerationRequest(text)) return "generative";
   if (GENERATIVE_KEYWORDS.some((k) => lower.includes(k))) return "generative";
   if (ANALYTICAL_KEYWORDS.some((k) => lower.includes(k))) return "analytical";
   if (TECHNICAL_KEYWORDS.some((k) => lower.includes(k))) return "technical";
@@ -49,14 +74,17 @@ function config(provider: LLMProvider, model: string): ModelConfig {
 export function routeRequest(text: string): RoutingDecision {
   const complexity = classifyRequest(text);
   const isDeep = complexity === "analytical" || complexity === "generative" || isDataAccessQuestion(text) || isLogTableQuestion(text);
+  const appGeneration = isAppGenerationRequest(text);
 
   if (isDeep) {
-    const model = complexity === "generative" ? "gpt-4o" : "gemini-pro-latest";
-    const provider: LLMProvider = complexity === "generative" ? "openai" : "gemini";
+    const model = appGeneration || complexity !== "generative" ? "gemini-pro-latest" : "gpt-4o";
+    const provider: LLMProvider = appGeneration || complexity !== "generative" ? "gemini" : "openai";
     return {
       config: config(provider, model),
       complexity,
-      reason: "Auto: consulta compleja -> modelo de mayor razonamiento",
+      reason: appGeneration
+        ? "Auto: app HTML/simulador -> modelo largo con mejor tolerancia de salida"
+        : "Auto: consulta compleja -> modelo de mayor razonamiento",
       modelLabel: model,
     };
   }

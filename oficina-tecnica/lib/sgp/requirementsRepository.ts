@@ -93,6 +93,7 @@ const REQUIREMENTS_SELECT = `
   created_at,
   updated_at
 `;
+const MAX_CLIENT_REQUERIMIENTOS_ROWS = 300;
 
 function hasSupabaseConfig(): boolean {
   return Boolean(process.env.NEXT_PUBLIC_SUPABASE_URL && process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY);
@@ -179,13 +180,13 @@ function mapSupabaseRequerimiento(row: SupabaseRequerimiento): Requerimiento & {
   };
 }
 
-async function fetchAllRequerimientos(): Promise<SupabaseRequerimiento[]> {
+async function fetchAllRequerimientos(): Promise<{ rows: SupabaseRequerimiento[]; truncated: boolean }> {
   const batchSize = 1000;
   let from = 0;
   const rows: SupabaseRequerimiento[] = [];
 
-  while (true) {
-    const to = from + batchSize - 1;
+  while (rows.length < MAX_CLIENT_REQUERIMIENTOS_ROWS) {
+    const to = Math.min(from + batchSize - 1, MAX_CLIENT_REQUERIMIENTOS_ROWS - 1);
     const { data, error } = await supabase
       .from("requerimientos")
       .select(REQUIREMENTS_SELECT)
@@ -200,7 +201,7 @@ async function fetchAllRequerimientos(): Promise<SupabaseRequerimiento[]> {
     from += batchSize;
   }
 
-  return rows;
+  return { rows, truncated: rows.length >= MAX_CLIENT_REQUERIMIENTOS_ROWS };
 }
 
 /**
@@ -561,12 +562,15 @@ export async function listRequerimientos(): Promise<RequirementsListResult> {
   }
 
   try {
-    const data = await fetchAllRequerimientos();
+    const { rows: data, truncated } = await fetchAllRequerimientos();
     const rows = data.map(mapSupabaseRequerimiento);
     return {
       rows,
       total: rows.length,
       source: "supabase",
+      warning: truncated
+        ? `Lectura limitada a ${MAX_CLIENT_REQUERIMIENTOS_ROWS} requerimientos para proteger egress. Usa filtros/búsqueda para cargas grandes.`
+        : undefined,
     };
   } catch (error) {
     const rows = demoData.listRequerimientos();

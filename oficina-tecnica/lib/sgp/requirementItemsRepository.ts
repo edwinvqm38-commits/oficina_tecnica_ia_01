@@ -213,6 +213,7 @@ const QUOTATION_RELATION_SELECT = `
   unidad_trabajo_nombre,
   metadata
 `;
+const MAX_GLOBAL_REQUIREMENT_ITEMS_ROWS = 500;
 
 function hasSupabaseConfig(): boolean {
   return Boolean(process.env.NEXT_PUBLIC_SUPABASE_URL && process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY);
@@ -363,13 +364,13 @@ function mapSupabaseItem(row: SupabaseRequirementItem): DetalleRequerimientoItem
   };
 }
 
-async function fetchAllRows<T>(table: string, select: string, orderBy: string): Promise<T[]> {
+async function fetchAllRows<T>(table: string, select: string, orderBy: string, maxRows = MAX_GLOBAL_REQUIREMENT_ITEMS_ROWS): Promise<T[]> {
   const batchSize = 1000;
   let from = 0;
   const rows: T[] = [];
 
-  while (true) {
-    const to = from + batchSize - 1;
+  while (rows.length < maxRows) {
+    const to = Math.min(from + batchSize - 1, maxRows - 1);
     const { data, error } = await supabase
       .from(table)
       .select(select)
@@ -380,7 +381,7 @@ async function fetchAllRows<T>(table: string, select: string, orderBy: string): 
 
     const chunk = (data ?? []) as T[];
     rows.push(...chunk);
-    if (chunk.length < batchSize) break;
+    if (chunk.length < batchSize || rows.length >= maxRows) break;
     from += batchSize;
   }
 

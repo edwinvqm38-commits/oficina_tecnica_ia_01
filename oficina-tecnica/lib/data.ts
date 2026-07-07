@@ -21,6 +21,8 @@ export const AGENTS: Agent[] = [
   { id: "ic", name: "Ing. de Costos", initials: "IC", role: "Costos y Presupuestos", type: "agent", status: "active", skillCount: 1, tasks: 2, confidence: 87, focus: "Análisis de desviaciones de costo, valorizaciones y adicionales de obra", currentTask: "Evaluando desviación +23% — SET Tintaya 138kV" },
   { id: "pm", name: "Project Management", initials: "PM", role: "Gestión de Proyectos", type: "agent", status: "active", skillCount: 2, tasks: 1, confidence: 74, focus: "Cronograma, riesgos y restricciones de proyectos de ingeniería", currentTask: "Análisis de riesgo de retraso — PRY-001 y PRY-003" },
   { id: "ie", name: "Ing. Eléctrico", initials: "IE", role: "Ingeniería Eléctrica", type: "agent", status: "active", skillCount: 1, tasks: 1, confidence: 81, focus: "Normas eléctricas CNE/IEC/IEEE, diseño de subestaciones y tendido de cables", currentTask: "Revisando criterios SET 138kV — PRY-001" },
+  { id: "cd", name: "Control Documentario", initials: "CD", role: "Gestión documental y trazabilidad", type: "agent", status: "active", skillCount: 1, tasks: 0, confidence: 78, focus: "Codificación documental, control de versiones, registros, hilos de correo y trazabilidad de entregables", currentTask: "Vigilando que cotizaciones, RQ y documentos tengan código, versión y registro asociado" },
+  { id: "ti", name: "Ing. de Sistemas", initials: "TI", role: "Soporte TI y arquitectura web", type: "agent", status: "active", skillCount: 1, tasks: 0, confidence: 76, focus: "Diagnóstico de errores, arquitectura de la app, performance, Supabase, integraciones y prompts técnicos para Codex", currentTask: "Monitoreando riesgos técnicos de la aplicación y proponiendo mejoras de implementación" },
   { id: "ic2", name: "Ing. Civil", initials: "IC", role: "Ingeniería Civil", type: "agent-future", status: "future", skillCount: 0, tasks: 0, confidence: null, focus: "Diseño estructural y civil", currentTask: "—" },
   { id: "im", name: "Ing. Mecánico", initials: "IM", role: "Ingeniería Mecánica", type: "agent-future", status: "future", skillCount: 0, tasks: 0, confidence: null, focus: "Diseño mecánico y de instalaciones", currentTask: "—" },
 ];
@@ -28,7 +30,11 @@ export const AGENTS: Agent[] = [
 export const CONNECTIONS: AgentConnection[] = [
   { id: "c1", from: "gg", to: "ic", kind: "supervision", label: "Supervisión directa y aprobación" },
   { id: "c2", from: "gg", to: "pm", kind: "supervision", label: "Supervisión directa y aprobación" },
-  { id: "c3", from: "ic", to: "pm", kind: "collaboration", label: "Colaboración activa — SOL-2026-001" },
+  { id: "c3", from: "gg", to: "cd", kind: "supervision", label: "Supervisión de trazabilidad documental y codificación" },
+  { id: "c4", from: "gg", to: "ti", kind: "supervision", label: "Supervisión de riesgos técnicos y continuidad de la app" },
+  { id: "c5", from: "ic", to: "pm", kind: "collaboration", label: "Colaboración activa — SOL-2026-001" },
+  { id: "c6", from: "cd", to: "pm", kind: "collaboration", label: "Seguimiento documental por hito, correo y requerimiento" },
+  { id: "c7", from: "ti", to: "cd", kind: "collaboration", label: "Trazabilidad técnica de cambios, archivos e integraciones" },
 ];
 
 export const ALERTS: Alert[] = [

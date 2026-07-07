@@ -19,9 +19,16 @@ export type ModelConfig = {
   apiKey?: string;
 };
 
+export type ChatContent =
+  | string
+  | Array<
+      | { type: "text"; text: string }
+      | { type: "image_url"; image_url: { url: string } }
+    >;
+
 export type ChatMessage = {
   role: "system" | "user" | "assistant";
-  content: string;
+  content: ChatContent;
 };
 
 export type LLMResponse = {
@@ -42,7 +49,7 @@ export async function sendChat(messages: ChatMessage[], config: ModelConfig): Pr
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ messages, provider: config.provider, model: config.model }),
-      signal: AbortSignal.timeout(20000),
+      signal: AbortSignal.timeout(45000),
     });
     if (res.ok) {
       const data = await res.json();
@@ -96,8 +103,8 @@ async function sendOpenAICompatChat(
       Authorization: `Bearer ${config.apiKey}`,
       ...extraHeaders,
     },
-    body: JSON.stringify({ model: config.model, messages }),
-    signal: AbortSignal.timeout(20000),
+    body: JSON.stringify({ model: config.model, messages, max_tokens: 12000 }),
+    signal: AbortSignal.timeout(45000),
   });
   if (!res.ok) {
     const errText = await res.text().catch(() => res.statusText);
@@ -124,10 +131,11 @@ async function sendAnthropicChat(messages: ChatMessage[], config: ModelConfig): 
     },
     body: JSON.stringify({
       model: config.model,
-      max_tokens: 2048,
-      system: systemMsg,
-      messages: userMessages.map((m) => ({ role: m.role, content: m.content })),
+      max_tokens: 8192,
+      system: typeof systemMsg === "string" ? systemMsg : contentToPlainText(systemMsg),
+      messages: userMessages.map((m) => ({ role: m.role, content: contentToPlainText(m.content) })),
     }),
+    signal: AbortSignal.timeout(45000),
   });
   if (!res.ok) throw new Error(`Anthropic error: ${res.statusText}`);
   const data = await res.json();
@@ -137,6 +145,32 @@ async function sendAnthropicChat(messages: ChatMessage[], config: ModelConfig): 
     provider: "anthropic",
     tokensUsed: (data.usage?.input_tokens ?? 0) + (data.usage?.output_tokens ?? 0),
   };
+}
+
+function summarizeLLMError(err: unknown): string {
+  if (!(err instanceof Error)) return "error desconocido";
+  const msg = err.message || "error desconocido";
+  if (/fetch failed|failed to fetch|network|dns|econn|timeout|aborted/i.test(msg)) {
+    return "fallo de red/proveedor no disponible";
+  }
+  if (/401|unauthorized|invalid api key|api[_ -]?key/i.test(msg)) {
+    return "clave API inválida o sin permiso";
+  }
+  if (/429|quota|rate limit|insufficient_quota/i.test(msg)) {
+    return "límite/cuota del proveedor";
+  }
+  if (/503|not configured|sin clave api/i.test(msg)) {
+    return msg.slice(0, 140);
+  }
+  return msg.slice(0, 140);
+}
+
+function contentToPlainText(content: ChatContent | undefined): string {
+  if (!content) return "";
+  if (typeof content === "string") return content;
+  return content
+    .map((part) => part.type === "text" ? part.text : "[Imagen adjunta no enviada a este proveedor]")
+    .join("\n");
 }
 
 async function sendCloudflareChat(messages: ChatMessage[], config: ModelConfig): Promise<LLMResponse> {
@@ -150,6 +184,7 @@ async function sendCloudflareChat(messages: ChatMessage[], config: ModelConfig):
       Authorization: `Bearer ${config.apiKey}`,
     },
     body: JSON.stringify({ model: config.model, messages }),
+    signal: AbortSignal.timeout(45000),
   });
   if (!res.ok) throw new Error(`Cloudflare AI error: ${res.statusText}`);
   const data = await res.json();
@@ -167,10 +202,13 @@ export async function sendChatWithFallback(
   primaryConfig: ModelConfig,
   complexity: "simple" | "technical" | "analytical" | "generative" = "simple",
 ): Promise<{ response: LLMResponse; actualConfig: ModelConfig; usedFallback: boolean }> {
+  const failures: string[] = [];
   try {
     const response = await sendChat(messages, primaryConfig);
     return { response, actualConfig: primaryConfig, usedFallback: false };
-  } catch { /* fall through */ }
+  } catch (err) {
+    failures.push(`${primaryConfig.provider}: ${summarizeLLMError(err)}`);
+  }
 
   // Cloud providers: try server proxy (Vercel env vars) first, then localStorage key as fallback
   const deep = complexity !== "simple";
@@ -194,8 +232,11 @@ export async function sendChatWithFallback(
     try {
       const response = await sendChat(messages, config);
       return { response, actualConfig: config, usedFallback: true };
-    } catch { /* try next */ }
+    } catch (err) {
+      failures.push(`${fb.provider}: ${summarizeLLMError(err)}`);
+    }
   }
 
-  throw new Error("Sin conexión con ningún proveedor. Verifica tu conexión y las API keys en Conexiones.");
+  const detail = failures.slice(0, 4).join(" | ");
+  throw new Error(`Sin conexión con ningún proveedor. Revisa internet, cuotas y API keys en Conexiones.${detail ? ` Detalle: ${detail}` : ""}`);
 }

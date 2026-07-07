@@ -1,11 +1,10 @@
 // Persistence adapter for application state.
 //
 // Strategy: state is always cached in localStorage for instant load and
-// offline resilience. When Supabase credentials are configured (see
-// lib/supabase/client.ts and supabase/schema.sql), the same state is
-// synced to a `workspace_state` row keyed by the signed-in user, so the
-// platform survives across browsers/devices instead of living only in
-// one machine's localStorage.
+// offline resilience. Syncing this UI/chat state to Supabase is optional:
+// enable it only with NEXT_PUBLIC_ENABLE_WORKSPACE_SYNC=true. Keeping it
+// off by default avoids turning Supabase into a high-egress localStorage
+// mirror, especially when chats contain attachment metadata.
 //
 // If Supabase isn't configured, everything still works — it just stays local.
 
@@ -14,6 +13,10 @@ import { AppState, mergeWithSeed, pickSharedChats, redactProviderKeys, seedState
 
 const LOCAL_KEY = "oficina-tecnica:state:v1";
 const WORKSPACE_ID = "default"; // single shared workspace for this deployment
+
+function workspaceSyncEnabled(): boolean {
+  return process.env.NEXT_PUBLIC_ENABLE_WORKSPACE_SYNC === "true";
+}
 
 export function loadLocal(): AppState {
   if (typeof window === "undefined") return seedState();
@@ -36,6 +39,7 @@ export function saveLocal(state: AppState) {
 }
 
 export async function loadRemote(): Promise<AppState | null> {
+  if (!workspaceSyncEnabled()) return null;
   const supabase = getSupabaseClient();
   if (!supabase) return null;
   const { data, error } = await supabase
@@ -48,6 +52,7 @@ export async function loadRemote(): Promise<AppState | null> {
 }
 
 let pendingSync: ReturnType<typeof setTimeout> | null = null;
+let lastRemotePayload = "";
 
 /**
  * Persists state to the shared `workspace_state` row. Before upserting,
@@ -58,6 +63,10 @@ let pendingSync: ReturnType<typeof setTimeout> | null = null;
  * write succeeded, once the debounced write actually runs.
  */
 export function saveRemote(state: AppState, onSettled?: (ok: boolean) => void) {
+  if (!workspaceSyncEnabled()) {
+    onSettled?.(true);
+    return;
+  }
   const supabase = getSupabaseClient();
   if (!supabase) return;
   if (pendingSync) clearTimeout(pendingSync);
@@ -68,18 +77,25 @@ export function saveRemote(state: AppState, onSettled?: (ok: boolean) => void) {
       chats: pickSharedChats(state.chats),
       modelConnections: redactProviderKeys(state.modelConnections),
     };
+    const payload = JSON.stringify(syncable);
+    if (payload === lastRemotePayload) {
+      onSettled?.(true);
+      return;
+    }
+    lastRemotePayload = payload;
     void supabase
       .from("workspace_state")
       .upsert({ id: WORKSPACE_ID, state: syncable, updated_at: new Date().toISOString() })
       .then(({ error }) => {
         if (error) console.warn("[store] remote sync failed", error.message);
+        if (error) lastRemotePayload = "";
         onSettled?.(!error);
       });
   }, 800);
 }
 
 export function isRemoteConfigured(): boolean {
-  return getSupabaseClient() !== null;
+  return workspaceSyncEnabled() && getSupabaseClient() !== null;
 }
 
 /**
@@ -88,6 +104,7 @@ export function isRemoteConfigured(): boolean {
  * remote state. Returns an unsubscribe function.
  */
 export function subscribeRemote(onChange: (state: AppState) => void): () => void {
+  if (!workspaceSyncEnabled()) return () => {};
   const supabase = getSupabaseClient();
   if (!supabase) return () => {};
 

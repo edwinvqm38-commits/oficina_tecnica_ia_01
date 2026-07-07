@@ -58,6 +58,8 @@ export const DEFAULT_AGENT_MODELS: Record<string, { provider: string; model: str
   "general-manager":    { provider: "gemini", model: "gemini-flash-latest" },
   "cost-engineer":      { provider: "gemini", model: "gemini-flash-latest" },
   "project-management": { provider: "gemini", model: "gemini-flash-latest" },
+  "document-control":   { provider: "gemini", model: "gemini-flash-latest" },
+  "systems-engineer":   { provider: "gemini", model: "gemini-flash-latest" },
 };
 
 // Maps chat agent ids (lib/chat/messageUtils.ts AGENT_IDS) to the agent ids
@@ -68,6 +70,8 @@ export const CHAT_AGENT_TO_SETTINGS_ID: Record<string, string> = {
   gg: "general-manager",
   ic: "cost-engineer",
   pm: "project-management",
+  cd: "document-control",
+  ti: "systems-engineer",
 };
 
 const LS_AGENT_MODELS = "ot:agent:models";

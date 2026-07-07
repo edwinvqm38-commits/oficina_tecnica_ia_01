@@ -28,11 +28,14 @@ import {
   buscarRecursos,
   buscarProyectoPorCodigo,
   obtenerResumenProyecto,
+  contarRegistros,
   DEFAULT_CONTEXT_LIMIT,
   type ContextToolResult,
   type RecursosToolFilters,
+  type CountToolFilters,
+  type CountableContextTable,
 } from "@/lib/chat/contextTools";
-import type { CotizacionSearchFilters, RequerimientoSearchFilters } from "@/lib/chat/contextQuery";
+import { moneyPrefix, type CotizacionSearchFilters, type RequerimientoSearchFilters } from "@/lib/chat/contextQuery";
 import { buildContextPack, hasRealData } from "@/lib/chat/contextPackBuilder";
 
 export type ContextToolName =
@@ -43,7 +46,8 @@ export type ContextToolName =
   | "buscarPropuestaTecnicaPorCodigo"
   | "buscarRecursos"
   | "buscarProyectoPorCodigo"
-  | "obtenerResumenProyecto";
+  | "obtenerResumenProyecto"
+  | "contarRegistros";
 
 export interface ContextToolCall {
   tool: ContextToolName;
@@ -62,12 +66,134 @@ const RESUMEN_RE = /\b(res[uú]men|res[uú]m[eé]me|res[uú]meme|panorama|estado
 const PROPOSAL_RE = /\bpropuestas?\s+t[eé]cnicas?\b/i;
 const RECURSO_NOUN_RE = /\brecursos?\b|\bcat[aá]logo\b/i;
 const RECURSO_TRIGGER_RE = /\b(busca|buscar|lista|listar|mu[eé]stra|mu[eé]strame|dame|cu[aá]l(?:es)?|qu[eé]|registrad[oa]s?|hay|tenemos|existen|tien[ee]s)\b/i;
+const COUNT_TRIGGER_RE = /\b(cu[aá]nt[oa]s?|cantidad|n[uú]mero|total|conteo|contar|registrad[oa]s?|registrados?|tenemos\s+registrad[oa]s?)\b/i;
+const COT_COUNT_NOUN_RE = /\bcotizaci[oó]n(?:es)?\b|\bcots?\b|\blog\s+de\s+cotizaciones\b/i;
+const RQ_COUNT_NOUN_RE = /\brequerimientos?\b|\brqs?\b|\blog\s+de\s+requerimientos\b/i;
+const RESOURCE_COUNT_NOUN_RE = /\brecursos?\b|\bcat[aá]logo\b/i;
+const TABLE_SUMMARY_TRIGGER_RE = /\b(dashboard|tablero|tabla\s+resumen|tabla|resumen|reporte|informe|gr[aá]fico|grafico|mu[eé]strame|mostrar|genera|generar|prepara|preparar)\b/i;
+const COT_AMOUNT_QUESTION_RE = /\b(cu[aá]nto(?:s)?|monto|importe|valor|ofertad[ao]|ofertamos|oferta)\b/i;
+const COT_DETAIL_QUESTION_RE = /\b(detalle|datos|ficha|desglose|informaci[oó]n|resumen)\b/i;
+
+type CountIntent = {
+  table: CountableContextTable;
+  filters: CountToolFilters;
+};
 
 /** Detecta intención de consultar el catálogo de recursos. */
 function detectRecursoIntent(t: string): RecursosToolFilters | null {
   if (!RECURSO_NOUN_RE.test(t)) return null;
   if (!RECURSO_TRIGGER_RE.test(t)) return null;
   return {};
+}
+
+function isoDate(date: Date): string {
+  return date.toISOString().slice(0, 10);
+}
+
+function startOfLocalDay(date: Date): Date {
+  return new Date(date.getFullYear(), date.getMonth(), date.getDate());
+}
+
+function addDays(date: Date, days: number): Date {
+  const next = new Date(date);
+  next.setDate(next.getDate() + days);
+  return next;
+}
+
+function detectEstadoFilter(t: string): string | undefined {
+  if (/\bpendientes?\b|\bpendientes?\s+de\s+atenci[oó]n\b|\bpor\s+atender\b/i.test(t)) return "Pendiente";
+  if (/\ben\s+proceso\b|\ben\s+curso\b/i.test(t)) return "En proceso";
+  if (/\batendidos?\b|\bcompletados?\b|\bfinalizados?\b|\bculminados?\b|\bcerrados?\b/i.test(t)) return "Atendido";
+  return undefined;
+}
+
+function detectDateColumn(t: string, table: CountableContextTable): CountToolFilters["dateColumn"] {
+  if (table === "cotizaciones" && /\bfecha\s+registro\b|\bregistrad[ao]s?\b/i.test(t)) return "fecha_registro";
+  if (table === "requerimientos" && /\bfecha\s+requerida\b|\brequerid[ao]s?\b/i.test(t)) return "fecha_requerida";
+  if (table === "requerimientos" && /\bfecha\s+solicitud\b|\bsolicitad[ao]s?\b/i.test(t)) return "fecha_solicitud";
+  return "created_at";
+}
+
+function detectPeriodFilter(t: string): Pick<CountToolFilters, "dateFrom" | "dateTo" | "periodLabel"> {
+  const today = startOfLocalDay(new Date());
+  if (/\bhoy\b/i.test(t)) {
+    return { dateFrom: isoDate(today), dateTo: isoDate(addDays(today, 1)), periodLabel: "hoy" };
+  }
+  if (/\bayer\b/i.test(t)) {
+    const yesterday = addDays(today, -1);
+    return { dateFrom: isoDate(yesterday), dateTo: isoDate(today), periodLabel: "ayer" };
+  }
+  if (/\beste\s+mes\b|\bmes\s+actual\b|\ben\s+el\s+mes\b/i.test(t)) {
+    const start = new Date(today.getFullYear(), today.getMonth(), 1);
+    const next = new Date(today.getFullYear(), today.getMonth() + 1, 1);
+    return { dateFrom: isoDate(start), dateTo: isoDate(next), periodLabel: "este mes" };
+  }
+  if (/\bmes\s+pasado\b|\bmes\s+anterior\b/i.test(t)) {
+    const start = new Date(today.getFullYear(), today.getMonth() - 1, 1);
+    const next = new Date(today.getFullYear(), today.getMonth(), 1);
+    return { dateFrom: isoDate(start), dateTo: isoDate(next), periodLabel: "mes pasado" };
+  }
+  if (/\besta\s+semana\b|\bsemana\s+actual\b/i.test(t)) {
+    const day = today.getDay() || 7;
+    const start = addDays(today, 1 - day);
+    return { dateFrom: isoDate(start), dateTo: isoDate(addDays(start, 7)), periodLabel: "esta semana" };
+  }
+  if (/\bsemana\s+pasada\b|\bsemana\s+anterior\b/i.test(t)) {
+    const day = today.getDay() || 7;
+    const thisWeekStart = addDays(today, 1 - day);
+    const lastWeekStart = addDays(thisWeekStart, -7);
+    return { dateFrom: isoDate(lastWeekStart), dateTo: isoDate(thisWeekStart), periodLabel: "semana pasada" };
+  }
+  return {};
+}
+
+function detectCountIntent(t: string): CountIntent | null {
+  if (!COUNT_TRIGGER_RE.test(t) && !TABLE_SUMMARY_TRIGGER_RE.test(t)) return null;
+  const table: CountableContextTable | null = COT_COUNT_NOUN_RE.test(t)
+    ? "cotizaciones"
+    : RQ_COUNT_NOUN_RE.test(t)
+      ? "requerimientos"
+      : RESOURCE_COUNT_NOUN_RE.test(t)
+        ? "recursos"
+        : null;
+  if (!table) return null;
+
+  const filters: CountToolFilters = {
+    estado: detectEstadoFilter(t),
+    dateColumn: detectDateColumn(t, table),
+    ...detectPeriodFilter(t),
+  };
+  return { table, filters };
+}
+
+function buildPeriodSearchFilters(
+  t: string,
+  table: "cotizaciones" | "requerimientos",
+): CotizacionSearchFilters | RequerimientoSearchFilters | null {
+  const isCot = table === "cotizaciones";
+  const nounMatches = isCot ? COT_COUNT_NOUN_RE.test(t) : RQ_COUNT_NOUN_RE.test(t);
+  if (!nounMatches || !TABLE_SUMMARY_TRIGGER_RE.test(t)) return null;
+
+  const period = detectPeriodFilter(t);
+  const estado = detectEstadoFilter(t);
+  const hasUsefulFilter = Boolean(period.dateFrom || period.dateTo || estado);
+  if (!hasUsefulFilter && !/\b(todas?|registrad[ao]s?|actuales?|vigentes?|existentes?)\b/i.test(t)) return null;
+
+  if (isCot) {
+    return {
+      estado,
+      recent: true,
+      limit: DEFAULT_CONTEXT_LIMIT,
+      dateColumn: "fecha_registro",
+      ...period,
+    } as CotizacionSearchFilters & { limit?: number };
+  }
+
+  return {
+    estado,
+    recent: true,
+    limit: DEFAULT_CONTEXT_LIMIT,
+  } as RequerimientoSearchFilters & { limit?: number };
 }
 
 /**
@@ -89,6 +215,11 @@ export function detectContextIntent(cleanText: string): ContextRoutingDecision {
   const otherCodes = detectOtherCodes(t, exclude).slice(0, 2);
 
   const calls: ContextToolCall[] = [];
+  const countIntent = detectCountIntent(t);
+
+  if (countIntent) {
+    calls.push({ tool: "contarRegistros", args: { table: countIntent.table, filters: countIntent.filters } });
+  }
 
   // RQ por código → requerimiento (el pipeline encadena sus ítems).
   for (const code of rqCodes) calls.push({ tool: "buscarRequerimientoPorCodigo", args: { code } });
@@ -110,15 +241,17 @@ export function detectContextIntent(cleanText: string): ContextRoutingDecision {
 
   // Búsqueda libre de requerimientos ("lista RQ pendientes de Juan").
   const reqIntent = detectRequerimientoSearchIntent(t);
-  if (reqIntent) {
-    const { limit, ...filters } = reqIntent;
+  const reqSummaryIntent = buildPeriodSearchFilters(t, "requerimientos") as (RequerimientoSearchFilters & { limit?: number }) | null;
+  if (reqIntent || reqSummaryIntent) {
+    const { limit, ...filters } = (reqIntent ?? reqSummaryIntent)!;
     calls.push({ tool: "buscarRequerimientos", args: { filters: filters as RequerimientoSearchFilters, limit: limit ?? DEFAULT_CONTEXT_LIMIT } });
   }
 
   // Búsqueda libre de cotizaciones ("últimas cotizaciones de NEXA").
   const cotIntent = detectCotizacionSearchIntent(t);
-  if (cotIntent) {
-    const { limit, ...filters } = cotIntent;
+  const cotSummaryIntent = buildPeriodSearchFilters(t, "cotizaciones") as (CotizacionSearchFilters & { limit?: number }) | null;
+  if (cotIntent || cotSummaryIntent) {
+    const { limit, ...filters } = (cotIntent ?? cotSummaryIntent)!;
     calls.push({ tool: "buscarCotizaciones", args: { filters: filters as CotizacionSearchFilters, limit: limit ?? DEFAULT_CONTEXT_LIMIT } });
   }
 
@@ -134,7 +267,11 @@ export function detectContextIntent(cleanText: string): ContextRoutingDecision {
   let confidence: number;
   let reason: string;
 
-  if (hasCodeCall) {
+  if (countIntent && !hasCodeCall) {
+    intent = `contar_${countIntent.table}`;
+    confidence = 0.9;
+    reason = "Intención de conteo/agregado sobre una tabla real de Supabase.";
+  } else if (hasCodeCall) {
     intent = wantsResumen ? "resumen_proyecto" : wantsProposal ? "consulta_propuesta_tecnica" : "consulta_por_codigo";
     confidence = 0.9;
     reason = "Se detectó al menos un código (COT/RQ/proyecto) en el mensaje.";
@@ -182,6 +319,8 @@ async function executeTool(call: ContextToolCall): Promise<ContextToolResult> {
       return buscarProyectoPorCodigo(String(call.args.code));
     case "obtenerResumenProyecto":
       return obtenerResumenProyecto(String(call.args.code));
+    case "contarRegistros":
+      return contarRegistros(call.args.table as CountableContextTable, call.args.filters as CountToolFilters | undefined);
   }
 }
 
@@ -191,6 +330,99 @@ export interface ContextPipelineResult {
   decision: ContextRoutingDecision;
   results: ContextToolResult[];
   hasData: boolean;
+}
+
+function formatMoney(value: number): string {
+  return value.toLocaleString("es-PE", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+}
+
+function cotizacionDetailAnswer(cot: import("@/lib/chat/contextQuery").CotizacionSummary): string {
+  const moneda = moneyPrefix(cot.moneda_codigo);
+  const rows = [
+    ["Cotización", cot.codigo],
+    ["Proyecto", cot.proyecto ?? "—"],
+    ["Cliente", cot.cliente_nombre ?? "—"],
+    ["Unidad de trabajo", cot.unidad_trabajo_nombre ?? "—"],
+    ["Tipo de servicio", cot.tipo_servicio_nombre ?? "—"],
+    ["Estado propuesta", cot.estado_propuesta ?? cot.estado ?? "—"],
+    ["Monto ofertado", cot.monto == null ? "—" : `${moneda} ${formatMoney(cot.monto)}`],
+    ["Avance", `${cot.avance ?? "—"}%`],
+    ["Solicitante", cot.solicitante ?? "—"],
+    ["Responsable técnico", cot.responsable_tecnico ?? "—"],
+    ["Responsable económico", cot.responsable_economico ?? "—"],
+    ["Fecha registro", cot.fecha_registro ?? "—"],
+    ["Fecha invitación", cot.fecha_invitacion ?? "—"],
+    ["Fecha visita técnica", cot.fecha_visita_tecnica ?? "—"],
+    ["Fecha consultas", cot.fecha_consultas ?? "—"],
+    ["Fecha abs. consultas", cot.fecha_abs_consultas ?? "—"],
+    ["Fecha entrega", cot.fecha_entrega ?? "—"],
+    ["Fecha entregada", cot.fecha_entregada ?? "—"],
+    ["Fecha OC", cot.fecha_oc ?? "—"],
+    ["OC", cot.oc ?? "—"],
+  ];
+
+  const table = [
+    "| Campo | Dato registrado |",
+    "|---|---|",
+    ...rows.map(([label, value]) => `| ${label} | ${value} |`),
+  ].join("\n");
+
+  const economicRows = (cot.resumen_economico ?? []).filter((row) => row.base !== 0 || row.oferta !== 0 || (row.real ?? 0) !== 0);
+  const economicTable = economicRows.length
+    ? [
+        "",
+        "**Resumen económico registrado**",
+        "",
+        "| Tipo recurso | Base | Oferta | Margen ofertado |",
+        "|---|---:|---:|---:|",
+        ...economicRows.map((row) => {
+          const margen = row.margen_ofertado_manual ?? row.oferta - row.base;
+          return `| ${row.tipo_recurso} | ${moneda} ${formatMoney(row.base)} | ${moneda} ${formatMoney(row.oferta)} | ${moneda} ${formatMoney(margen)} |`;
+        }),
+      ].join("\n")
+    : "\n\nNo hay desglose económico registrado con importes distintos de cero.";
+
+  return [`Estos son los datos reales registrados en Supabase para **${cot.codigo}**:`, "", table, economicTable].join("\n");
+}
+
+/**
+ * Algunas preguntas son mejor respondidas sin pasar por el LLM. Si el usuario
+ * pregunta por el monto/oferta de una cotización concreta, usamos el registro
+ * consultado en Supabase y devolvemos una respuesta cerrada para evitar
+ * alucinaciones numéricas.
+ */
+export function buildDeterministicAnswerFromResults(
+  cleanText: string,
+  results: ContextToolResult[],
+): string | null {
+  const cotResult = results.find(
+    (res) => res.source === "cotizaciones" && res.status === "success" && res.records.length === 1,
+  );
+  if (!cotResult || cotResult.source !== "cotizaciones") return null;
+
+  const cot = cotResult.records[0];
+
+  if (COT_DETAIL_QUESTION_RE.test(cleanText)) {
+    return cotizacionDetailAnswer(cot);
+  }
+
+  if (!COT_AMOUNT_QUESTION_RE.test(cleanText)) return null;
+
+  if (cot.monto == null) {
+    return `Encontré la cotización **${cot.codigo}** en Supabase, pero no tiene monto ofertado registrado.`;
+  }
+
+  const moneda = moneyPrefix(cot.moneda_codigo);
+  const detalles = [
+    cot.proyecto ? `Proyecto: **${cot.proyecto}**` : "",
+    cot.cliente_nombre ? `Cliente: **${cot.cliente_nombre}**` : "",
+  ].filter(Boolean).join(" · ");
+
+  return [
+    `Según Supabase, la cotización **${cot.codigo}** tiene monto ofertado registrado de **${moneda} ${formatMoney(cot.monto)}**.`,
+    detalles ? detalles : "",
+    "No recalculé el monto: estoy leyendo el campo `monto` registrado en la tabla `cotizaciones`.",
+  ].filter(Boolean).join("\n");
 }
 
 const SOFT_ERROR_NOTE =

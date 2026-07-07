@@ -10,12 +10,19 @@ import { StatusBadge } from "@/components/sgp/StatusBadge";
 import { getModulePermissions, type ModulePermissions } from "@/lib/sgp/modulePermissionsRepository";
 import {
   demoData,
+  type CatalogCodigoCliente,
+  type CatalogCodigoUnidadTrabajo,
+  type CatalogEstadoCotizacion,
+  type CatalogSolicitanteCotizacion,
+  type CatalogSolicitanteRq,
+  type CatalogTipoServicio,
   type Cotizacion,
   type Recurso,
   type Requerimiento,
   type DetalleRequerimientoItem,
   type ResourceFileMeta,
 } from "@/lib/sgp/demoData";
+import { listCatalogMap, type CatalogKey, type CatalogRecord } from "@/lib/sgp/catalogsRepository";
 import { normalizeCotizacionEconomicSummary } from "@/lib/sgp/quotationEconomics";
 import { formatCurrencyNumber, formatDate, normalizeDateForStorage } from "@/lib/sgp/utils";
 import { publishDataSourceSnapshot, debugDataSourceLoad, type AppDataSource } from "@/lib/sgp/dataSourceDiagnostics";
@@ -58,6 +65,20 @@ const categoricalBadgePalette = [
   "bg-orange-100 text-orange-700",
   "bg-teal-100 text-teal-700",
 ];
+
+function uniqueSortedOptions(values: Array<string | null | undefined>): string[] {
+  return Array.from(new Set(values.map((value) => String(value ?? "").trim()).filter(Boolean))).sort((a, b) =>
+    a.localeCompare(b, "es"),
+  );
+}
+
+function rowsFromCatalog<T extends CatalogRecord>(
+  catalogs: Partial<Record<CatalogKey, CatalogRecord[]>> | null,
+  key: CatalogKey,
+  fallback: T[],
+): T[] {
+  return (catalogs?.[key] as T[] | undefined) ?? fallback;
+}
 
 type CotizacionSensitivePermissionFlags = {
   can_view_margin: boolean;
@@ -507,6 +528,7 @@ export default function CotizacionesPage() {
   const [requirementDraft, setRequirementDraft] = useState<Requerimiento | null>(null);
   const [requirementItems, setRequirementItems] = useState<EditableRequirementItem[]>([]);
   const currentUserEmail = (profile.email ?? user.email ?? "").trim().toLowerCase();
+  const [persistedCatalogs, setPersistedCatalogs] = useState<Partial<Record<CatalogKey, CatalogRecord[]>> | null>(null);
 
   useEffect(() => {
     debugUiState("cotizaciones", "mounted", {});
@@ -517,36 +539,103 @@ export default function CotizacionesPage() {
     };
   }, []);
 
+  useEffect(() => {
+    let active = true;
+    listCatalogMap()
+      .then((result) => {
+        if (!active) return;
+        setPersistedCatalogs(result.catalogs);
+        if (result.error) setWarning((prev) => prev ?? result.error ?? null);
+      })
+      .catch((error: unknown) => {
+        if (!active) return;
+        setWarning((prev) => prev ?? (error instanceof Error ? error.message : "No se pudieron cargar los catálogos desde Supabase."));
+      });
+    return () => {
+      active = false;
+    };
+  }, []);
+
   const totalFilteredRows = filteredRowsCount ?? cotizaciones.length;
   const totalPages = Math.max(1, Math.ceil(totalFilteredRows / pageSize));
   const pageStartIndex = (page - 1) * pageSize;
 
   const clientOptions = useMemo(() => {
-    return Array.from(new Set(cotizaciones.map((item) => item.cliente))).sort((a, b) => a.localeCompare(b, "es"));
-  }, [cotizaciones]);
+    const catalogClientes = rowsFromCatalog<CatalogCodigoCliente>(
+      persistedCatalogs,
+      "catalogCodigoClientes",
+      demoData.listCatalogCodigoClientes(),
+    );
+    return uniqueSortedOptions([
+      ...catalogClientes
+        .filter((item) => item.activo !== false)
+        .map((item) => item.cliente),
+      ...cotizaciones.map((item) => item.cliente),
+    ]);
+  }, [cotizaciones, persistedCatalogs]);
 
   const unitOptions = useMemo(() => {
-    return Array.from(new Set(cotizaciones.map((item) => item.unidad_trabajo))).sort((a, b) => a.localeCompare(b, "es"));
-  }, [cotizaciones]);
+    const catalogUnidades = rowsFromCatalog<CatalogCodigoUnidadTrabajo>(
+      persistedCatalogs,
+      "catalogCodigoUnidadesTrabajo",
+      demoData.listCatalogCodigoUnidadesTrabajo(),
+    );
+    return uniqueSortedOptions([
+      ...catalogUnidades
+        .filter((item) => item.activo !== false)
+        .map((item) => item.unidad_trabajo),
+      ...cotizaciones.map((item) => item.unidad_trabajo),
+    ]);
+  }, [cotizaciones, persistedCatalogs]);
 
   const serviceTypeOptions = useMemo(
-    () => demoData.listCatalogTipoServicio().map((item) => item.nombre),
-    [],
+    () => {
+      const catalogTipoServicio = rowsFromCatalog<CatalogTipoServicio>(
+        persistedCatalogs,
+        "catalogTipoServicio",
+        demoData.listCatalogTipoServicio(),
+      );
+      return uniqueSortedOptions(catalogTipoServicio.filter((item) => item.activo !== false).map((item) => item.nombre));
+    },
+    [persistedCatalogs],
   );
-  const solicitanteOptions = useMemo(() => demoData.listCatalogSolicitanteCotizacion().map((item) => item.nombre), []);
+  const solicitanteOptions = useMemo(
+    () => {
+      const catalogSolicitantesCotizacion = rowsFromCatalog<CatalogSolicitanteCotizacion>(
+        persistedCatalogs,
+        "catalogSolicitanteCotizacion",
+        demoData.listCatalogSolicitanteCotizacion(),
+      );
+      const catalogSolicitantesRq = rowsFromCatalog<CatalogSolicitanteRq>(
+        persistedCatalogs,
+        "catalogSolicitanteRq",
+        demoData.listCatalogSolicitanteRq(),
+      );
+      return uniqueSortedOptions([
+        ...catalogSolicitantesCotizacion.filter((item) => item.activo !== false).map((item) => item.nombre),
+        ...catalogSolicitantesRq.filter((item) => item.activo !== false).map((item) => item.nombre),
+        ...cotizaciones.map((item) => item.solicitante),
+        currentUserEmail,
+      ]);
+    },
+    [cotizaciones, currentUserEmail, persistedCatalogs],
+  );
   const technicalResponsibleOptions = useMemo(() => {
-    return Array.from(
-      new Set(cotizaciones.map((item) => item.responsable_tecnico).filter(Boolean).concat(solicitanteOptions)),
-    ).sort((a, b) => a.localeCompare(b, "es"));
-  }, [cotizaciones, solicitanteOptions]);
+    return uniqueSortedOptions([...cotizaciones.map((item) => item.responsable_tecnico), ...solicitanteOptions, currentUserEmail]);
+  }, [cotizaciones, currentUserEmail, solicitanteOptions]);
   const economicResponsibleOptions = useMemo(() => {
-    return Array.from(
-      new Set(cotizaciones.map((item) => item.responsable_economico).filter(Boolean).concat(solicitanteOptions)),
-    ).sort((a, b) => a.localeCompare(b, "es"));
-  }, [cotizaciones, solicitanteOptions]);
+    return uniqueSortedOptions([...cotizaciones.map((item) => item.responsable_economico), ...solicitanteOptions, currentUserEmail]);
+  }, [cotizaciones, currentUserEmail, solicitanteOptions]);
   const estadoCotizacionOptions = useMemo<Array<Cotizacion["estado"]>>(
-    () => demoData.listCatalogEstadoCotizacion().map((item) => item.nombre),
-    [],
+    () => {
+      const catalogEstadosCotizacion = rowsFromCatalog<CatalogEstadoCotizacion>(
+        persistedCatalogs,
+        "catalogEstadoCotizacion",
+        demoData.listCatalogEstadoCotizacion(),
+      );
+      return uniqueSortedOptions(catalogEstadosCotizacion.filter((item) => item.activo !== false).map((item) => item.nombre)) as Array<Cotizacion["estado"]>;
+    },
+    [persistedCatalogs],
   );
   const proposalStatusOptions = useMemo(() => {
     const defaults = ["Rev. Bases", "Visita Técnica"];

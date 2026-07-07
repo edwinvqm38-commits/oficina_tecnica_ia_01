@@ -26,10 +26,10 @@ type TechnicalProposalMetadata = {
   documento_tipo: "PT";
   revision: "REV00";
   carpeta_madre: string;
-  subcarpeta_revision: "01_REV00";
+  subcarpeta_revision: "02_PROPUESTA";
   archivo_docx: string;
   archivo_pdf: string;
-  estructura_documental_version: "cotizacion_v1";
+  estructura_documental_version: "cotizacion_drive_v2";
 };
 
 type ScopeKind = "group" | "subgroup" | "activity";
@@ -152,7 +152,7 @@ type ScopeSubtreeRange = {
 };
 
 const REVISION = "REV00";
-const REVISION_FOLDER = "01_REV00";
+const REVISION_FOLDER = "02_PROPUESTA";
 
 const RESOURCE_CATEGORIES: Array<{ key: ResourceCategoryKey; label: string; shortLabel: string; hasTime: boolean }> = [
   { key: "mano_obra", label: "Mano de obra", shortLabel: "MO", hasTime: true },
@@ -181,7 +181,7 @@ function buildDocumentMetadata(codigoCotizacion: string): TechnicalProposalMetad
     subcarpeta_revision: REVISION_FOLDER,
     archivo_docx: `${documentoCodigo}.docx`,
     archivo_pdf: `${documentoCodigo}.pdf`,
-    estructura_documental_version: "cotizacion_v1",
+    estructura_documental_version: "cotizacion_drive_v2",
   };
 }
 

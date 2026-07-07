@@ -34,7 +34,7 @@ type ResourceFormModalProps = {
   filesReadOnly?: boolean;
   allowFilePicker?: boolean;
   isSaving?: boolean;
-  onUploadFile?: (resourceId: string, category: "image" | "datasheet" | "attachment", file: File) => Promise<ResourceFiles["archivos"][number]>;
+  onUploadFile?: (resourceId: string, category: "image" | "datasheet" | "attachment" | "quotation", file: File) => Promise<ResourceFiles["archivos"][number]>;
   onOpenFile?: (file: ResourceFiles["archivos"][number]) => Promise<void> | void;
   onResolveFileUrl?: (file: ResourceFiles["archivos"][number]) => Promise<string | null>;
 };
@@ -439,7 +439,7 @@ export function ResourceFormModal({
               <SectionCard title="Documentos" icon="files">
                 {!allowFilePicker && !filesReadOnly ? (
                   <p className="mb-2 text-[11px] leading-relaxed text-stone-500">
-                    Para subir archivos reales, guarda el recurso primero y vuelve a editarlo. También puedes mantener URLs o IDs existentes.
+                    Puedes mantener URLs o IDs existentes. Para subir archivos reales, completa el código del recurso.
                   </p>
                 ) : null}
                 <ResourceFilesPanel
@@ -451,7 +451,7 @@ export function ResourceFormModal({
                   allowFilePicker={allowFilePicker}
                   onUploadFile={
                     onUploadFile
-                      ? (category, file) => onUploadFile(form.id, category, file)
+                      ? (category, file) => onUploadFile(form.codigo_recurso || form.id, category, file)
                       : undefined
                   }
                   onOpenFile={onOpenFile}

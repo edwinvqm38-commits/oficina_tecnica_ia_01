@@ -81,6 +81,15 @@ export function seedState(): AppState {
  * can't leak into another user's state via the shared `workspace_state` row.
  */
 export const SHARED_CHAT_THREADS: readonly string[] = ["roundtable"];
+const MAX_REMOTE_THREAD_MESSAGES = 60;
+
+function stripAttachmentPayload(message: ChatMessage): ChatMessage {
+  if (!message.attachments?.length) return message;
+  return {
+    ...message,
+    attachments: message.attachments.map(({ name, size, type }) => ({ name, size, type })),
+  };
+}
 
 /**
  * Merges the shared `roundtable` thread by message id (union, keeping both
@@ -99,7 +108,7 @@ export function mergeChats(a: AppState["chats"], b: AppState["chats"]): AppState
   const merged: AppState["chats"] = { ...a };
   for (const key of SHARED_CHAT_THREADS) {
     const existing = a[key] || [];
-    const incoming = b[key] || [];
+    const incoming = (b[key] || []).map(stripAttachmentPayload);
     if (incoming.length === 0) continue;
     const existingIds = new Set(existing.map((m) => m.id));
     const newOnes = incoming.filter((m) => !existingIds.has(m.id));
@@ -120,7 +129,7 @@ export function mergeChats(a: AppState["chats"], b: AppState["chats"]): AppState
 export function pickSharedChats(chats: AppState["chats"]): AppState["chats"] {
   const result: AppState["chats"] = {};
   for (const key of SHARED_CHAT_THREADS) {
-    if (chats[key]) result[key] = chats[key];
+    if (chats[key]) result[key] = chats[key].slice(-MAX_REMOTE_THREAD_MESSAGES).map(stripAttachmentPayload);
   }
   return result;
 }

@@ -108,6 +108,28 @@ create trigger set_admin_module_permissions_updated_at
 before update on public.admin_module_permissions
 for each row execute function public.set_updated_at();
 
+create table if not exists public.app_catalog_items (
+  catalog_key text not null,
+  item_id text not null,
+  payload jsonb not null default '{}'::jsonb,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  created_by uuid references auth.users(id),
+  updated_by uuid references auth.users(id),
+  primary key (catalog_key, item_id),
+  constraint app_catalog_items_catalog_key_not_blank check (length(trim(catalog_key)) > 0),
+  constraint app_catalog_items_item_id_not_blank check (length(trim(item_id)) > 0),
+  constraint app_catalog_items_payload_object check (jsonb_typeof(payload) = 'object')
+);
+
+create index if not exists app_catalog_items_catalog_key_idx on public.app_catalog_items(catalog_key);
+create index if not exists app_catalog_items_payload_activo_idx on public.app_catalog_items((payload ->> 'activo'));
+
+drop trigger if exists set_app_catalog_items_updated_at on public.app_catalog_items;
+create trigger set_app_catalog_items_updated_at
+before update on public.app_catalog_items
+for each row execute function public.set_updated_at();
+
 create or replace function public.handle_new_user()
 returns trigger
 language plpgsql
@@ -417,7 +439,7 @@ create table if not exists public.technical_proposals (
   code text not null unique,
   document_type text not null default 'PT' check (document_type = 'PT'),
   revision text not null default 'REV00',
-  revision_folder text not null default '01_REV00',
+  revision_folder text not null default '02_PROPUESTA',
   status text not null default 'Borrador' check (status in ('Borrador', 'En revision', 'Aprobada', 'Archivada')),
   mode text not null default 'cliente' check (mode in ('cliente', 'interno')),
   work_status text not null default 'Borrador' check (work_status in ('Borrador', 'En proceso', 'Completado')),
@@ -822,6 +844,28 @@ as $$
   offset greatest(0, coalesce(p_offset, 0));
 $$;
 
+create or replace function public.get_recursos_filter_options()
+returns table (
+  tipos text[],
+  estados text[],
+  monedas text[],
+  proveedores text[],
+  marcas text[]
+)
+language sql
+stable
+security invoker
+as $$
+  select
+    coalesce(array_agg(distinct tipo_recurso_nombre order by tipo_recurso_nombre) filter (where tipo_recurso_nombre is not null and btrim(tipo_recurso_nombre) <> ''), '{}'::text[]) as tipos,
+    coalesce(array_agg(distinct estado order by estado) filter (where estado is not null and btrim(estado) <> ''), '{}'::text[]) as estados,
+    coalesce(array_agg(distinct moneda_codigo order by moneda_codigo) filter (where moneda_codigo is not null and btrim(moneda_codigo) <> ''), '{}'::text[]) as monedas,
+    coalesce(array_agg(distinct proveedor_nombre order by proveedor_nombre) filter (where proveedor_nombre is not null and btrim(proveedor_nombre) <> ''), '{}'::text[]) as proveedores,
+    coalesce(array_agg(distinct marca_nombre order by marca_nombre) filter (where marca_nombre is not null and btrim(marca_nombre) <> ''), '{}'::text[]) as marcas
+  from public.recursos
+  where deleted_at is null;
+$$;
+
 create or replace function public.search_requerimientos_page(
   p_search text default null,
   p_estado text default null,
@@ -887,6 +931,7 @@ $$;
 
 alter table public.user_profiles enable row level security;
 alter table public.admin_module_permissions enable row level security;
+alter table public.app_catalog_items enable row level security;
 alter table public.recursos enable row level security;
 alter table public.cotizaciones enable row level security;
 alter table public.requerimientos enable row level security;
@@ -907,6 +952,7 @@ alter table public.provider_credentials enable row level security;
 grant usage on schema public to authenticated;
 grant select, insert, update on public.user_profiles to authenticated;
 grant select, insert, update on public.admin_module_permissions to authenticated;
+grant select, insert, update, delete on public.app_catalog_items to authenticated;
 grant select, insert, update on public.recursos to authenticated;
 grant select, insert, update on public.cotizaciones to authenticated;
 grant select, insert, update on public.requerimientos to authenticated;
@@ -927,6 +973,7 @@ grant select on public.v_cotizaciones_list to authenticated;
 grant select on public.v_requerimientos_list to authenticated;
 grant execute on function public.search_cotizaciones_page(text, text, integer, integer) to authenticated;
 grant execute on function public.search_recursos_page(text, text, text, integer, integer) to authenticated;
+grant execute on function public.get_recursos_filter_options() to authenticated;
 grant execute on function public.search_requerimientos_page(text, text, integer, integer) to authenticated;
 grant execute on function public.purge_old_agent_memory(integer) to authenticated;
 
@@ -1012,6 +1059,32 @@ create policy admin_module_permissions_write_admin on public.admin_module_permis
 for all to authenticated
 using (public.is_admin_user())
 with check (public.is_admin_user());
+
+drop policy if exists app_catalog_items_select_datos on public.app_catalog_items;
+create policy app_catalog_items_select_datos on public.app_catalog_items
+for select to authenticated
+using (
+  public.can_use_module('datos', 'view')
+  or public.can_use_module('cotizaciones', 'view')
+  or public.can_use_module('requerimientos', 'view')
+  or public.can_use_module('recursos', 'view')
+);
+
+drop policy if exists app_catalog_items_insert_datos on public.app_catalog_items;
+create policy app_catalog_items_insert_datos on public.app_catalog_items
+for insert to authenticated
+with check (public.can_use_module('datos', 'create') or public.can_use_module('datos', 'edit'));
+
+drop policy if exists app_catalog_items_update_datos on public.app_catalog_items;
+create policy app_catalog_items_update_datos on public.app_catalog_items
+for update to authenticated
+using (public.can_use_module('datos', 'edit'))
+with check (public.can_use_module('datos', 'edit'));
+
+drop policy if exists app_catalog_items_delete_datos on public.app_catalog_items;
+create policy app_catalog_items_delete_datos on public.app_catalog_items
+for delete to authenticated
+using (public.can_use_module('datos', 'edit'));
 
 drop policy if exists recursos_select_by_permission on public.recursos;
 create policy recursos_select_by_permission on public.recursos
@@ -1143,12 +1216,12 @@ using (public.is_admin_user())
 with check (public.is_admin_user());
 
 -- ---------------------------------------------------------------------------
--- 9. Storage
+-- 9. Archivos documentales
 -- ---------------------------------------------------------------------------
 
-insert into storage.buckets (id, name, public)
-values ('resource-files', 'resource-files', false)
-on conflict (id) do update set name = excluded.name, public = false;
+-- No se crea Supabase Storage para archivos nuevos.
+-- Regla actual: Supabase guarda datos, IDs, URLs y metadata; Google Drive guarda
+-- PDFs, imagenes, fichas, sustentos y documentos adjuntos.
 
 -- ---------------------------------------------------------------------------
 -- 10. Permisos iniciales para el usuario admin esperado

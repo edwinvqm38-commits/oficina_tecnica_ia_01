@@ -400,7 +400,7 @@ function buildTechnicalProposalHeaderPayload(input: CreateTechnicalProposalInput
     code,
     document_type: "PT",
     revision: normalizeString(input.revision) || "REV00",
-    revision_folder: normalizeString(input.revision_folder) || "01_REV00",
+    revision_folder: normalizeString(input.revision_folder) || "02_PROPUESTA",
     status: input.status ?? "Borrador",
     mode: input.mode ?? "cliente",
     work_status: input.work_status ?? "Borrador",

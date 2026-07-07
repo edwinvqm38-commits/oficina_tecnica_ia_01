@@ -43,4 +43,32 @@ export const aiAgentsMock: AIAgent[] = [
       { label: "Bloqueos", value: "1 abierto" },
     ],
   },
+  {
+    id: "document-control",
+    name: "Control Documentario",
+    role: "Agente de trazabilidad",
+    focus: "Codigos, versiones, registros, hilos de correo y control documental",
+    status: "operational",
+    autonomyLevel: "Alerta y propone",
+    currentTask: "Validando que cada gestion tenga codigo, carpeta, version e hilo asociado",
+    confidence: 82,
+    kpis: [
+      { label: "Registros", value: "Vigilados" },
+      { label: "Trazabilidad", value: "Activa" },
+    ],
+  },
+  {
+    id: "systems-engineer",
+    name: "Ingeniero de Sistemas / TI",
+    role: "Agente tecnico",
+    focus: "App web, Supabase, integraciones, performance y prompts para Codex",
+    status: "watch",
+    autonomyLevel: "Diagnostica y recomienda",
+    currentTask: "Detectando riesgos de arquitectura, egress y errores de integracion",
+    confidence: 79,
+    kpis: [
+      { label: "Riesgos TI", value: "Monitoreo" },
+      { label: "Codex", value: "Prompts" },
+    ],
+  },
 ];

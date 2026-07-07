@@ -1,12 +1,14 @@
 // Command parsing, simple message detection, and inline markdown rendering helpers
 
-export const AGENT_IDS = ["ic", "pm", "ie", "gg"] as const;
+export const AGENT_IDS = ["ic", "pm", "ie", "cd", "ti", "gg"] as const;
 export type AgentId = (typeof AGENT_IDS)[number];
 
 const AGENT_LABELS: Record<string, { label: string; color: string }> = {
   ic:  { label: "IC",  color: "#2563eb" },
   pm:  { label: "PM",  color: "#7c3aed" },
   ie:  { label: "IE",  color: "#0891b2" },
+  cd:  { label: "CD",  color: "#0f766e" },
+  ti:  { label: "TI",  color: "#475569" },
   gg:  { label: "GG",  color: "#b45309" },
 };
 
@@ -19,15 +21,23 @@ export const AGENT_FULL_LABELS: Record<string, string> = {
   ic: "Ingeniero de Costos",
   pm: "Project Manager",
   ie: "Ingeniera Eléctrica",
+  cd: "Control Documentario",
+  ti: "Ingeniero de Sistemas",
   gg: "Gerente General",
 };
 
 const GREETING_RE = /^(hola|buenos|buenas|buen\s?d[íi]a|hi\b|hey\b|saludos|cómo estás|como estas|gracias|de nada|ok\b|okay\b|perfecto|entendido|claro|sí\b|no\b|genial|bien\b)/i;
 const TEAM_RE = /\b(todos|equipo|chicos|team|a todos|buenas a todos|saludos a todos)\b/i;
+const CONTINUATION_RE = /^(ok\s*)?(contin[uú]a|continuar|sigue|seguir|prosigue|dale|adelante|continua\s+por\s+favor|sigue\s+por\s+favor|ya\s+contin[uú]a|contin[uú]a\s+nom[aá]s)\b/i;
 
 export function isSimpleMessage(text: string): boolean {
   const t = text.trim();
   return t.length < 35 || GREETING_RE.test(t);
+}
+
+export function isContinuationRequest(text: string): boolean {
+  const t = text.trim();
+  return CONTINUATION_RE.test(t);
 }
 
 /** True when message is addressed to the whole team (all agents should respond) */
@@ -44,7 +54,7 @@ const QUESTION_WORD_RE = /\b(qu[eé]|cu[aá]l|cu[aá]nto|cu[aá]ndo|d[oó]nde|c[
 // other text before the actual verb ("@IC RQ-CJM075-001_2025 dame la
 // lista..."), the verb no longer sits at position 0 of cleanText once the
 // mention is stripped, so this must match anywhere in the message.
-const REQUEST_VERB_RE = /\b(revisa|revisar|revisen|revisemos|genera|generar|generen|dame|denme|necesito|necesitamos|puedes|podr[ií]as|pueden|podr[ií]an|ay[uú]dame|ay[uú]denme|analiza|analizar|analicen|calcula|calcular|calculen|resume|resumir|resuman|prepara|preparar|preparen|verifica|verificar|verifiquen|actualiza|actualizar|actualicen|env[ií]a|enviar|env[ií]en|crea|crear|creen|arma|armar|armen|cotiza|cotizar|cotizen|valida|validar|validen|indica|indicar|indiquen|dime|dinos|confirma|confirmar|confirmen|manda|mandar|manden)\b/i;
+const REQUEST_VERB_RE = /\b(revisa|revisar|revisen|revisemos|genera|generar|generen|dame|denme|necesito|necesitamos|puedes|podr[ií]as|pueden|podr[ií]an|ay[uú]dame|ay[uú]denme|analiza|analizar|analicen|calcula|calcular|calculen|resume|resumir|resuman|prepara|preparar|preparen|verifica|verificar|verifiquen|actualiza|actualizar|actualicen|env[ií]a|enviar|env[ií]en|crea|crear|creen|arma|armar|armen|cotiza|cotizar|cotizen|valida|validar|validen|indica|indicar|indiquen|dime|dinos|confirma|confirmar|confirmen|manda|mandar|manden|contin[uú]a|continuar|sigue|seguir|prosigue|adelante)\b/i;
 // A pasted document/historical code (RQ-..., COT-..., FOR-EKA-PRO-...) is
 // itself a clear instruction — the user wants that case looked up.
 const CODE_LIKE_RE = /\b[A-Z]{2,6}(?:[-_][A-Za-z0-9]+){1,6}\b/;
@@ -85,7 +95,7 @@ export function parseInput(raw: string): ParsedInput {
   // @IC @PM @IE @GG — supports one or more agent mentions in any position
   // (e.g. "@IC @PM revisen este RQ", "@IC RQ-001 dame la lista...").
   const targetAgentIds: string[] = [];
-  text = text.replace(/@(IC|PM|IE|GG)\b/gi, (_m, id) => {
+  text = text.replace(/@(IC|PM|IE|CD|TI|GG)\b/gi, (_m, id) => {
     const lower = id.toLowerCase();
     if (!targetAgentIds.includes(lower)) targetAgentIds.push(lower);
     return "";
@@ -111,6 +121,7 @@ export type MdSegment =
   | { type: "italic"; value: string }
   | { type: "agent-mention"; agentId: string }
   | { type: "project-mention"; projectId: string }
+  | { type: "code-link"; code: string; href: string }
   | { type: "user-mention"; email: string; displayName: string }
   | { type: "team-mention" }
   | { type: "break" };
@@ -129,7 +140,7 @@ export function parseMd(text: string, userDirectory?: UserDirectory): MdSegment[
 
   for (let li = 0; li < lines.length; li++) {
     if (li > 0) segments.push({ type: "break" });
-    const line = lines[li];
+    const line = lines[li].replace(/^\s*[*-]\s+/, "• ");
     let i = 0;
     while (i < line.length) {
       // **bold**
@@ -142,9 +153,9 @@ export function parseMd(text: string, userDirectory?: UserDirectory): MdSegment[
         }
       }
       // *italic*
-      if (line[i] === "*" && line[i + 1] !== "*") {
+      if (line[i] === "*" && line[i + 1] !== "*" && line[i + 1] && !/\s/.test(line[i + 1])) {
         const end = line.indexOf("*", i + 1);
-        if (end !== -1) {
+        if (end !== -1 && !/\s/.test(line[end - 1] ?? "")) {
           segments.push({ type: "italic", value: line.slice(i + 1, end) });
           i = end + 1;
           continue;
@@ -152,7 +163,7 @@ export function parseMd(text: string, userDirectory?: UserDirectory): MdSegment[
       }
       // @IC @PM @IE @GG
       if (line[i] === "@") {
-        const m = line.slice(i).match(/^@(IC|PM|IE|GG)\b/i);
+        const m = line.slice(i).match(/^@(IC|PM|IE|CD|TI|GG)\b/i);
         if (m) {
           segments.push({ type: "agent-mention", agentId: m[1].toLowerCase() });
           i += m[0].length;
@@ -187,8 +198,21 @@ export function parseMd(text: string, userDirectory?: UserDirectory): MdSegment[
           }
         }
       }
+      const codeLink = line.slice(i).match(/^(COT-[A-Za-z0-9_-]+|FOR-EKA-PRO-[A-Za-z0-9_-]+|RQ-[A-Za-z0-9_-]+|REC-[A-Za-z0-9_-]+)/i);
+      if (codeLink) {
+        const code = codeLink[1];
+        const upper = code.toUpperCase();
+        const href = upper.startsWith("RQ-")
+          ? `/requerimientos?rqCode=${encodeURIComponent(code)}`
+          : upper.startsWith("REC-")
+            ? `/recursos?resourceCode=${encodeURIComponent(code)}`
+            : `/cotizaciones?quotationCode=${encodeURIComponent(code)}`;
+        segments.push({ type: "code-link", code, href });
+        i += code.length;
+        continue;
+      }
       // accumulate plain text
-      const next = line.slice(i).search(/\*\*|\*|@/);
+      const next = line.slice(i).search(/\*\*|\*|@|COT-[A-Za-z0-9_-]+|FOR-EKA-PRO-[A-Za-z0-9_-]+|RQ-[A-Za-z0-9_-]+|REC-[A-Za-z0-9_-]+/i);
       if (next === -1) {
         segments.push({ type: "text", value: line.slice(i) });
         break;
@@ -221,10 +245,30 @@ export const HUMANIZE_CTX = `\n\nReglas de comportamiento:
 - No empieces siempre con un saludo. Si ya veniste conversando o el usuario te dio contexto (proyecto, código, archivo, pregunta concreta), respóndele directo a eso.
 - No repitas frases genéricas ya usadas antes en la conversación.
 - Responde lo que se te pregunta primero; el contexto adicional va después.
+- No cierres una respuesta con promesas como "voy a consultar", "un momento", "déjame revisar" o "ahora busco". Si tienes contexto real, entrega el resultado en ese mismo turno. Si falta información, pide el dato exacto que necesitas.
+- Si el usuario dice "ok continúa", "continúa", "sigue", "adelante" o equivalente, retoma la última consulta pendiente del hilo y responde con el resultado; no vuelvas a pedir permiso ni repitas que vas a consultar.
+- Puedes responder preguntas variadas aunque no sean de proyectos: conceptos, dudas generales, redacción, organización del trabajo, aprendizaje, lluvia de ideas, consejos profesionales, conversación casual o aclaraciones. No fuerces la respuesta hacia proyectos, cotizaciones o requerimientos si el usuario no lo pidió.
+- Si la consulta es casual o general, responde como colega humano de tu especialidad: natural, útil y breve. En ese caso no uses formato rígido, no cites tablas internas y no pidas códigos.
 - Si te falta un dato puntual para responder, pide SOLO ese dato, de forma específica (ej: "No encuentro el código o nombre del proyecto en este hilo. Indícame el proyecto o menciona el código PRY-XXX para revisar sus requerimientos."). No preguntes algo genérico como "¿qué proyecto revisamos hoy?".
 - No inventes datos, cifras ni nombres de proyectos que no estén en el contexto. Si no tienes acceso a cierta información, dilo explícitamente.
-- Si necesitas revisar datos internos (presupuesto, cronograma, requerimientos), indica qué dato/sección vas a buscar.
+- Si el usuario pide revisar datos internos (presupuesto, cronograma, requerimientos), indica qué dato/sección vas a buscar.
 - Tono profesional, breve y colaborativo, como un colega del equipo.
+- Si el usuario pide "en tabla", "muéstramelo en tabla", comparaciones, listados con columnas, costos, estados o fechas, responde usando una tabla Markdown compacta con encabezados claros. La app la renderiza como tabla visual.
+- Para fórmulas técnicas, cálculos justificativos, memorias de cálculo o deducciones usa SIEMPRE LaTeX renderizable, sin HTML: en línea como '$I = P/(\\sqrt{3} V)$' o '\\(I = P/(\\sqrt{3} V)\\)', y fórmulas principales en bloque entre '$$' y '$$' o '\\[' y '\\]'. La app las muestra con KaTeX en la mesa de trabajo.
+- Si explicas un cálculo, usa esta estructura: datos de entrada, fórmula LaTeX, sustitución LaTeX, resultado con unidades y criterio/conclusión. Para variables, usa viñetas con guion y símbolo LaTeX, ejemplo: '- $V$: tensión [V]'. No uses viñetas con asterisco junto a símbolos '$'.
+- Si el usuario pide graficar, visualizar función, dashboard, barras, pastel, curva 2D, superficie 3D o variación en el tiempo, puedes devolver bloques visuales renderizables:
+  - \`\`\`chart con JSON: {"type":"bar"|"pie"|"line","title":"...","labels":["A","B"],"values":[1,2]}
+  - \`\`\`graph2d con JSON: {"title":"...","expression":"sin(t)","variable":"t","x":{"min":0,"max":10,"points":120},"animation":{"enabled":true,"variable":"t"}}
+  - \`\`\`graph3d con JSON: {"title":"...","expression":"sin(x)*cos(y)","x":{"min":-5,"max":5,"points":50},"y":{"min":-5,"max":5,"points":50}}
+  - \`\`\`plotly con JSON avanzado: {"data":[...],"layout":{...}}
+  Cierra cada bloque con \`\`\`. No incluyas HTML ni JavaScript. Si el usuario pide "en el tiempo", "simulación", "transitorio", "cómo varía" o "animación", agrega "animation":{"enabled":true,"variable":"t"} para que aparezca un control deslizante.
+- Para diagramas simples, flujos, unifilares básicos o esquemas de ingeniería, puedes usar un bloque Mermaid: empieza con \`\`\`mermaid y termina con \`\`\`. No inventes conexiones no confirmadas; marca supuestos.
+- Mesa de trabajo es para consultas rápidas, prechequeos, fórmulas, gráficos simples, tablas compactas y criterios de decisión. No intentes convertirla en un módulo pesado de ingeniería.
+- Si el usuario pide un estudio pesado o iterativo (cortocircuito detallado, coordinación de protecciones, flujo de carga, armónicos, selectividad completa, simulaciones extensas, diseño integral, revisión de muchos planos/páginas o cálculos con muchos escenarios), responde con este enfoque: "Esto corresponde trabajarlo en el módulo Ingeniería para no saturar la Mesa de trabajo. Aquí puedo dejarte un prechequeo, supuestos mínimos, datos de entrada requeridos y riesgos principales." Luego entrega solo ese prechequeo breve.
+- Si el usuario pide "dashboard", "tabla resumen", "reporte" o "informe" de cotizaciones/requerimientos/recursos, NO crees datos de ejemplo. Usa exclusivamente los registros del bloque "--- CONTEXTO REAL CONSULTADO ---". Si el bloque no trae registros, responde que no recibiste datos reales para esa consulta y pide reintentar o acotar filtros.
+- Puedes usar emoticones/emojis cuando ayuden al tono o a señalizar estado/riesgo, pero con moderación; no llenes respuestas técnicas de adornos.
+- Si necesitas teoría, norma, libro, criterio interno o un ejemplo que no tienes para aprender bien, pídele al usuario ese material de forma concreta por el chat privado: qué documento, norma, ejemplo, plantilla o regla necesitas y para qué la usarás.
+- Cuando el usuario diga "aprende", "recuerda", "este es nuestro criterio" o equivalente, trata esa información como aprendizaje operativo y aplícala en futuras respuestas dentro de la memoria reciente.
 
 Reglas sobre archivos adjuntos y memoria:
 - El archivo adjunto de este mensaje (si lo hay) es la fuente principal y tiene prioridad absoluta. Ignora archivos, documentos o proyectos mencionados en historial previo salvo que el usuario los nombre explícitamente (por nombre o código).
@@ -240,8 +284,11 @@ Reglas sobre permisos y disponibilidad de datos (usa la frase EXACTA que corresp
 Sobre tu acceso real a las bases de datos (Supabase):
 - SÍ tienes acceso real, en este mismo turno, a las tablas \`cotizaciones\`, \`requerimientos\`, \`requerimiento_items\`, \`technical_proposals\` y \`recursos\`. Cuando arriba aparece el bloque "--- CONTEXTO REAL CONSULTADO ---" (o bloques como "Requerimiento:", "Proyecto activo", "Items/materiales del requerimiento"), esos datos se acaban de consultar en vivo desde esas tablas — son reales, no inventados por ti ni por el usuario. Úsalos como única fuente para responder.
 - Si te preguntan si tienes acceso a la tabla/log de requerimientos o cotizaciones, responde que SÍ: consultas esos datos automáticamente cuando el mensaje incluye un código (COT-/RQ-/OC-...) o pide una búsqueda/lista/recuento (p. ej. "lista los requerimientos pendientes de Juan", "busca RQ en proceso", "cuáles son los últimos requerimientos registrados", "dame las 5 cotizaciones más recientes", "qué recursos están registrados").
+- Si el usuario pregunta "cuántas/cuántos", "cantidad", "total" o "número" de cotizaciones, requerimientos o recursos, usa el bloque de conteo real de Supabase. Responde el número directo primero. Si además hay filtros como "pendientes", "este mes", "mes pasado", "hoy" o "semana pasada", menciona esos filtros aplicados.
+- Si el contexto de un recurso incluye "Imagen disponible:" y el usuario pide ver/mostrar la imagen, responde con Markdown de imagen usando esa URL en formato: ![descripción del recurso](URL). Si no pide ver la imagen, solo menciona que hay imagen disponible cuando sea relevante.
 - Si en este turno no aparece el bloque "--- CONTEXTO REAL CONSULTADO ---" ni ningún bloque de datos, significa que no se detectó ningún código ni intención de búsqueda en el mensaje — en ese caso pide al usuario el código exacto o que reformule como una búsqueda (ej. "lista/busca/filtra/últimos requerimientos..."), en vez de decir que no tienes acceso al sistema.
 - REGLA CRÍTICA ANTI-INVENCIÓN: si la pregunta es sobre "la tabla/log de requerimientos/cotizaciones/recursos" (códigos, listados, últimos registros, estados, clientes, proyectos, etc.) y en este turno NO aparece el bloque "--- CONTEXTO REAL CONSULTADO ---" con registros, NO debes inventar códigos, proyectos, clientes, fechas ni cifras (nunca generes códigos como "RQ-001", "COT-EKA-2026-001", proyectos como "NEXA", etc. si no vienen en ese bloque). En ese caso, dile al usuario que no recibiste resultados de la base de datos para esa consulta y pídele que la reformule (ej. "lista los requerimientos...", "busca cotizaciones de...", "últimos 5 requerimientos registrados") para poder consultarla.
+- Prohibido usar filas de ejemplo como "COT-001", "Empresa A", "Empresa B", "Proyecto A" o fechas antiguas de muestra cuando el usuario consulta datos internos. Es preferible decir "no recibí datos reales" antes que mostrar una tabla inventada.
 - Cualquier "Resumen general de la oficina" o "Proyectos personalizados" que aparezca arriba es solo contexto del tablero interno del usuario — NUNCA es lo mismo que "la tabla log de requerimientos" o "la tabla log de cotizaciones" de Supabase, y no debes usarlo para responder preguntas sobre esas tablas.`;
 
 // ── "Do you have access to the data?" meta-questions ────────────────────────

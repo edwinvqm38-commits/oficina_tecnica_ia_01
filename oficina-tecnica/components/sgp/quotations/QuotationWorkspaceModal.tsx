@@ -8,8 +8,9 @@ import { QuotationCashflowDashboardView } from "@/components/sgp/quotations/Quot
 import { QuotationCashflowDrilldownPanel } from "@/components/sgp/quotations/QuotationCashflowDrilldownPanel";
 import { QuotationMonthlyCashflowView } from "@/components/sgp/quotations/QuotationMonthlyCashflowView";
 import { TechnicalProposalWorkspaceModal } from "@/components/sgp/quotations/TechnicalProposalWorkspaceModal";
+import { EmailThreadButton } from "@/components/sgp/EmailThreadButton";
 import type { Cotizacion, DetalleRequerimientoItem, Recurso, Requerimiento } from "@/lib/sgp/demoData";
-import { computeQuotationEconomicRows } from "@/lib/sgp/quotationEconomics";
+import { computeQuotationEconomicRows, normalizeCotizacionEconomicSummary } from "@/lib/sgp/quotationEconomics";
 import { collectQuotationCashflowItems, computeQuotationCashflow, computeQuotationCashflowWeeklyDrilldown, type QuotationCashflowData } from "@/lib/sgp/quotationCashflow";
 import { formatCurrencyNumber, formatDate, normalizeDateForStorage } from "@/lib/sgp/utils";
 
@@ -785,6 +786,24 @@ export function QuotationWorkspaceModal({
     setEconomicEditDrafts({});
   }
 
+  function buildCommittedEconomicPatch(): Partial<Cotizacion> {
+    if (!draft) return { flat_mensual: flatMensualDraft };
+    const rowDraftEntries = Object.entries(economicEditDrafts);
+    const summary = normalizeCotizacionEconomicSummary(draft).map((row) => {
+      const rowDraft = economicEditDrafts[row.tipo_recurso];
+      if (!rowDraft) return row;
+      return {
+        ...row,
+        ...(rowDraft.base !== undefined ? { base: sanitizeNumber(rowDraft.base) } : {}),
+        ...(rowDraft.oferta !== undefined ? { oferta: sanitizeNumber(rowDraft.oferta) } : {}),
+      };
+    });
+    return {
+      flat_mensual: flatMensualDraft,
+      resumen_economico: rowDraftEntries.length > 0 ? summary : normalizeCotizacionEconomicSummary(draft),
+    };
+  }
+
   function toggleEconomicEdition() {
     if (!isEconomicEditing) {
       setPendingConfirm({
@@ -798,9 +817,12 @@ export function QuotationWorkspaceModal({
     }
     setPendingConfirm({
       message: "¿Deseas guardar los cambios del resumen económico?",
-      onAccept: () => {
+      onAccept: async () => {
+        const finalPatch = buildCommittedEconomicPatch();
         commitAllEconomicDrafts();
-        onDraftChange({ flat_mensual: flatMensualDraft });
+        onDraftChange(finalPatch);
+        const saved = await onSave(finalPatch);
+        if (saved === false) return;
         setIsEconomicEditing(false);
       },
     });
@@ -1036,6 +1058,22 @@ export function QuotationWorkspaceModal({
     window.addEventListener("mouseup", onMouseUp);
   }
 
+  const quotationEmailSubject = [
+    draft.codigo,
+    draft.cliente,
+    draft.unidad_trabajo,
+    draft.proyecto,
+  ].map((part) => String(part || "-").trim() || "-").join(" / ");
+  const quotationEmailRows = [
+    { label: "Cotización", value: draft.codigo },
+    { label: "Cliente", value: draft.cliente },
+    { label: "Unidad de trabajo", value: draft.unidad_trabajo },
+    { label: "Proyecto", value: draft.proyecto },
+    { label: "Estado propuesta", value: draft.estado_propuesta },
+    { label: "Tipo de servicio", value: draft.tipo_servicio },
+    { label: "Monto ofertado", value: `${draft.moneda_cotizacion} ${formatCurrencyNumber(draft.monto)}` },
+  ];
+
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/20 p-1.5">
       <div className="relative flex h-auto max-h-[calc(100dvh-12px)] w-[97vw] max-w-[1860px] flex-col overflow-hidden rounded-xl border border-border bg-panel shadow-lg">
@@ -1051,6 +1089,16 @@ export function QuotationWorkspaceModal({
               <div className="flex min-h-6 items-center justify-between gap-2">
                 <FieldLabelIcon icon="file-text" label="Datos de la cotización" className="text-[11px] font-medium" />
                 <div className="flex items-center gap-1.5">
+                  <EmailThreadButton
+                    kind="quotation"
+                    entityCode={draft.codigo}
+                    subject={quotationEmailSubject}
+                    title={`Cotización ${draft.codigo}`}
+                    linkPath={`/cotizaciones?quotationCode=${encodeURIComponent(draft.codigo)}`}
+                    summaryRows={quotationEmailRows}
+                    className={actionButtonClassName()}
+                    buttonLabel="Correo"
+                  />
                   <button
                     type="button"
                     onClick={() => setTechnicalProposalOpen(true)}

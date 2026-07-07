@@ -6,6 +6,7 @@ import { StatusBadge } from "@/components/sgp/StatusBadge";
 import { FieldLabelIcon, type IconName } from "@/components/sgp/ui/FieldLabelIcon";
 import { FieldLockButton } from "@/components/sgp/ui/FieldLockButton";
 import { DateTextInput } from "@/components/sgp/ui/DateTextInput";
+import { EmailThreadButton } from "@/components/sgp/EmailThreadButton";
 import type { EstadoRequerimiento, Recurso, Requerimiento } from "@/lib/sgp/demoData";
 import { formatCurrencyNumber, formatDate } from "@/lib/sgp/utils";
 
@@ -334,6 +335,24 @@ export function RequirementWorkspaceModal({
     return await (onSaveTable ?? onSave)(itemsOverride);
   }
 
+  const requirementEmailSubject = [
+    cotizacionCodigo,
+    cotizacionOc || "SIN OC",
+    draft.codigo,
+    proyecto,
+  ].map((part) => String(part || "-").trim() || "-").join(" / ");
+  const requirementEmailRows = [
+    { label: "Cotización", value: cotizacionCodigo },
+    { label: "OC", value: cotizacionOc || "-" },
+    { label: "Requerimiento", value: draft.codigo },
+    { label: "Proyecto", value: proyecto },
+    { label: "Cliente", value: cliente },
+    { label: "Unidad de trabajo", value: unidadTrabajo },
+    { label: "Estado", value: draft.estado },
+    { label: "Fecha requerida", value: formatDate(draft.fecha_requerida) || "-" },
+    { label: "Total RQ", value: `${cotizacionMoneda} ${formatCurrencyNumber(draft.total_rq ?? 0)}` },
+  ];
+
   return (
     <div className={`fixed inset-0 ${zIndexClassName} bg-black/20 p-3 md:p-4`}>
       <div className="mx-auto flex h-[calc(100vh-24px)] max-h-[calc(100vh-24px)] w-[92vw] max-w-[1600px] flex-col overflow-hidden rounded-xl border border-border bg-panel shadow-lg">
@@ -543,6 +562,16 @@ export function RequirementWorkspaceModal({
                     className="text-[11px] font-medium"
                   />
                   <div className="flex items-center gap-1.5">
+                    <EmailThreadButton
+                      kind="requirement"
+                      entityCode={draft.codigo}
+                      subject={requirementEmailSubject}
+                      title={`Requerimiento ${draft.codigo}`}
+                      linkPath={`/requerimientos?rqCode=${encodeURIComponent(draft.codigo)}`}
+                      summaryRows={requirementEmailRows}
+                      className={workspaceActionButtonClassName()}
+                      buttonLabel="Correo"
+                    />
                     <button onClick={onCancel} className={workspaceActionButtonClassName()}>
                       <WorkspaceActionIcon name="cancel" />
                       <span>Cancelar</span>

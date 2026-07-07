@@ -30,15 +30,25 @@ export async function POST(request: Request) {
   const apiKey = process.env[cfg.envKey] ?? process.env[`NEXT_PUBLIC_${cfg.envKey}`];
   if (!apiKey) return Response.json({ error: "Provider not configured on server" }, { status: 503 });
 
-  const res = await fetch(`${cfg.baseUrl}/chat/completions`, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${apiKey}`,
-      ...(cfg.extraHeaders ?? {}),
-    },
-    body: JSON.stringify({ model, messages }),
-  });
+  let res: Response;
+  try {
+    res = await fetch(`${cfg.baseUrl}/chat/completions`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${apiKey}`,
+        ...(cfg.extraHeaders ?? {}),
+      },
+      body: JSON.stringify({ model, messages, max_tokens: 12000 }),
+      signal: AbortSignal.timeout(60000),
+    });
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : "network error";
+    return Response.json(
+      { error: `No se pudo conectar con ${provider}. Revisa internet, DNS/firewall o disponibilidad del proveedor. Detalle: ${msg}` },
+      { status: 502 }
+    );
+  }
 
   if (!res.ok) {
     const errText = await res.text().catch(() => res.statusText);

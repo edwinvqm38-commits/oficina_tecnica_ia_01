@@ -59,11 +59,19 @@ export type RecursosAllResult = {
   warning?: string;
 };
 
-export type ResourceStorageFileCategory = "image" | "datasheet" | "attachment";
+export function buildSequentialResourceCode(year = new Date().getFullYear(), correlativo = 1): string {
+  return `REC-${year}-${String(Math.max(1, correlativo)).padStart(4, "0")}`;
+}
+
+export type ResourceStorageFileCategory = "image" | "datasheet" | "attachment" | "quotation";
 
 type StoredResourceFile = {
-  bucket_id: string;
-  storage_path: string;
+  bucket_id?: string;
+  storage_path?: string;
+  drive_file_id?: string;
+  drive_folder_id?: string;
+  drive_url?: string;
+  drive_web_content_link?: string | null;
   file_name: string;
   file_type: ResourceStorageFileCategory;
   mime_type: string | null;
@@ -104,7 +112,8 @@ export class RecursoWriteError extends Error {
       | "supabase_not_configured"
       | "rls_denied"
       | "schema_error"
-      | "supabase_error",
+      | "supabase_error"
+      | "drive_error",
   ) {
     super(message);
     this.name = "RecursoWriteError";
@@ -172,6 +181,7 @@ type RecursoMetadata = {
     image?: StoredResourceFile[];
     datasheet?: StoredResourceFile[];
     attachments?: StoredResourceFile[];
+    quotations?: StoredResourceFile[];
   };
   documentos_pendientes_migracion?: boolean;
   [key: string]: unknown;
@@ -275,34 +285,8 @@ const SEARCH_FIELDS = [
   "modelo",
 ];
 
-const FILTER_OPTIONS_SELECT = `
-  tipo_recurso_nombre,
-  estado,
-  moneda_codigo,
-  proveedor_nombre,
-  marca_nombre,
-  deleted_at
-`;
-
-const RESOURCE_FILES_BUCKET = "resource-files";
-
 function hasSupabaseConfig(): boolean {
   return Boolean(process.env.NEXT_PUBLIC_SUPABASE_URL && process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY);
-}
-
-function safeStorageSegment(value: string): string {
-  return value
-    .normalize("NFD")
-    .replace(/[\u0300-\u036f]/g, "")
-    .replace(/[^a-zA-Z0-9._-]+/g, "-")
-    .replace(/^-+|-+$/g, "")
-    .slice(0, 120) || "archivo";
-}
-
-function storageFolderForCategory(category: ResourceStorageFileCategory): "image" | "datasheet" | "attachments" {
-  if (category === "image") return "image";
-  if (category === "datasheet") return "datasheet";
-  return "attachments";
 }
 
 function normalizeString(value: unknown): string {
@@ -364,7 +348,7 @@ function writeErrorMessage(error: SerializedSupabaseError): string {
 
 function fileReference(file: ResourceFileMeta | null | undefined): string | null {
   if (!file) return null;
-  return normalizeString(file.storage_path || file.futureDriveUrl || file.futureDriveFileId || file.name) || null;
+  return normalizeString(file.futureDriveUrl || file.futureDriveFileId || file.storage_path || file.name) || null;
 }
 
 function fileReferences(files: ResourceFileMeta[] | undefined): string[] {
@@ -379,10 +363,16 @@ function splitStoredReferences(value: string): string[] {
 }
 
 function storedFileFromMeta(file: ResourceFileMeta, category: ResourceStorageFileCategory): StoredResourceFile | null {
-  if (!file.storage_path) return null;
+  const driveFileId = normalizeString(file.futureDriveFileId);
+  const storagePath = normalizeString(file.storage_path);
+  if (!driveFileId && !storagePath) return null;
   return {
-    bucket_id: file.bucket_id || RESOURCE_FILES_BUCKET,
+    bucket_id: file.bucket_id,
     storage_path: file.storage_path,
+    drive_file_id: driveFileId || undefined,
+    drive_folder_id: file.driveFolderId,
+    drive_url: file.futureDriveUrl || undefined,
+    drive_web_content_link: file.driveWebContentLink ?? null,
     file_name: file.file_name || file.name,
     file_type: category,
     mime_type: file.mime_type || file.type || null,
@@ -401,8 +391,10 @@ function fileMetaFromStoredFile(file: StoredResourceFile): ResourceFileMeta {
     size: file.size ?? 0,
     type: file.mime_type || "application/octet-stream",
     localPreviewUrl: "",
-    futureDriveFileId: "",
-    futureDriveUrl: "",
+    futureDriveFileId: file.drive_file_id ?? "",
+    futureDriveUrl: file.drive_url ?? "",
+    driveFolderId: file.drive_folder_id,
+    driveWebContentLink: file.drive_web_content_link ?? undefined,
     bucket_id: file.bucket_id,
     storage_path: file.storage_path,
     file_name: file.file_name,
@@ -418,8 +410,7 @@ function storedFilesFromUnknown(value: unknown): StoredResourceFile[] {
     if (!item || typeof item !== "object" || Array.isArray(item)) return false;
     const row = item as Record<string, unknown>;
     return (
-      typeof row.bucket_id === "string" &&
-      typeof row.storage_path === "string" &&
+      (typeof row.drive_file_id === "string" || typeof row.storage_path === "string") &&
       typeof row.file_name === "string" &&
       typeof row.file_type === "string"
     );
@@ -429,11 +420,13 @@ function storedFilesFromUnknown(value: unknown): StoredResourceFile[] {
 function buildResourceMetadata(row: RecursoWritePayload, existingMetadata?: RecursoMetadata | null): RecursoMetadata {
   const fichas = row.resourceFiles.fichasTecnicas ?? (row.resourceFiles.fichaTecnica ? [row.resourceFiles.fichaTecnica] : []);
   const imagenes = row.resourceFiles.imagenes ?? (row.resourceFiles.imagen ? [row.resourceFiles.imagen] : []);
+  const cotizaciones = row.resourceFiles.cotizaciones ?? (row.resourceFiles.cotizacion ? [row.resourceFiles.cotizacion] : []);
   const fichaTecnica = fileReference(fichas[0]) ?? toNullableString(row.ficha_tecnica);
   const imagen = fileReference(imagenes[0]) ?? toNullableString(row.imagen);
   const archivos = fileReferences(row.resourceFiles.archivos);
   const datasheetFiles = storedFilesFromMeta(fichas, "datasheet");
   const imageFiles = storedFilesFromMeta(imagenes, "image");
+  const quotationFiles = storedFilesFromMeta(cotizaciones, "quotation");
   const attachmentFiles = storedFilesFromMeta(row.resourceFiles.archivos, "attachment");
 
   return {
@@ -445,6 +438,7 @@ function buildResourceMetadata(row: RecursoWritePayload, existingMetadata?: Recu
       ...((existingMetadata?.resource_files ?? {}) as RecursoMetadata["resource_files"]),
       datasheet: datasheetFiles,
       image: imageFiles,
+      quotations: quotationFiles,
       attachments: attachmentFiles,
     },
   };
@@ -512,9 +506,11 @@ function mapSupabaseRecurso(row: SupabaseRecurso): Recurso {
   const resourceFiles = metadata.resource_files ?? {};
   const storedDatasheets = storedFilesFromUnknown(resourceFiles.datasheet);
   const storedImages = storedFilesFromUnknown(resourceFiles.image);
+  const storedQuotations = storedFilesFromUnknown(resourceFiles.quotations);
   const storedAttachments = storedFilesFromUnknown(resourceFiles.attachments);
   const fichaTecnica = storedDatasheets[0] ? fileMetaFromStoredFile(storedDatasheets[0]) : fileMetaFromName(metadata.ficha_tecnica);
   const imagen = storedImages[0] ? fileMetaFromStoredFile(storedImages[0]) : fileMetaFromName(metadata.imagen);
+  const cotizacion = storedQuotations[0] ? fileMetaFromStoredFile(storedQuotations[0]) : null;
   const archivos = storedAttachments.length
     ? storedAttachments.map(fileMetaFromStoredFile)
     : Array.isArray(metadata.archivos)
@@ -522,6 +518,7 @@ function mapSupabaseRecurso(row: SupabaseRecurso): Recurso {
     : [];
   const fichasTecnicas = storedDatasheets.length ? storedDatasheets.map(fileMetaFromStoredFile) : fichaTecnica ? [fichaTecnica] : [];
   const imagenes = storedImages.length ? storedImages.map(fileMetaFromStoredFile) : imagen ? [imagen] : [];
+  const cotizaciones = storedQuotations.length ? storedQuotations.map(fileMetaFromStoredFile) : cotizacion ? [cotizacion] : [];
 
   return {
     id: row.id,
@@ -546,8 +543,10 @@ function mapSupabaseRecurso(row: SupabaseRecurso): Recurso {
     resourceFiles: {
       fichaTecnica,
       imagen,
+      cotizacion,
       fichasTecnicas,
       imagenes,
+      cotizaciones,
       archivos,
     },
   };
@@ -675,26 +674,66 @@ export async function listRecursosFilterOptions(): Promise<RecursosFilterOptions
     };
   }
 
-  const { data, error } = await supabase
-    .from("recursos")
-    .select(FILTER_OPTIONS_SELECT)
-    .is("deleted_at", null);
-
-  if (error) {
+  const { data: rpcData, error: rpcError } = await supabase.rpc("get_recursos_filter_options");
+  if (!rpcError && Array.isArray(rpcData) && rpcData[0]) {
+    const row = rpcData[0] as {
+      tipos?: string[];
+      estados?: string[];
+      monedas?: string[];
+      proveedores?: string[];
+      marcas?: string[];
+    };
     return {
-      ...demoFilterOptions(),
-      warning: `No se pudieron leer filtros desde Supabase: ${error.message}. Se usan filtros demo locales.`,
+      tipos: row.tipos ?? [],
+      estados: row.estados ?? [],
+      monedas: row.monedas ?? [],
+      proveedores: row.proveedores ?? [],
+      marcas: row.marcas ?? [],
+      source: "supabase",
     };
   }
 
   return {
-    tipos: uniqueSorted((data ?? []).map((row) => row.tipo_recurso_nombre)),
-    estados: uniqueSorted((data ?? []).map((row) => row.estado)),
-    monedas: uniqueSorted((data ?? []).map((row) => row.moneda_codigo)),
-    proveedores: uniqueSorted((data ?? []).map((row) => row.proveedor_nombre)),
-    marcas: uniqueSorted((data ?? []).map((row) => row.marca_nombre)),
-    source: "supabase",
+    ...demoFilterOptions(),
+    warning: rpcError
+      ? `No se pudo ejecutar get_recursos_filter_options: ${rpcError.message}. Ejecuta supabase/sql/120_resource_files_and_filters.sql.`
+      : "No se pudieron leer filtros desde Supabase. Ejecuta supabase/sql/120_resource_files_and_filters.sql.",
   };
+}
+
+export async function getNextResourceDraftCode(year = new Date().getFullYear()): Promise<string> {
+  const prefix = `REC-${year}-`;
+  if (!hasSupabaseConfig()) {
+    const demoCodes = demoData
+      .listRecursos()
+      .map((item) => item.codigo_recurso)
+      .filter((code) => code.startsWith(prefix));
+    const max = Math.max(
+      0,
+      ...demoCodes
+        .map((code) => Number(code.slice(prefix.length)))
+        .filter((value) => Number.isFinite(value)),
+    );
+    return buildSequentialResourceCode(year, max + 1);
+  }
+
+  const { data, error } = await supabase
+    .from("recursos")
+    .select("codigo_recurso")
+    .ilike("codigo_recurso", `${prefix}%`)
+    .is("deleted_at", null)
+    .order("codigo_recurso", { ascending: false })
+    .limit(1);
+
+  if (error) {
+    const fallbackCode = demoData.nextResourceDraftCode();
+    const fallbackNumber = Number(fallbackCode.slice(prefix.length));
+    return buildSequentialResourceCode(year, Number.isFinite(fallbackNumber) ? fallbackNumber : 1);
+  }
+
+  const lastCode = data?.[0]?.codigo_recurso ? String(data[0].codigo_recurso) : "";
+  const lastNumber = lastCode.startsWith(prefix) ? Number(lastCode.slice(prefix.length)) : 0;
+  return buildSequentialResourceCode(year, Number.isFinite(lastNumber) ? lastNumber + 1 : 1);
 }
 
 export async function listRecursos(params: RecursosQueryParams = {}): Promise<RecursosListResult> {
@@ -810,45 +849,46 @@ export async function uploadResourceFile(
   category: ResourceStorageFileCategory,
   file: File,
 ): Promise<ResourceFileMeta> {
-  if (!hasSupabaseConfig()) {
-    throw new RecursoWriteError("Supabase no está configurado para subir archivos reales.", "supabase_not_configured");
-  }
+  const form = new FormData();
+  form.append("file", file);
+  form.append("entityType", "resource");
+  form.append("entityCode", resourceId);
+  form.append("category", category);
 
-  const normalizedResourceId = safeStorageSegment(resourceId);
-  const folder = storageFolderForCategory(category);
-  const timestamp = Date.now();
-  const safeFileName = safeStorageSegment(file.name);
-  const storagePath = `recursos/${normalizedResourceId}/${folder}/${timestamp}-${safeFileName}`;
-
-  const { error } = await supabase.storage.from(RESOURCE_FILES_BUCKET).upload(storagePath, file, {
-    cacheControl: "3600",
-    contentType: file.type || "application/octet-stream",
-    upsert: false,
+  const response = await fetch("/api/drive/upload", {
+    method: "POST",
+    body: form,
   });
+  const result = (await response.json()) as {
+    file_id?: string;
+    name?: string;
+    mime_type?: string;
+    size?: number;
+    folder_id?: string;
+    web_view_link?: string;
+    web_content_link?: string | null;
+    error?: string;
+  };
 
-  if (error) {
+  if (!response.ok || !result.file_id) {
     throw new RecursoWriteError(
-      error.message.includes("row-level security") || error.message.toLowerCase().includes("permission")
-        ? "Supabase Storage rechazó la subida por permisos. Verifica las policies INSERT del bucket resource-files."
-        : `No se pudo subir el archivo a Storage: ${error.message}`,
-      error.message.includes("row-level security") || error.message.toLowerCase().includes("permission") ? "rls_denied" : "supabase_error",
+      result.error ?? "No se pudo subir el archivo a Google Drive.",
+      "drive_error",
     );
   }
 
-  const { data: signedData } = await supabase.storage.from(RESOURCE_FILES_BUCKET).createSignedUrl(storagePath, 60 * 60);
-
   return {
     name: file.name,
-    size: file.size,
-    type: file.type || "application/octet-stream",
+    size: result.size ?? file.size,
+    type: result.mime_type || file.type || "application/octet-stream",
     localPreviewUrl: "",
-    futureDriveFileId: "",
-    futureDriveUrl: signedData?.signedUrl ?? "",
-    bucket_id: RESOURCE_FILES_BUCKET,
-    storage_path: storagePath,
+    futureDriveFileId: result.file_id,
+    futureDriveUrl: result.web_view_link ?? `https://drive.google.com/file/d/${result.file_id}/view`,
+    driveFolderId: result.folder_id,
+    driveWebContentLink: result.web_content_link ?? undefined,
     file_name: file.name,
     file_type: category,
-    mime_type: file.type || "application/octet-stream",
+    mime_type: result.mime_type || file.type || "application/octet-stream",
     uploaded_at: new Date().toISOString(),
   };
 }
@@ -856,18 +896,8 @@ export async function uploadResourceFile(
 export async function createResourceFileSignedUrl(file: ResourceFileMeta): Promise<string | null> {
   if (file.localPreviewUrl) return file.localPreviewUrl;
   if (file.futureDriveUrl) return file.futureDriveUrl;
-  if (!file.storage_path) return null;
-  const bucketId = file.bucket_id || RESOURCE_FILES_BUCKET;
-  const { data, error } = await supabase.storage.from(bucketId).createSignedUrl(file.storage_path, 60 * 60);
-  if (error) {
-    throw new RecursoWriteError(
-      error.message.includes("row-level security") || error.message.toLowerCase().includes("permission")
-        ? "Supabase Storage rechazó la lectura por permisos. Verifica las policies SELECT del bucket resource-files."
-        : `No se pudo abrir el archivo desde Storage: ${error.message}`,
-      error.message.includes("row-level security") || error.message.toLowerCase().includes("permission") ? "rls_denied" : "supabase_error",
-    );
-  }
-  return data.signedUrl;
+  if (file.futureDriveFileId) return `https://drive.google.com/file/d/${file.futureDriveFileId}/view`;
+  return null;
 }
 
 export async function createRecurso(row: RecursoWritePayload): Promise<Recurso> {

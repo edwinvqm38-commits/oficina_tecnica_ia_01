@@ -26,6 +26,7 @@ import {
 } from "@/lib/chat/contextQuery";
 import { getTechnicalProposalByCode } from "@/lib/sgp/technicalProposalsRepository";
 import { listRecursos } from "@/lib/sgp/recursosRepository";
+import { supabase } from "@/lib/sgp/supabaseClient";
 
 // Límite máximo de registros que una herramienta devuelve al contexto IA.
 export const DEFAULT_CONTEXT_LIMIT = 20;
@@ -62,6 +63,8 @@ export interface RecursoLite {
   proveedor_nombre: string | null;
   marca_nombre: string | null;
   estado: string | null;
+  image_url?: string | null;
+  image_name?: string | null;
 }
 
 // Resultados tipados por fuente (unión discriminada por `source`).
@@ -87,6 +90,20 @@ export interface RecursosToolResult extends ContextToolResultBase {
   source: "recursos";
   records: RecursoLite[];
 }
+export type CountableContextTable = "cotizaciones" | "requerimientos" | "recursos";
+export interface CountToolFilters {
+  estado?: string;
+  dateFrom?: string;
+  dateTo?: string;
+  dateColumn?: "created_at" | "fecha_registro" | "fecha_solicitud" | "fecha_requerida";
+  periodLabel?: string;
+}
+export interface CountToolResult extends ContextToolResultBase {
+  source: "conteo";
+  table: CountableContextTable;
+  label: string;
+  records: never[];
+}
 export interface ProyectoToolResult extends ContextToolResultBase {
   source: "proyecto";
   code: string;
@@ -102,6 +119,7 @@ export type ContextToolResult =
   | RequerimientoItemsToolResult
   | TechnicalProposalsToolResult
   | RecursosToolResult
+  | CountToolResult
   | ProyectoToolResult;
 
 function devLog(...args: unknown[]) {
@@ -117,6 +135,92 @@ function safeErrorMessage(err: unknown): string {
 function clampLimit(limit: number | undefined): number {
   if (!limit || limit < 1) return DEFAULT_CONTEXT_LIMIT;
   return Math.min(limit, DEFAULT_CONTEXT_LIMIT);
+}
+
+function driveFileIdFromUrl(value: string): string {
+  const normalized = value.trim();
+  if (!normalized) return "";
+  const filePathMatch = normalized.match(/\/file\/d\/([^/?#]+)/i);
+  if (filePathMatch?.[1]) return filePathMatch[1];
+  try {
+    const url = new URL(normalized);
+    return url.searchParams.get("id") ?? "";
+  } catch {
+    return "";
+  }
+}
+
+function internalDriveFileUrl(fileId: string): string {
+  return `/api/drive/file/${encodeURIComponent(fileId)}`;
+}
+
+function tableLabel(table: CountableContextTable): string {
+  if (table === "cotizaciones") return "cotizaciones";
+  if (table === "requerimientos") return "requerimientos";
+  return "recursos";
+}
+
+function dateColumnForTable(table: CountableContextTable): CountToolFilters["dateColumn"] {
+  if (table === "cotizaciones") return "created_at";
+  if (table === "requerimientos") return "created_at";
+  return "created_at";
+}
+
+// ── Conteos/agregados ligeros ───────────────────────────────────────────────
+
+export async function contarRegistros(
+  table: CountableContextTable,
+  filters: CountToolFilters = {},
+): Promise<CountToolResult> {
+  const dateColumn: NonNullable<CountToolFilters["dateColumn"]> = filters.dateColumn ?? dateColumnForTable(table) ?? "created_at";
+  const query: Record<string, unknown> = { ...filters, dateColumn };
+  try {
+    let request = supabase
+      .from(table)
+      .select("id", { count: "exact", head: true });
+
+    request = request.is("deleted_at", null);
+
+    if (filters.estado?.trim()) request = request.ilike("estado", `%${filters.estado.trim()}%`);
+    if (filters.dateFrom) request = request.gte(dateColumn, filters.dateFrom);
+    if (filters.dateTo) request = request.lt(dateColumn, filters.dateTo);
+
+    const { error, count } = await request;
+    if (error) {
+      return {
+        source: "conteo",
+        status: "error",
+        table,
+        label: tableLabel(table),
+        query,
+        records: [],
+        total: 0,
+        message: safeErrorMessage(error),
+      };
+    }
+
+    return {
+      source: "conteo",
+      status: "success",
+      table,
+      label: tableLabel(table),
+      query,
+      records: [],
+      total: count ?? 0,
+    };
+  } catch (err) {
+    devLog("contarRegistros error", err);
+    return {
+      source: "conteo",
+      status: "error",
+      table,
+      label: tableLabel(table),
+      query,
+      records: [],
+      total: 0,
+      message: safeErrorMessage(err),
+    };
+  }
 }
 
 // ── Cotizaciones ─────────────────────────────────────────────────────────────
@@ -260,6 +364,14 @@ export async function buscarRecursos(
     // `listRecursos` devuelve filas con el shape de dominio `Recurso`
     // (tipo_recurso, moneda, proveedor, marca), no las columnas crudas de la BD.
     const lite: RecursoLite[] = result.rows.map((r) => ({
+      image_url: (() => {
+        const imageFile = r.resourceFiles.imagenes?.[0] ?? r.resourceFiles.imagen ?? null;
+        const fileId = imageFile?.futureDriveFileId || driveFileIdFromUrl(imageFile?.futureDriveUrl ?? "");
+        if (fileId) return internalDriveFileUrl(fileId);
+        if (imageFile?.futureDriveUrl && /\.(png|jpe?g|webp|gif|svg)(\?|#|$)/i.test(imageFile.futureDriveUrl)) return imageFile.futureDriveUrl;
+        return null;
+      })(),
+      image_name: r.resourceFiles.imagenes?.[0]?.name ?? r.resourceFiles.imagen?.name ?? null,
       codigo_recurso: r.codigo_recurso,
       descripcion: r.descripcion,
       tipo_recurso_nombre: r.tipo_recurso ?? null,

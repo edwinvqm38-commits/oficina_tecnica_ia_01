@@ -1,10 +1,10 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, type DragEvent } from "react";
 import type { ResourceFileMeta, ResourceFiles } from "@/lib/sgp/demoData";
 import { FieldLabelIcon } from "@/components/sgp/ui/FieldLabelIcon";
 
-type ResourceFileCategory = "image" | "datasheet" | "attachment";
+type ResourceFileCategory = "image" | "datasheet" | "attachment" | "quotation";
 
 type ResourceFilesPanelProps = {
   value: ResourceFiles;
@@ -74,10 +74,16 @@ export function ResourceFilesPanel({
     () => value.imagenes ?? (value.imagen ? [value.imagen] : []),
     [value.imagen, value.imagenes],
   );
+  const cotizaciones = useMemo(
+    () => value.cotizaciones ?? (value.cotizacion ? [value.cotizacion] : []),
+    [value.cotizacion, value.cotizaciones],
+  );
   const [fichaReference, setFichaReference] = useState("");
   const [imagenReference, setImagenReference] = useState("");
+  const [cotizacionReference, setCotizacionReference] = useState("");
   const [archivoReference, setArchivoReference] = useState("");
   const [uploading, setUploading] = useState<ResourceFileCategory | null>(null);
+  const [dragOver, setDragOver] = useState<ResourceFileCategory | null>(null);
   const [previewImageUrl, setPreviewImageUrl] = useState<string | null>(null);
 
   function mergedSummary(list: ResourceFileMeta[], emptyText: string, singularText: string, pluralText: string): string {
@@ -142,6 +148,56 @@ export function ResourceFilesPanel({
     onChange({ ...value, archivos: [...value.archivos, ...mapped] });
   }
 
+  async function updateCotizaciones(files: FileList | null) {
+    const mapped = await filesToMeta("quotation", files);
+    if (!mapped.length) return;
+    const next = [...cotizaciones, ...mapped];
+    onValidationError?.(null);
+    onChange({
+      ...value,
+      cotizacion: next[0] ?? null,
+      cotizaciones: next,
+    });
+  }
+
+  async function handleDrop(category: ResourceFileCategory, event: DragEvent<HTMLDivElement>) {
+    event.preventDefault();
+    event.stopPropagation();
+    setDragOver(null);
+    if (readOnly || !allowFilePicker) return;
+    const files = event.dataTransfer.files;
+    if (!files?.length) return;
+    if (category === "datasheet") {
+      await updateFichas(files);
+    } else if (category === "image") {
+      await updateImagenes(files);
+    } else if (category === "quotation") {
+      await updateCotizaciones(files);
+    } else {
+      await addFiles(files);
+    }
+  }
+
+  function dropZoneClass(category: ResourceFileCategory): string {
+    return `flex min-h-[126px] flex-col rounded-md border p-2 transition ${
+      dragOver === category
+        ? "border-teal-500 bg-teal-50"
+        : "border-border bg-stone-50/50"
+    }`;
+  }
+
+  function dropZoneHandlers(category: ResourceFileCategory) {
+    return {
+      onDragOver: (event: DragEvent<HTMLDivElement>) => {
+        if (readOnly || !allowFilePicker) return;
+        event.preventDefault();
+        setDragOver(category);
+      },
+      onDragLeave: () => setDragOver((current) => (current === category ? null : current)),
+      onDrop: (event: DragEvent<HTMLDivElement>) => void handleDrop(category, event),
+    };
+  }
+
   function removeFichaAt(index: number) {
     if (readOnly) return;
     const next = fichasTecnicas.filter((_, idx) => idx !== index);
@@ -159,6 +215,16 @@ export function ResourceFilesPanel({
       ...value,
       imagen: next[0] ?? null,
       imagenes: next,
+    });
+  }
+
+  function removeCotizacionAt(index: number) {
+    if (readOnly) return;
+    const next = cotizaciones.filter((_, idx) => idx !== index);
+    onChange({
+      ...value,
+      cotizacion: next[0] ?? null,
+      cotizaciones: next,
     });
   }
 
@@ -205,6 +271,15 @@ export function ResourceFilesPanel({
     setArchivoReference("");
   }
 
+  function addCotizacionReference() {
+    const meta = toReferenceMeta(cotizacionReference);
+    if (!meta || readOnly) return;
+    const next = [...cotizaciones, meta];
+    onValidationError?.(null);
+    onChange({ ...value, cotizacion: next[0] ?? null, cotizaciones: next });
+    setCotizacionReference("");
+  }
+
   useEffect(() => {
     let active = true;
     const first = imagenes.find((item) => item.type.startsWith("image/") || item.file_type === "image") ?? null;
@@ -223,9 +298,10 @@ export function ResourceFilesPanel({
   }, [imagenes, onResolveFileUrl]);
 
   return (
-    <div className={layout === "stack" ? "grid grid-cols-1 gap-2" : "grid grid-cols-1 gap-2 xl:grid-cols-3"}>
-      <div className="flex min-h-[126px] flex-col rounded-md border border-border bg-stone-50/50 p-2">
+    <div className={layout === "stack" ? "grid grid-cols-1 gap-2" : "grid grid-cols-1 gap-2 xl:grid-cols-4"}>
+      <div className={dropZoneClass("datasheet")} {...dropZoneHandlers("datasheet")}>
         <FieldLabelIcon icon="file-text" label="Ficha técnica" className="mb-2 text-[11px] font-medium text-stone-700" />
+        {allowFilePicker && !readOnly ? <p className="mb-1 text-[10px] text-stone-500">Arrastra PDFs/fichas aqui o selecciona desde tu PC.</p> : null}
         {allowFilePicker && !readOnly ? (
         <label className="inline-flex h-7 cursor-pointer items-center rounded-md border border-border bg-white px-2 text-[11px] text-stone-700 hover:bg-stone-100">
           {uploading === "datasheet" ? "Subiendo..." : "Agregar fichas"}
@@ -275,7 +351,7 @@ export function ResourceFilesPanel({
                     className="inline-flex h-5 shrink-0 items-center rounded border border-border px-1.5 text-[10px] text-stone-600 hover:bg-stone-100"
                     type="button"
                     onClick={() => void openFile(file)}
-                    disabled={!file.localPreviewUrl && !file.futureDriveUrl && !file.storage_path}
+                    disabled={!file.localPreviewUrl && !file.futureDriveUrl && !file.futureDriveFileId}
                   >
                     Abrir
                   </button>
@@ -295,8 +371,9 @@ export function ResourceFilesPanel({
         ) : null}
       </div>
 
-      <div className="flex min-h-[126px] flex-col rounded-md border border-border bg-stone-50/50 p-2">
+      <div className={dropZoneClass("image")} {...dropZoneHandlers("image")}>
         <FieldLabelIcon icon="image" label="Imagen" className="mb-2 text-[11px] font-medium text-stone-700" />
+        {allowFilePicker && !readOnly ? <p className="mb-1 text-[10px] text-stone-500">Arrastra imagenes aqui o selecciona desde tu PC.</p> : null}
         {allowFilePicker && !readOnly ? (
         <label className="inline-flex h-7 cursor-pointer items-center rounded-md border border-border bg-white px-2 text-[11px] text-stone-700 hover:bg-stone-100">
           {uploading === "image" ? "Subiendo..." : "Agregar imágenes"}
@@ -352,9 +429,9 @@ export function ResourceFilesPanel({
                   </p>
                   <button
                     className="inline-flex h-5 shrink-0 items-center rounded border border-border px-1.5 text-[10px] text-stone-600 hover:bg-stone-100"
-                    type="button"
-                    onClick={() => void openFile(file)}
-                    disabled={!file.localPreviewUrl && !file.futureDriveUrl && !file.storage_path}
+                      type="button"
+                      onClick={() => void openFile(file)}
+                      disabled={!file.localPreviewUrl && !file.futureDriveUrl && !file.futureDriveFileId}
                   >
                     Abrir
                   </button>
@@ -374,8 +451,81 @@ export function ResourceFilesPanel({
         ) : null}
       </div>
 
-      <div className="flex min-h-[126px] flex-col rounded-md border border-border bg-stone-50/50 p-2">
+      <div className={dropZoneClass("quotation")} {...dropZoneHandlers("quotation")}>
+        <FieldLabelIcon icon="file-text" label="Cotización" className="mb-2 text-[11px] font-medium text-stone-700" />
+        {allowFilePicker && !readOnly ? <p className="mb-1 text-[10px] text-stone-500">Arrastra cotizaciones aqui o selecciona desde tu PC.</p> : null}
+        {allowFilePicker && !readOnly ? (
+        <label className="inline-flex h-7 cursor-pointer items-center rounded-md border border-border bg-white px-2 text-[11px] text-stone-700 hover:bg-stone-100">
+          {uploading === "quotation" ? "Subiendo..." : "Agregar cotización"}
+          <input
+            type="file"
+            multiple
+            accept=".pdf,.xlsx,.xls,.doc,.docx,.eml,.msg,image/*,*/*"
+            className="hidden"
+            onChange={(event) => {
+              void updateCotizaciones(event.target.files);
+              event.currentTarget.value = "";
+            }}
+          />
+        </label>
+        ) : null}
+        {!readOnly ? (
+          <div className="flex gap-1">
+            <input
+              value={cotizacionReference}
+              onChange={(event) => setCotizacionReference(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === "Enter") {
+                  event.preventDefault();
+                  addCotizacionReference();
+                }
+              }}
+              className="h-7 min-w-0 flex-1 rounded-md border border-border bg-white px-2 text-[11px] outline-none"
+              placeholder="URL o ID de cotización"
+            />
+            <button type="button" onClick={addCotizacionReference} className="h-7 rounded border border-border px-2 text-[11px] hover:bg-stone-100">
+              Agregar
+            </button>
+          </div>
+        ) : null}
+        <div className="mt-2 text-[11px] text-stone-500">
+          {mergedSummary(cotizaciones, "Sin cotizaciones seleccionadas", "cotización seleccionada", "cotizaciones seleccionadas")}
+        </div>
+        {cotizaciones.length > 0 ? (
+          <div className="mt-2 rounded border border-border bg-white p-2 text-[11px]">
+            {compactList(cotizaciones).map((file, idx) => (
+              <div key={`${file.name}-${idx}`} className="mb-1 last:mb-0">
+                <div className="flex min-w-0 items-center gap-2">
+                  <p className="min-w-0 flex-1 truncate" title={file.name}>
+                    {file.name}
+                  </p>
+                  <button
+                    className="inline-flex h-5 shrink-0 items-center rounded border border-border px-1.5 text-[10px] text-stone-600 hover:bg-stone-100"
+                    type="button"
+                    onClick={() => void openFile(file)}
+                    disabled={!file.localPreviewUrl && !file.futureDriveUrl && !file.futureDriveFileId}
+                  >
+                    Abrir
+                  </button>
+                  <button
+                    className="inline-flex h-5 shrink-0 items-center rounded border border-border px-1.5 text-[10px] text-stone-600 hover:bg-stone-100"
+                    type="button"
+                    onClick={() => removeCotizacionAt(idx)}
+                    disabled={readOnly}
+                  >
+                    Quitar
+                  </button>
+                </div>
+              </div>
+            ))}
+            {cotizaciones.length > 3 ? <p className="text-[10px] text-stone-500">+{cotizaciones.length - 3} más</p> : null}
+          </div>
+        ) : null}
+      </div>
+
+      <div className={dropZoneClass("attachment")} {...dropZoneHandlers("attachment")}>
         <FieldLabelIcon icon="files" label="Archivos" className="mb-2 text-[11px] font-medium text-stone-700" />
+        {allowFilePicker && !readOnly ? <p className="mb-1 text-[10px] text-stone-500">Arrastra documentos aqui o selecciona desde tu PC.</p> : null}
         {allowFilePicker && !readOnly ? (
         <label className="inline-flex h-7 cursor-pointer items-center rounded-md border border-border bg-white px-2 text-[11px] text-stone-700 hover:bg-stone-100">
           {uploading === "attachment" ? "Subiendo..." : "Agregar archivos"}
@@ -422,9 +572,9 @@ export function ResourceFilesPanel({
                 </p>
                 <button
                   className="inline-flex h-5 shrink-0 items-center rounded border border-border px-1.5 text-[10px] text-stone-600 hover:bg-stone-100"
-                  type="button"
-                  onClick={() => void openFile(file)}
-                  disabled={!file.localPreviewUrl && !file.futureDriveUrl && !file.storage_path}
+                type="button"
+                onClick={() => void openFile(file)}
+                disabled={!file.localPreviewUrl && !file.futureDriveUrl && !file.futureDriveFileId}
                 >
                   Abrir
                 </button>

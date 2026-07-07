@@ -91,7 +91,11 @@ export const supabase: SupabaseClient = new Proxy({} as SupabaseClient, {
           getSession: async () => ({ data: { session: null }, error: null }),
           onAuthStateChange: () => ({ data: { subscription: { unsubscribe: () => {} } } }),
           signInWithPassword: async () => ({ data: null, error: new Error(DEMO_ERROR) }),
+          signInWithOAuth: async () => ({ data: null, error: new Error(DEMO_ERROR) }),
           signUp: async () => ({ data: null, error: new Error(DEMO_ERROR) }),
+          resetPasswordForEmail: async () => ({ data: null, error: new Error(DEMO_ERROR) }),
+          updateUser: async () => ({ data: null, error: new Error(DEMO_ERROR) }),
+          getUser: async () => ({ data: { user: null }, error: null }),
           signOut: async () => ({ error: null }),
         };
       }

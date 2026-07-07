@@ -36,6 +36,8 @@ Esto consume mas REST requests, mas filas transferidas y mas CPU en cliente.
 1. Crear proyecto nuevo en Supabase.
 2. Abrir SQL Editor.
 3. Ejecutar completo `supabase/sql/100_clean_start_schema.sql`.
+   - Si la base ya existia y el `100` ya fue ejecutado, ejecutar tambien
+     `supabase/sql/120_resource_files_and_filters.sql`.
 4. Crear el usuario administrador con correo `edwin.qm@outlook.com`.
 5. Confirmar que `user_profiles` queda con `role = admin`,
    `status = approved` e `is_super_admin = true`.
@@ -91,13 +93,14 @@ Validar RPC paginadas:
 select * from public.search_cotizaciones_page(null, null, 20, 0);
 select * from public.search_recursos_page(null, null, null, 20, 0);
 select * from public.search_requerimientos_page(null, null, 20, 0);
+select * from public.get_recursos_filter_options();
 ```
 
 ## Cambios recomendados en la app
 
 Prioridad 1:
 
-- Reemplazar `listAllRecursos()` en `RecursosContent` por `listRecursos(params)`.
+- Reemplazar `listAllRecursos()` en `RecursosContent` por `listRecursos(params)`. Hecho.
 - Reemplazar `listCotizaciones()` por una version paginada.
 - Reemplazar `listRequerimientos()` por una version paginada.
 - Mantener detalles por demanda: `requerimiento_items` solo por RQ abierto.

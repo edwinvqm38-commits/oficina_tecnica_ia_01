@@ -10,7 +10,7 @@ import {
   fetchRequirementsByProject, searchCotizaciones, cotizacionToProject,
 } from "../../lib/chat/contextQuery";
 import { detectInlineCodes } from "../../lib/chat/messageUtils";
-import { extractFileContent } from "../../lib/chat/fileExtraction";
+import { extractFileContent, renderPdfPagePreviews } from "../../lib/chat/fileExtraction";
 
 export type { ChatCtx };
 
@@ -31,16 +31,20 @@ const AGENT_OPTIONS: DropdownOption[] = [
   { id: "ic", label: "@IC", desc: "Ing. de Costos",   color: "#1d4ed8", bg: "#eff6ff", border: "#bfdbfe", insert: "@IC " },
   { id: "pm", label: "@PM", desc: "Project Manager",  color: "#7c3aed", bg: "#f5f3ff", border: "#ddd6fe", insert: "@PM " },
   { id: "ie", label: "@IE", desc: "Ing. Eléctrico",   color: "#0e7490", bg: "#ecfeff", border: "#a5f3fc", insert: "@IE " },
+  { id: "cd", label: "@CD", desc: "Control Documentario", color: "#0f766e", bg: "#f0fdfa", border: "#99f6e4", insert: "@CD " },
+  { id: "ti", label: "@TI", desc: "Ing. de Sistemas / TI", color: "#334155", bg: "#f8fafc", border: "#cbd5e1", insert: "@TI " },
   { id: "gg", label: "@GG", desc: "Gerente General",  color: "#92400e", bg: "#fffbeb", border: "#fde68a", insert: "@GG " },
 ];
 
 const SLASH_COMMANDS: DropdownOption[] = [
-  { id: "proyecto", label: "/proyecto",  desc: "Buscar cotización o proyecto por código/nombre",  color: "#166534", bg: "#f0fdf4", border: "#bbf7d0" },
-  { id: "rq",       label: "/rq",        desc: "Buscar requerimiento del proyecto activo",         color: "#0e7490", bg: "#ecfeff", border: "#a5f3fc" },
+  { id: "proyecto", label: "/proyecto",  desc: "Buscar cotización o proyecto por código/nombre",  color: "#166534", bg: "#f0fdf4", border: "#bbf7d0", insert: "/proyecto " },
+  { id: "rq",       label: "/rq",        desc: "Buscar requerimiento del proyecto activo",         color: "#0e7490", bg: "#ecfeff", border: "#a5f3fc", insert: "/rq " },
+  { id: "equipo",   label: "/equipo",    desc: "Hablarle a todo el equipo",                        color: "#b91c1c", bg: "#fef2f2", border: "#fecaca", insert: "@todos " },
   { id: "ayuda",    label: "/ayuda",     desc: "Ver comandos disponibles",                          insert: "/ayuda" },
 ];
 
-const PROJ_CMDS = ["proyecto", "p", "pro", "proy"];
+const PROJ_CMDS = ["proyecto", "proyectos", "cotizacion", "cotizaciones", "cot", "cots", "p", "pro", "proy"];
+const RQ_CMDS = ["rq", "rqs", "req", "requerimiento", "requerimientos"];
 
 // Colors for inline code highlighting
 const COLOR_PROJECT = "#16a34a";  // green
@@ -118,7 +122,35 @@ function renderHighlighted(
 // Cap on files we keep as a downloadable data URL in chat history (avoid bloating storage)
 const MAX_DOWNLOAD_BYTES = 3 * 1024 * 1024; // 3MB
 
+async function readImageAsDataUrl(file: File): Promise<string | undefined> {
+  return new Promise((resolve) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      const img = new Image();
+      img.onload = () => {
+        const maxSide = 1800;
+        const scale = Math.min(1, maxSide / Math.max(img.width, img.height));
+        const canvas = document.createElement("canvas");
+        canvas.width = Math.max(1, Math.round(img.width * scale));
+        canvas.height = Math.max(1, Math.round(img.height * scale));
+        const ctx = canvas.getContext("2d");
+        if (!ctx) {
+          resolve(typeof reader.result === "string" ? reader.result : undefined);
+          return;
+        }
+        ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+        resolve(canvas.toDataURL("image/jpeg", 0.82));
+      };
+      img.onerror = () => resolve(typeof reader.result === "string" ? reader.result : undefined);
+      img.src = String(reader.result ?? "");
+    };
+    reader.onerror = () => resolve(undefined);
+    reader.readAsDataURL(file);
+  });
+}
+
 async function readFileAsDataUrl(file: File): Promise<string | undefined> {
+  if (file.type.startsWith("image/")) return readImageAsDataUrl(file);
   if (file.size > MAX_DOWNLOAD_BYTES) return undefined;
   return new Promise((resolve) => {
     const reader = new FileReader();
@@ -247,10 +279,10 @@ export function ChatAutoInput({ value, onChange, onSubmit, placeholder, disabled
           setCtxProjectFromCot: c,
         }));
       }
-    } else if (cmd === "rq" || cmd === "req") {
+    } else if (RQ_CMDS.includes(cmd)) {
       if (requirements.length === 0 && !loadingReqs && ctx.project) {
         setLoadingReqs(true);
-        fetchRequirementsByProject(ctx.project.id).then((reqs) => {
+        fetchRequirementsByProject(ctx.project.id, ctx.project.dbId).then((reqs) => {
           setRequirements(reqs);
           setLoadingReqs(false);
         });
@@ -275,6 +307,12 @@ export function ChatAutoInput({ value, onChange, onSubmit, placeholder, disabled
       // suggestions so Enter submits the message instead of re-inserting
       // the same text and leaving the user stuck unable to send "/ayuda".
       options = SLASH_COMMANDS.filter((c) => cmd === "" || (c.id.startsWith(cmd) && c.id !== cmd));
+      if (cmd && "proyectos".startsWith(cmd) && cmd !== "proyecto") {
+        options.unshift({ ...SLASH_COMMANDS[0], id: "proyectos", label: "/proyectos", insert: "/proyectos " });
+      }
+      if (cmd && "requerimientos".startsWith(cmd) && cmd !== "rq") {
+        options.unshift({ ...SLASH_COMMANDS[1], id: "requerimientos", label: "/requerimientos", insert: "/requerimientos " });
+      }
     }
   }
 
@@ -344,21 +382,43 @@ export function ChatAutoInput({ value, onChange, onSubmit, placeholder, disabled
     if (overlayRef.current) overlayRef.current.scrollTop = e.currentTarget.scrollTop;
   }
 
-  async function handleFiles(files: FileList | null) {
+  async function handleFiles(files: FileList | File[] | null) {
     if (!files || files.length === 0) return;
     setProcessingFiles(true);
     try {
       for (const file of Array.from(files)) {
-        const [content, dataUrl] = await Promise.all([
+        const [content, dataUrl, previewImages] = await Promise.all([
           extractFileContent(file, (msg) => setProcessingMsg(msg)),
           readFileAsDataUrl(file),
+          renderPdfPagePreviews(file, (msg) => setProcessingMsg(msg)),
         ]);
-        setAttachments((prev) => [...prev, { name: file.name, type: file.type || "unknown", content, size: file.size, dataUrl }]);
+        setAttachments((prev) => [...prev, { name: file.name, type: file.type || "unknown", content, size: file.size, dataUrl, previewImages }]);
       }
     } finally {
       setProcessingFiles(false);
       setProcessingMsg(null);
     }
+  }
+
+  function handlePaste(e: React.ClipboardEvent<HTMLTextAreaElement>) {
+    const pastedFiles = Array.from(e.clipboardData?.items ?? [])
+      .filter((item) => item.kind === "file")
+      .map((item) => item.getAsFile())
+      .filter((file): file is File => Boolean(file))
+      .filter((file) => file.type.startsWith("image/"));
+
+    if (pastedFiles.length === 0) return;
+
+    e.preventDefault();
+    const stamp = new Date().toISOString().replace(/[:.]/g, "-");
+    const normalized = pastedFiles.map((file, idx) => {
+      const ext = file.type.split("/")[1]?.replace("jpeg", "jpg") || "png";
+      const name = file.name && file.name !== "image.png"
+        ? file.name
+        : `captura-${stamp}-${idx + 1}.${ext}`;
+      return new File([file], name, { type: file.type || "image/png", lastModified: file.lastModified || Date.now() });
+    });
+    handleFiles(normalized);
   }
 
   function submit() {
@@ -481,7 +541,7 @@ export function ChatAutoInput({ value, onChange, onSubmit, placeholder, disabled
       )}
 
       {/* Input row */}
-      <div style={{ display: "flex", gap: 4, alignItems: "flex-end" }}>
+      <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
         <div style={{ position: "relative", flex: 1, background: "var(--bg-card)", borderRadius: "var(--r)" }}>
           {/* Highlight overlay */}
           <div
@@ -502,6 +562,7 @@ export function ChatAutoInput({ value, onChange, onSubmit, placeholder, disabled
             value={value}
             onChange={(e) => { onChange(e.target.value); setCursor(e.target.selectionStart ?? 0); }}
             onKeyDown={handleKeyDown}
+            onPaste={handlePaste}
             onSelect={syncCursor}
             onClick={syncCursor}
             onScroll={syncScroll}
@@ -513,7 +574,7 @@ export function ChatAutoInput({ value, onChange, onSubmit, placeholder, disabled
               position: "relative", width: "100%", resize: "none",
               border: "1px solid var(--border)", borderRadius: "var(--r)",
               color: "transparent", caretColor: "var(--t1)",
-              maxHeight: 120, outline: "none",
+              minHeight: 38, maxHeight: 120, outline: "none",
               background: "transparent",
             }}
           />
@@ -524,7 +585,7 @@ export function ChatAutoInput({ value, onChange, onSubmit, placeholder, disabled
           title="Adjuntar archivo (PDF, TXT, CSV…)"
           onClick={() => fileRef.current?.click()}
           disabled={disabled}
-          style={{ background: "var(--bg-card)", border: "1px solid var(--border)", borderRadius: "var(--r)", padding: "8px 10px", cursor: "pointer", color: "var(--t2)", fontSize: 13, lineHeight: 1, flexShrink: 0 }}
+          style={{ width: 38, height: 38, display: "inline-flex", alignItems: "center", justifyContent: "center", background: "var(--bg-card)", border: "1px solid var(--border)", borderRadius: "var(--r)", padding: 0, cursor: "pointer", color: "var(--t2)", fontSize: 13, lineHeight: 1, flexShrink: 0 }}
         >
           📎
         </button>
@@ -532,14 +593,14 @@ export function ChatAutoInput({ value, onChange, onSubmit, placeholder, disabled
           ref={fileRef}
           type="file"
           multiple
-          accept=".txt,.csv,.md,.json,.xml,.html,.log,.pdf,.doc,.docx,.xls,.xlsx,.py,.ts,.js"
+          accept=".txt,.csv,.md,.json,.xml,.html,.htm,.css,.log,.pdf,.doc,.docx,.xls,.xlsx,.py,.ts,.tsx,.js,.jsx,.sql,.yaml,.yml,.png,.jpg,.jpeg,.webp,.gif"
           style={{ display: "none" }}
           onChange={(e) => handleFiles(e.target.files)}
         />
         <button
           type="button"
           className="btn btn--primary"
-          style={{ padding: "9px 14px", flexShrink: 0 }}
+          style={{ height: 38, minWidth: 46, display: "inline-flex", alignItems: "center", justifyContent: "center", padding: 0, flexShrink: 0 }}
           onClick={submit}
           disabled={disabled || processingFiles}
         >

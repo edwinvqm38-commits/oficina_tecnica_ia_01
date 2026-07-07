@@ -102,7 +102,7 @@ export function OfficeView() {
           <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
             <div className="kpi" style={{ padding: "6px 12px" }}>
               <span style={{ fontSize: 10, textTransform: "uppercase", letterSpacing: ".08em", color: "var(--t3)" }}>Agentes</span>
-              <span style={{ fontSize: 15, fontWeight: 700, color: "var(--t1)", marginLeft: 6 }}>2</span>
+              <span style={{ fontSize: 15, fontWeight: 700, color: "var(--t1)", marginLeft: 6 }}>{AGENTS.filter((a) => a.type === "agent").length}</span>
             </div>
             <div className="kpi" style={{ padding: "6px 12px" }}>
               <span style={{ fontSize: 10, textTransform: "uppercase", letterSpacing: ".08em", color: "var(--t3)" }}>Red</span>

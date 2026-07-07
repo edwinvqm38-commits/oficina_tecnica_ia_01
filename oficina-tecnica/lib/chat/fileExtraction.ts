@@ -1,17 +1,35 @@
 "use client";
-// Client-side text extraction for chat attachments: plain text, PDF (with
-// OCR fallback for scanned pages), Word (.docx), and Excel (.xlsx/.xls).
+// Client-side text extraction for chat attachments: plain/code text (incl.
+// HTML), PDF (with OCR fallback for scanned pages), Word (.docx), and Excel
+// (.xlsx/.xls).
 // Heavy libraries are dynamically imported so they're only downloaded when a
 // matching file type is actually attached.
 
 const MAX_CHARS = 8000;
+const MAX_CODE_CHARS = 80000;
 const MAX_PDF_PAGES = 20;
 const MAX_OCR_PAGES = 3;
+const MAX_PDF_PREVIEW_PAGES = 3;
+
+export type PdfPagePreview = { label: string; dataUrl: string };
 
 export type ExtractProgress = (message: string) => void;
 
-function truncate(text: string): string {
-  return text.length > MAX_CHARS ? text.slice(0, MAX_CHARS) + "\n…(contenido truncado)" : text;
+function truncate(text: string, maxChars = MAX_CHARS): string {
+  return text.length > maxChars ? text.slice(0, maxChars) + "\n…(contenido truncado)" : text;
+}
+
+function textFileLabel(file: File): string {
+  const name = file.name.toLowerCase();
+  if (/\.html?$/.test(name) || file.type === "text/html") return "HTML";
+  if (/\.css$/.test(name)) return "CSS";
+  if (/\.(js|jsx|ts|tsx)$/.test(name)) return "Código";
+  if (/\.sql$/.test(name)) return "SQL";
+  if (/\.json$/.test(name)) return "JSON";
+  if (/\.xml$/.test(name)) return "XML";
+  if (/\.(md|markdown)$/.test(name)) return "Markdown";
+  if (/\.csv$/.test(name)) return "CSV";
+  return "Texto";
 }
 
 export async function extractFileContent(file: File, onProgress?: ExtractProgress): Promise<string> {
@@ -22,7 +40,12 @@ export async function extractFileContent(file: File, onProgress?: ExtractProgres
   if (isText) {
     return new Promise<string>((resolve) => {
       const reader = new FileReader();
-      reader.onload = (e) => resolve(truncate(String(e.target?.result ?? "")));
+      reader.onload = (e) => {
+        const raw = String(e.target?.result ?? "");
+        const label = textFileLabel(file);
+        const maxChars = label === "HTML" || label === "Código" || label === "CSS" || label === "SQL" ? MAX_CODE_CHARS : MAX_CHARS;
+        resolve(`[${label}: ${file.name}]\n${truncate(raw, maxChars)}`);
+      };
       reader.readAsText(file, "utf-8");
     });
   }
@@ -44,6 +67,45 @@ export async function extractFileContent(file: File, onProgress?: ExtractProgres
   }
 
   return `[Archivo: ${file.name} — ${file.type || "binario"}, ${Math.round(file.size / 1024)} KB — adjunto para referencia]`;
+}
+
+export async function renderPdfPagePreviews(file: File, onProgress?: ExtractProgress): Promise<PdfPagePreview[]> {
+  const name = file.name.toLowerCase();
+  if (!(file.type === "application/pdf" || name.endsWith(".pdf"))) return [];
+  try {
+    const pdfjsLib = await import("pdfjs-dist");
+    pdfjsLib.GlobalWorkerOptions.workerSrc = "/vendor/pdf.worker.min.mjs";
+
+    const buf = await file.arrayBuffer();
+    const pdf = await pdfjsLib.getDocument({ data: buf }).promise;
+    const pageCount = Math.min(pdf.numPages, MAX_PDF_PREVIEW_PAGES);
+    const previews: PdfPagePreview[] = [];
+
+    for (let i = 1; i <= pageCount; i++) {
+      onProgress?.(`Renderizando plano ${file.name}: página ${i}/${pageCount}…`);
+      const page = await pdf.getPage(i);
+      const viewport = page.getViewport({ scale: 1.2 });
+      const canvas = document.createElement("canvas");
+      canvas.width = Math.min(Math.round(viewport.width), 1800);
+      canvas.height = Math.min(Math.round(viewport.height), 1800);
+      const scaleX = canvas.width / viewport.width;
+      const scaleY = canvas.height / viewport.height;
+      const safeViewport = page.getViewport({ scale: 1.2 * Math.min(scaleX, scaleY) });
+      canvas.width = Math.round(safeViewport.width);
+      canvas.height = Math.round(safeViewport.height);
+      const ctx = canvas.getContext("2d");
+      if (!ctx) continue;
+      await page.render({ canvas, canvasContext: ctx, viewport: safeViewport }).promise;
+      previews.push({
+        label: `${file.name} página ${i}`,
+        dataUrl: canvas.toDataURL("image/jpeg", 0.72),
+      });
+    }
+
+    return previews;
+  } catch {
+    return [];
+  }
 }
 
 async function extractPdf(file: File, onProgress?: ExtractProgress): Promise<string> {

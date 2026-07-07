@@ -154,10 +154,12 @@ export type ResourceFileMeta = {
   localPreviewUrl: string;
   futureDriveFileId: string;
   futureDriveUrl: string;
+  driveFolderId?: string;
+  driveWebContentLink?: string;
   bucket_id?: string;
   storage_path?: string;
   file_name?: string;
-  file_type?: "image" | "datasheet" | "attachment" | string;
+  file_type?: "image" | "datasheet" | "attachment" | "quotation" | string;
   mime_type?: string;
   uploaded_at?: string;
 };
@@ -165,8 +167,10 @@ export type ResourceFileMeta = {
 export type ResourceFiles = {
   fichaTecnica: ResourceFileMeta | null;
   imagen: ResourceFileMeta | null;
+  cotizacion?: ResourceFileMeta | null;
   fichasTecnicas?: ResourceFileMeta[];
   imagenes?: ResourceFileMeta[];
+  cotizaciones?: ResourceFileMeta[];
   archivos: ResourceFileMeta[];
 };
 
@@ -642,113 +646,11 @@ const catalogEstadoCotizacion: CatalogEstadoCotizacion[] = [
   { id: "ecot-092", nombre: "Cancelado", activo: false, orden: 92 },
   { id: "ecot-093", nombre: "No adjudicado", activo: false, orden: 93 },
 ];
-const catalogCodigoClientes: CatalogCodigoCliente[] = [
-  { id: "cc-001", cliente: "NEXA RESOURCES", codigo_cliente: "NEXA", estado: "Activo", observaciones: "", activo: true },
-  {
-    id: "cc-002",
-    cliente: "MINERA HORIZONTE",
-    codigo_cliente: "MHOR",
-    estado: "Activo",
-    observaciones: "",
-    activo: true,
-  },
-  { id: "cc-003", cliente: "PLANTA ALFA", codigo_cliente: "PALF", estado: "Activo", observaciones: "", activo: true },
-  {
-    id: "cc-004",
-    cliente: "CONSTRUCTORA DELTA",
-    codigo_cliente: "CDELTA",
-    estado: "Activo",
-    observaciones: "",
-    activo: true,
-  },
-  {
-    id: "cc-005",
-    cliente: "METALMECANICA SUR",
-    codigo_cliente: "MSUR",
-    estado: "Activo",
-    observaciones: "",
-    activo: true,
-  },
-  { id: "cc-006", cliente: "ENERGIA NORTE", codigo_cliente: "ENORTE", estado: "Activo", observaciones: "", activo: true },
-];
+const catalogCodigoClientes: CatalogCodigoCliente[] = [];
 
-const catalogCodigoUnidadesTrabajo: CatalogCodigoUnidadTrabajo[] = [
-  {
-    id: "cu-001",
-    unidad_trabajo: "Planta concentradora",
-    codigo_unidad: "PCON",
-    estado: "Activo",
-    observaciones: "",
-    activo: true,
-  },
-  {
-    id: "cu-002",
-    unidad_trabajo: "Mina subterránea",
-    codigo_unidad: "MSUB",
-    estado: "Activo",
-    observaciones: "",
-    activo: true,
-  },
-  {
-    id: "cu-003",
-    unidad_trabajo: "Taller eléctrico",
-    codigo_unidad: "TELE",
-    estado: "Activo",
-    observaciones: "",
-    activo: true,
-  },
-  { id: "cu-004", unidad_trabajo: "Subestación", codigo_unidad: "SSEE", estado: "Activo", observaciones: "", activo: true },
-  {
-    id: "cu-005",
-    unidad_trabajo: "Línea de transmisión",
-    codigo_unidad: "LTRA",
-    estado: "Activo",
-    observaciones: "",
-    activo: true,
-  },
-  {
-    id: "cu-006",
-    unidad_trabajo: "Área de mantenimiento",
-    codigo_unidad: "AMANT",
-    estado: "Activo",
-    observaciones: "",
-    activo: true,
-  },
-  { id: "cu-007", unidad_trabajo: "Poza 5", codigo_unidad: "PZ5", estado: "Activo", observaciones: "", activo: true },
-  { id: "cu-008", unidad_trabajo: "Chancado", codigo_unidad: "CHAN", estado: "Activo", observaciones: "", activo: true },
-  { id: "cu-009", unidad_trabajo: "Molienda", codigo_unidad: "MOLI", estado: "Activo", observaciones: "", activo: true },
-];
+const catalogCodigoUnidadesTrabajo: CatalogCodigoUnidadTrabajo[] = [];
 
-const proyectosAdjudicados: ProyectoAdjudicado[] = [
-  {
-    id: "pa-001",
-    anio: 2026,
-    codigo_proyecto: "P001",
-    cotizacion: "COT-2026-0001",
-    oc: "OC-2026-0001",
-    cliente: "NEXA RESOURCES",
-    codigo_cliente: "NEXA",
-    unidad_trabajo: "Planta concentradora",
-    codigo_unidad: "PCON",
-    fecha_adjudicacion: "2026-05-10",
-    estado: "Activo",
-    activo: true,
-  },
-  {
-    id: "pa-002",
-    anio: 2026,
-    codigo_proyecto: "P002",
-    cotizacion: "COT-2026-0002",
-    oc: "OC-2026-0002",
-    cliente: "MINERA HORIZONTE",
-    codigo_cliente: "MHOR",
-    unidad_trabajo: "Mina subterránea",
-    codigo_unidad: "MSUB",
-    fecha_adjudicacion: "2026-05-11",
-    estado: "Activo",
-    activo: true,
-  },
-];
+const proyectosAdjudicados: ProyectoAdjudicado[] = [];
 
 const recursosBase: Recurso[] = [
   {
@@ -954,7 +856,7 @@ function buildDefaultEconomicSummary(): CotizacionEconomicRow[] {
   }));
 }
 
-const cotizaciones: Cotizacion[] = Array.from({ length: 50 }, (_, i) => {
+const cotizaciones: Cotizacion[] = Array.from({ length: 0 }, (_, i) => {
   const idx = i + 1;
   return {
     id: `cot-${String(idx).padStart(3, "0")}`,
@@ -994,7 +896,7 @@ const cotizaciones: Cotizacion[] = Array.from({ length: 50 }, (_, i) => {
 
 const seedRqCorrelativosByProject = new Map<string, number>();
 
-const requerimientos: Requerimiento[] = Array.from({ length: 50 }, (_, i) => {
+const requerimientos: Requerimiento[] = Array.from({ length: 0 }, (_, i) => {
   const idx = i + 1;
   const cotIdx = (i % 25) + 1;
   const cotizacion = cotizaciones[cotIdx - 1];
@@ -1332,9 +1234,9 @@ export const demoData = {
       id: `cot-${nextLocalUuid()}`,
       codigo: nextCode,
       oc: nextCotizacionOc(),
-      cliente: clientes[0],
-      proyecto: proyectos[0],
-      unidad_trabajo: unidadesTrabajo[0],
+      cliente: "",
+      proyecto: "",
+      unidad_trabajo: "",
       moneda_cotizacion: "PEN",
       estado: "Pendiente",
       estado_propuesta: "Rev. Bases",

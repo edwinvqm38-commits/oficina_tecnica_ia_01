@@ -40,6 +40,8 @@ export function HelpPanel({ onClose }: { onClose: () => void }) {
               { chip: agentChip("IC", "#1d4ed8", "#bfdbfe", "#eff6ff"), desc: "Ing. de Costos — presupuesto, metrados, desviaciones" },
               { chip: agentChip("PM", "#6d28d9", "#ddd6fe", "#f5f3ff"), desc: "Project Manager — cronograma, riesgos, restricciones" },
               { chip: agentChip("IE", "#0e7490", "#a5f3fc", "#ecfeff"), desc: "Ing. Eléctrico — normas, diseño, cálculo eléctrico" },
+              { chip: agentChip("CD", "#0f766e", "#99f6e4", "#f0fdfa"), desc: "Control Documentario — códigos, versiones, carpetas, trazabilidad" },
+              { chip: agentChip("TI", "#475569", "#cbd5e1", "#f8fafc"), desc: "Ing. Sistemas — app, Supabase, integraciones, performance" },
               { chip: agentChip("GG", "#92400e", "#fde68a", "#fffbeb"), desc: "Gerente General — consultas ejecutivas o aprobaciones" },
             ].map((r, i) => (
               <div key={i} style={{ display: "flex", alignItems: "center", gap: 8 }}>
@@ -108,11 +110,15 @@ export function HelpPanel({ onClose }: { onClose: () => void }) {
             </div>
             <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
               <span>📎</span>
-              <span>Adjunta archivos (PDF, TXT, CSV, Excel…) para que el agente los lea</span>
+              <span>Adjunta archivos (PDF, TXT, CSV, Excel, HTML/HTM, código…) para que el agente los lea</span>
             </div>
             <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
               {plainCode("/ayuda")}
               <span>Muestra esta guía</span>
+            </div>
+            <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+              {plainCode("/menu")} {plainCode("@IC /menu")}
+              <span>Muestra botones de consultas rápidas por agente</span>
             </div>
           </div>
         </div>
@@ -123,6 +129,9 @@ export function HelpPanel({ onClose }: { onClose: () => void }) {
         <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
           {[
             "@IC ¿cuánto cuesta el tendido de cable de este proyecto?",
+            "@IC /menu",
+            "@CD /menu",
+            "@TI revisa si esta consulta puede consumir mucho egress",
             "@PM ¿qué riesgos tiene el cronograma actual?",
             "@IE ¿qué norma aplica a la SET 138kV?",
             "buenos días",

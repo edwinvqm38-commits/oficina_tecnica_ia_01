@@ -15,7 +15,7 @@ type CatalogFormModalProps<T extends Record<string, unknown>> = {
   fields: CatalogField[];
   initial: T | null;
   onClose: () => void;
-  onSave: (value: T) => void;
+  onSave: (value: T) => void | Promise<void>;
 };
 
 export function CatalogFormModal<T extends Record<string, unknown>>({
@@ -28,6 +28,7 @@ export function CatalogFormModal<T extends Record<string, unknown>>({
 }: CatalogFormModalProps<T>) {
   const [form, setForm] = useState<T | null>(initial);
   const [errors, setErrors] = useState<Record<string, string>>({});
+  const [saving, setSaving] = useState(false);
 
   useEffect(() => {
     setForm(initial);
@@ -36,7 +37,7 @@ export function CatalogFormModal<T extends Record<string, unknown>>({
 
   if (!open || !form) return null;
 
-  function save() {
+  async function save() {
     if (!form) return;
     const current = form;
     const nextErrors: Record<string, string> = {};
@@ -48,7 +49,12 @@ export function CatalogFormModal<T extends Record<string, unknown>>({
     });
     setErrors(nextErrors);
     if (Object.keys(nextErrors).length > 0) return;
-    onSave(current);
+    setSaving(true);
+    try {
+      await onSave(current);
+    } finally {
+      setSaving(false);
+    }
   }
 
   return (
@@ -83,8 +89,12 @@ export function CatalogFormModal<T extends Record<string, unknown>>({
           <button onClick={onClose} className="rounded border border-border px-3 py-1 text-xs">
             Cancelar
           </button>
-          <button onClick={save} className="rounded border border-border bg-stone-900 px-3 py-1 text-xs text-white">
-            Guardar
+          <button
+            onClick={save}
+            disabled={saving}
+            className="rounded border border-border bg-stone-900 px-3 py-1 text-xs text-white disabled:cursor-wait disabled:opacity-60"
+          >
+            {saving ? "Guardando..." : "Guardar"}
           </button>
         </div>
       </div>

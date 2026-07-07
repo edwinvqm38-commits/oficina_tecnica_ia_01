@@ -9,6 +9,8 @@ export interface FileAttachment {
   size: number;
   /** Base64 data URL, only populated for small files (used for in-chat download). */
   dataUrl?: string;
+  /** Rendered image previews of PDF pages, local-only, used for vision models. */
+  previewImages?: Array<{ label: string; dataUrl: string }>;
 }
 
 // ── Requirement ─────────────────────────────────────────────────────────────
@@ -33,13 +35,35 @@ export interface CotizacionSummary {
   oc: string | null;
   cliente_nombre: string | null;
   proyecto: string | null;
+  unidad_trabajo_nombre?: string | null;
   estado: string | null;
+  estado_propuesta?: string | null;
   avance: number | null;
   monto: number | null;
+  moneda_codigo: string | null;
+  solicitante?: string | null;
   responsable_tecnico: string | null;
+  responsable_economico?: string | null;
   tipo_servicio_nombre: string | null;
   prioridad: string | null;
+  fecha_registro?: string | null;
+  fecha_invitacion?: string | null;
+  fecha_visita_tecnica?: string | null;
+  fecha_consultas?: string | null;
+  fecha_abs_consultas?: string | null;
+  fecha_entrega?: string | null;
+  fecha_entregada?: string | null;
+  fecha_oc?: string | null;
   created_at?: string;
+  resumen_economico?: CotizacionEconomicSummaryRow[];
+}
+
+export interface CotizacionEconomicSummaryRow {
+  tipo_recurso: string;
+  base: number;
+  oferta: number;
+  real?: number;
+  margen_ofertado_manual?: number | null;
 }
 
 // ── Chat context ─────────────────────────────────────────────────────────────
@@ -47,6 +71,7 @@ export interface ChatCtx {
   project: {
     id: string; name: string; client: string;
     status: string; progress: number; summary: string;
+    dbId?: string;
   } | null;
   requirement: RequirementSummary | null;
   attachments?: FileAttachment[];
@@ -58,16 +83,59 @@ export function cotizacionToProject(cot: CotizacionSummary): NonNullable<ChatCtx
   const parts: string[] = [];
   if (cot.tipo_servicio_nombre) parts.push(cot.tipo_servicio_nombre);
   if (cot.responsable_tecnico)  parts.push(`Resp: ${cot.responsable_tecnico}`);
-  if (cot.monto)                parts.push(`S/ ${cot.monto.toLocaleString("es-PE")}`);
+  if (cot.monto)                parts.push(`${moneyPrefix(cot.moneda_codigo)} ${cot.monto.toLocaleString("es-PE")}`);
   if (cot.prioridad)            parts.push(`Prioridad: ${cot.prioridad}`);
   return {
     id: cot.codigo,
+    dbId: cot.id,
     name: cot.proyecto ?? cot.codigo,
     client: cot.cliente_nombre ?? "—",
     status: cot.estado ?? "—",
     progress: cot.avance ?? 0,
     summary: parts.join(" · "),
   };
+}
+
+export function moneyPrefix(monedaCodigo?: string | null): string {
+  return monedaCodigo === "USD" ? "US$" : "S/";
+}
+
+function asNumber(value: unknown): number {
+  const num = Number(value ?? 0);
+  return Number.isFinite(num) ? num : 0;
+}
+
+function readEconomicSummaryFromMetadata(metadata: unknown): CotizacionEconomicSummaryRow[] {
+  if (!metadata || typeof metadata !== "object") return [];
+  const raw = (metadata as Record<string, unknown>).resumen_economico;
+  if (!Array.isArray(raw)) return [];
+  const summary: CotizacionEconomicSummaryRow[] = [];
+  for (const item of raw) {
+    if (!item || typeof item !== "object") continue;
+    const row = item as Record<string, unknown>;
+    const tipo = String(row.tipo_recurso ?? "").trim();
+    if (!tipo) continue;
+    summary.push({
+      tipo_recurso: tipo,
+      base: asNumber(row.base),
+      oferta: asNumber(row.oferta),
+      real: row.real == null ? undefined : asNumber(row.real),
+      margen_ofertado_manual:
+        row.margen_ofertado_manual == null ? null : asNumber(row.margen_ofertado_manual),
+    });
+  }
+  return summary;
+}
+
+function normalizeCotizacionRow(row: Record<string, unknown>): CotizacionSummary {
+  return {
+    ...(row as unknown as CotizacionSummary),
+    resumen_economico: readEconomicSummaryFromMetadata(row.metadata),
+  };
+}
+
+function normalizeCotizacionRows(rows: Record<string, unknown>[] | null): CotizacionSummary[] {
+  return (rows ?? []).map(normalizeCotizacionRow);
 }
 
 export function buildContextPrompt(ctx: ChatCtx): string {
@@ -100,7 +168,7 @@ export async function searchCotizaciones(query: string, limit = 10): Promise<Cot
   const q = query.trim();
   let dbQuery = supabase
     .from("cotizaciones")
-    .select("id, codigo, oc, cliente_nombre, proyecto, estado, avance, monto, responsable_tecnico, tipo_servicio_nombre, prioridad")
+    .select(COTIZACION_SELECT)
     .order("codigo", { ascending: false })
     .limit(limit);
 
@@ -112,17 +180,17 @@ export async function searchCotizaciones(query: string, limit = 10): Promise<Cot
 
   const { data, error } = await dbQuery;
   if (error || !data) return [];
-  return data as CotizacionSummary[];
+  return normalizeCotizacionRows(data as unknown as Record<string, unknown>[]);
 }
 
 export async function fetchCotizacionByCode(code: string): Promise<CotizacionSummary | null> {
   const { data, error } = await supabase
     .from("cotizaciones")
-    .select("id, codigo, oc, cliente_nombre, proyecto, estado, avance, monto, responsable_tecnico, tipo_servicio_nombre, prioridad")
+    .select(COTIZACION_SELECT)
     .eq("codigo", code)
     .maybeSingle();
   if (error || !data) return null;
-  return data as CotizacionSummary;
+  return normalizeCotizacionRow(data as unknown as Record<string, unknown>);
 }
 
 // ── Requerimientos ──────────────────────────────────────────────────────────
@@ -136,12 +204,19 @@ export async function fetchRequirementByCode(code: string): Promise<RequirementS
   return data as RequirementSummary;
 }
 
-export async function fetchRequirementsByProject(cotizacionCodigo: string): Promise<RequirementSummary[]> {
+export async function fetchRequirementsByProject(cotizacionCodigo: string, cotizacionId?: string): Promise<RequirementSummary[]> {
   const num = cotizacionCodigo.replace(/[^0-9]/g, "");
+  const filters = [
+    `cotizacion_codigo.eq.${cotizacionCodigo}`,
+    `cotizacion_codigo.ilike.%${cotizacionCodigo}%`,
+  ];
+  if (num) filters.push(`cotizacion_codigo.ilike.%${num}%`);
+  if (cotizacionId) filters.push(`cotizacion_id.eq.${cotizacionId}`);
+
   const { data, error } = await supabase
     .from("requerimientos")
     .select("id, codigo, estado, responsable, avance, solicitante_rq, tipo_servicio_nombre, fecha_requerida, cotizacion_codigo, observaciones")
-    .or(`cotizacion_codigo.ilike.%${num}%,cotizacion_codigo.eq.${cotizacionCodigo}`)
+    .or(filters.join(","))
     .order("codigo", { ascending: true })
     .limit(30);
 
@@ -305,6 +380,10 @@ export interface CotizacionSearchFilters {
   estado?: string;
   recent?: boolean;
   oldest?: boolean;
+  dateFrom?: string;
+  dateTo?: string;
+  dateColumn?: "created_at" | "fecha_registro" | "fecha_entrega";
+  periodLabel?: string;
 }
 
 export interface CotizacionSearchResult {
@@ -312,10 +391,38 @@ export interface CotizacionSearchResult {
   total: number;
 }
 
-const COTIZACION_SELECT = "id, codigo, oc, cliente_nombre, proyecto, estado, avance, monto, responsable_tecnico, tipo_servicio_nombre, prioridad, created_at";
+const COTIZACION_SELECT = [
+  "id",
+  "codigo",
+  "oc",
+  "cliente_nombre",
+  "proyecto",
+  "unidad_trabajo_nombre",
+  "estado",
+  "estado_propuesta",
+  "avance",
+  "monto",
+  "moneda_codigo",
+  "solicitante",
+  "responsable_tecnico",
+  "responsable_economico",
+  "tipo_servicio_nombre",
+  "prioridad",
+  "fecha_registro",
+  "fecha_invitacion",
+  "fecha_visita_tecnica",
+  "fecha_consultas",
+  "fecha_abs_consultas",
+  "fecha_entrega",
+  "fecha_entregada",
+  "fecha_oc",
+  "created_at",
+  "metadata",
+].join(", ");
 
 export async function searchCotizacionesByFilters(filters: CotizacionSearchFilters, limit = 20): Promise<CotizacionSearchResult> {
   const orderByCreated = filters.recent || filters.oldest;
+  const dateColumn = filters.dateColumn ?? "created_at";
   let query = supabase
     .from("cotizaciones")
     .select(COTIZACION_SELECT, { count: "exact" })
@@ -327,10 +434,12 @@ export async function searchCotizacionesByFilters(filters: CotizacionSearchFilte
     query = query.or(`codigo.ilike.%${q}%,proyecto.ilike.%${q}%,cliente_nombre.ilike.%${q}%,responsable_tecnico.ilike.%${q}%`);
   }
   if (filters.estado?.trim()) query = query.ilike("estado", `%${filters.estado.trim()}%`);
+  if (filters.dateFrom) query = query.gte(dateColumn, filters.dateFrom);
+  if (filters.dateTo) query = query.lt(dateColumn, filters.dateTo);
 
   const { data, error, count } = await query;
   if (error || !data) return { items: [], total: 0 };
-  return { items: data as CotizacionSummary[], total: count ?? data.length };
+  return { items: normalizeCotizacionRows(data as unknown as Record<string, unknown>[]), total: count ?? data.length };
 }
 
 export function buildCotizacionSearchPrompt(filters: CotizacionSearchFilters, result: CotizacionSearchResult): string {
@@ -338,6 +447,8 @@ export function buildCotizacionSearchPrompt(filters: CotizacionSearchFilters, re
     filters.recent ? "más recientes (por fecha de registro)" : "",
     filters.oldest ? "más antiguas (por fecha de registro)" : "",
     filters.estado ? `estado: ${filters.estado}` : "",
+    filters.periodLabel ? `periodo: ${filters.periodLabel}` : "",
+    filters.dateFrom || filters.dateTo ? `rango ${filters.dateColumn ?? "created_at"}: ${filters.dateFrom ?? "inicio"} a ${filters.dateTo ?? "fin"}` : "",
     filters.q ? `código/texto contiene: "${filters.q}"` : "",
   ].filter(Boolean).join(", ") || "sin filtros";
 
@@ -351,6 +462,9 @@ export function buildCotizacionSearchPrompt(filters: CotizacionSearchFilters, re
     prompt += `\n- **${cot.codigo}** · Estado: ${cot.estado ?? "—"} · Avance: ${cot.avance ?? "—"}%`;
     if (cot.cliente_nombre) prompt += ` · Cliente: ${cot.cliente_nombre}`;
     if (cot.proyecto) prompt += ` · Proyecto: ${cot.proyecto}`;
+    if (cot.tipo_servicio_nombre) prompt += ` · Tipo: ${cot.tipo_servicio_nombre}`;
+    if (cot.monto != null) prompt += ` · Monto: ${moneyPrefix(cot.moneda_codigo)} ${cot.monto.toLocaleString("es-PE")}`;
+    if (cot.fecha_registro) prompt += ` · Fecha registro: ${cot.fecha_registro}`;
     if (orderByCreated && cot.created_at) prompt += ` · Registrado: ${new Date(cot.created_at).toLocaleDateString("es-PE")}`;
   }
   if (result.total > result.items.length) {
@@ -403,12 +517,12 @@ export async function fetchProjectContextByCode(rawCode: string): Promise<Projec
   // project name happens to contain this code as a substring).
   const { data: cots } = await supabase
     .from("cotizaciones")
-    .select("id, codigo, oc, cliente_nombre, proyecto, estado, avance, monto, responsable_tecnico, tipo_servicio_nombre, prioridad")
+    .select(COTIZACION_SELECT)
     .eq("codigo", code)
     .limit(1);
   if (cots && cots.length > 0) {
     debugLog(`'${code}' encontrado en cotizaciones`);
-    return { source: "cotizacion", cotizacion: cots[0] as CotizacionSummary };
+    return { source: "cotizacion", cotizacion: normalizeCotizacionRow(cots[0] as unknown as Record<string, unknown>) };
   }
 
   // 2) requerimientos.codigo or requerimientos.cotizacion_codigo (exact)
@@ -463,7 +577,7 @@ export async function fetchProjectContextByCode(rawCode: string): Promise<Projec
           .order("codigo", { ascending: true })
           .limit(HISTORICAL_SAMPLE_LIMIT),
         supabase.from("requerimientos").select("estado").in("id", ids),
-        supabase.from("requerimiento_items").select("costo_total_presupuestado").in("requerimiento_id", ids).limit(2000),
+        supabase.from("requerimiento_items").select("costo_total_presupuestado").in("requerimiento_id", ids).limit(500),
       ]);
 
       if (sample && sample.length > 0) {

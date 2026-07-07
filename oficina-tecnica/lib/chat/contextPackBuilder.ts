@@ -7,6 +7,7 @@
 
 import {
   buildProjectReferencePrompt,
+  moneyPrefix,
   type CotizacionSummary,
   type RequirementSummary,
   type RequirementItemSummary,
@@ -28,6 +29,7 @@ const SOURCE_LABELS: Record<ContextToolResult["source"], string> = {
   requerimiento_items: "Supabase.requerimiento_items",
   technical_proposals: "Supabase.technical_proposals",
   recursos: "Supabase.recursos",
+  conteo: "Supabase.conteo",
   proyecto: "Supabase (cascada por código)",
 };
 
@@ -41,10 +43,34 @@ function describeQuery(query: Record<string, unknown>): string {
 function renderCotizacion(c: CotizacionSummary): string {
   const bits = [`**${c.codigo}**`, `Estado: ${c.estado ?? "—"}`, `Avance: ${c.avance ?? "—"}%`];
   if (c.cliente_nombre) bits.push(`Cliente: ${c.cliente_nombre}`);
+  if (c.unidad_trabajo_nombre) bits.push(`Unidad: ${c.unidad_trabajo_nombre}`);
   if (c.proyecto) bits.push(`Proyecto: ${c.proyecto}`);
-  if (c.monto != null) bits.push(`Monto: ${c.monto.toLocaleString("es-PE")}`);
+  if (c.estado_propuesta) bits.push(`Estado propuesta: ${c.estado_propuesta}`);
+  if (c.tipo_servicio_nombre) bits.push(`Tipo: ${c.tipo_servicio_nombre}`);
+  if (c.monto != null) bits.push(`Monto: ${moneyPrefix(c.moneda_codigo)} ${c.monto.toLocaleString("es-PE")}`);
+  if (c.fecha_registro) bits.push(`Fecha registro: ${c.fecha_registro}`);
+  if (c.fecha_invitacion) bits.push(`Fecha invitación: ${c.fecha_invitacion}`);
+  if (c.fecha_visita_tecnica) bits.push(`Visita técnica: ${c.fecha_visita_tecnica}`);
+  if (c.fecha_consultas) bits.push(`Consultas: ${c.fecha_consultas}`);
+  if (c.fecha_abs_consultas) bits.push(`Abs. consultas: ${c.fecha_abs_consultas}`);
+  if (c.fecha_entrega) bits.push(`Fecha entrega: ${c.fecha_entrega}`);
+  if (c.fecha_entregada) bits.push(`Fecha entregada: ${c.fecha_entregada}`);
+  if (c.fecha_oc) bits.push(`Fecha OC: ${c.fecha_oc}`);
+  if (c.solicitante) bits.push(`Solicitante: ${c.solicitante}`);
   if (c.responsable_tecnico) bits.push(`Resp: ${c.responsable_tecnico}`);
-  return bits.join(" · ");
+  if (c.responsable_economico) bits.push(`Resp. económico: ${c.responsable_economico}`);
+
+  const economicRows = (c.resumen_economico ?? []).filter((row) => row.base !== 0 || row.oferta !== 0 || (row.real ?? 0) !== 0);
+  if (!economicRows.length) return bits.join(" · ");
+
+  const economicSummary = economicRows
+    .map((row) => {
+      const margen = row.margen_ofertado_manual ?? row.oferta - row.base;
+      return `${row.tipo_recurso}: Base ${moneyPrefix(c.moneda_codigo)} ${row.base.toLocaleString("es-PE")} / Oferta ${moneyPrefix(c.moneda_codigo)} ${row.oferta.toLocaleString("es-PE")} / Margen ${moneyPrefix(c.moneda_codigo)} ${margen.toLocaleString("es-PE")}`;
+    })
+    .join("; ");
+
+  return `${bits.join(" · ")}\n  Detalle económico registrado: ${economicSummary}`;
 }
 
 function renderRequerimiento(r: RequirementSummary): string {
@@ -78,6 +104,7 @@ function renderRecurso(r: RecursoLite): string {
   if (r.proveedor_nombre) bits.push(`Proveedor: ${r.proveedor_nombre}`);
   if (r.marca_nombre) bits.push(`Marca: ${r.marca_nombre}`);
   if (r.estado) bits.push(`Estado: ${r.estado}`);
+  if (r.image_url) bits.push(`Imagen disponible: ${r.image_url}`);
   return bits.join(" · ");
 }
 
@@ -94,6 +121,8 @@ function renderRecords(result: ContextToolResult): string {
       return result.records.map((p, i) => `${i + 1}. ${renderProposal(p)}`).join("\n");
     case "recursos":
       return result.records.map((r, i) => `${i + 1}. ${renderRecurso(r)}`).join("\n");
+    case "conteo":
+      return `Conteo real: **${result.total} ${result.label}**.`;
     case "proyecto":
       // Reutiliza el formateo probado (incluye resumen histórico agregado),
       // recortando su encabezado en blanco inicial.
@@ -109,6 +138,11 @@ function renderSection(result: ContextToolResult): string {
   lines.push(`Consulta aplicada: ${describeQuery(result.query)}`);
 
   if (result.status === "success") {
+    if (result.source === "conteo") {
+      lines.push(`Resultados encontrados: ${result.total}`);
+      lines.push(`Agregado: ${renderRecords(result)}`);
+      return lines.join("\n");
+    }
     const shown = result.source === "proyecto" ? result.total : result.records.length;
     lines.push(`Resultados encontrados: ${result.total}${shown !== result.total ? ` (mostrando ${result.records.length})` : ""}`);
     const body = renderRecords(result);
@@ -159,5 +193,5 @@ export function buildContextPack(results: ContextToolResult[], options: ContextP
 
 /** True si algún resultado trajo datos reales (status success con registros). */
 export function hasRealData(results: ContextToolResult[]): boolean {
-  return results.some((r) => r.status === "success" && (r.source === "proyecto" ? r.total > 0 : r.records.length > 0));
+  return results.some((r) => r.status === "success" && (r.source === "conteo" || (r.source === "proyecto" ? r.total > 0 : r.records.length > 0)));
 }

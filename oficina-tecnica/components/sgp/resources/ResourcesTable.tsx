@@ -374,6 +374,7 @@ export function ResourcesTable({
         <div className="flex gap-1">
           {row.resourceFiles.fichaTecnica ? <span className="rounded border border-border px-1 text-[10px]">FT</span> : null}
           {row.resourceFiles.imagen ? <span className="rounded border border-border px-1 text-[10px]">IMG</span> : null}
+          {row.resourceFiles.cotizacion ? <span className="rounded border border-border px-1 text-[10px]">COT</span> : null}
           {row.resourceFiles.archivos.length > 0 ? (
             <span className="rounded border border-border px-1 text-[10px]">ARCH</span>
           ) : null}

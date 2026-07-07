@@ -1,9 +1,15 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { CatalogFormModal } from "@/components/sgp/catalogs/CatalogFormModal";
 import { CatalogTable } from "@/components/sgp/catalogs/CatalogTable";
 import { FieldLabelIcon } from "@/components/sgp/ui/FieldLabelIcon";
+import {
+  listCatalogMap,
+  removeCatalogItem,
+  saveCatalogItem,
+  type CatalogKey as PersistedCatalogKey,
+} from "@/lib/sgp/catalogsRepository";
 import {
   type CatalogCodigoCliente,
   type CatalogCodigoUnidadTrabajo,
@@ -108,6 +114,28 @@ const tabGroups: Array<{ group: string; tabs: Array<{ key: TabKey; label: string
   },
 ];
 
+const tabCatalogKey: Record<TabKey, PersistedCatalogKey> = {
+  tipos: "catalogTipoRecurso",
+  unidades: "catalogUnidades",
+  marcas: "catalogMarcas",
+  proveedores: "catalogProveedores",
+  monedas: "catalogMonedas",
+  estados: "catalogEstadosRecurso",
+  estadoDetalle: "catalogEstadoDetalleRq",
+  eq: "catalogEq",
+  ll: "catalogLl",
+  hb: "catalogHb",
+  logistica: "catalogLogisticaCompra",
+  tipoServicio: "catalogTipoServicio",
+  area: "catalogArea",
+  solicitantesRq: "catalogSolicitanteRq",
+  solicitantesCotizacion: "catalogSolicitanteCotizacion",
+  estadosCotizacion: "catalogEstadoCotizacion",
+  codigosCliente: "catalogCodigoClientes",
+  codigosUnidad: "catalogCodigoUnidadesTrabajo",
+  proyectosAdjudicados: "proyectosAdjudicados",
+};
+
 function safeUuid(): string {
   try {
     if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
@@ -145,10 +173,45 @@ export default function DatosContent() {
   const [formOpen, setFormOpen] = useState(false);
   const [editing, setEditing] = useState<CatalogRecord | null>(null);
   const [warning, setWarning] = useState<string | null>(null);
+  const [loadingCatalogs, setLoadingCatalogs] = useState(false);
 
   const resources = useMemo(() => demoData.listRecursos(), []);
   const requerimientos = useMemo(() => demoData.listRequerimientos(), []);
   const cotizaciones = useMemo(() => demoData.listCotizaciones(), []);
+
+  function applyCatalogs(catalogs: Partial<Record<PersistedCatalogKey, CatalogRecord[]>>) {
+    setTipos((catalogs.catalogTipoRecurso ?? demoData.listCatalogTipoRecurso()) as CatalogTipoRecurso[]);
+    setUnidades((catalogs.catalogUnidades ?? demoData.listCatalogUnidades()) as CatalogUnidad[]);
+    setMarcas((catalogs.catalogMarcas ?? demoData.listCatalogMarcas()) as CatalogMarca[]);
+    setProveedores((catalogs.catalogProveedores ?? demoData.listCatalogProveedores()) as CatalogProveedor[]);
+    setMonedas((catalogs.catalogMonedas ?? demoData.listCatalogMonedas()) as CatalogMoneda[]);
+    setEstados((catalogs.catalogEstadosRecurso ?? demoData.listCatalogEstadosRecurso()) as CatalogEstadoRecurso[]);
+    setEstadosDetalle((catalogs.catalogEstadoDetalleRq ?? demoData.listCatalogEstadoDetalleRq()) as CatalogEstadoDetalleRq[]);
+    setEqOptions((catalogs.catalogEq ?? demoData.listCatalogEq()) as CatalogAprobacionItem[]);
+    setLlOptions((catalogs.catalogLl ?? demoData.listCatalogLl()) as CatalogAprobacionItem[]);
+    setHbOptions((catalogs.catalogHb ?? demoData.listCatalogHb()) as CatalogAprobacionItem[]);
+    setLogisticaOptions(
+      (catalogs.catalogLogisticaCompra ?? demoData.listCatalogLogisticaCompra()) as CatalogLogisticaCompraItem[],
+    );
+    setTiposServicio((catalogs.catalogTipoServicio ?? demoData.listCatalogTipoServicio()) as CatalogTipoServicio[]);
+    setAreas((catalogs.catalogArea ?? demoData.listCatalogArea()) as CatalogArea[]);
+    setSolicitantesRq((catalogs.catalogSolicitanteRq ?? demoData.listCatalogSolicitanteRq()) as CatalogSolicitanteRq[]);
+    setSolicitantesCotizacion(
+      (catalogs.catalogSolicitanteCotizacion ?? demoData.listCatalogSolicitanteCotizacion()) as CatalogSolicitanteCotizacion[],
+    );
+    setEstadosCotizacion((catalogs.catalogEstadoCotizacion ?? demoData.listCatalogEstadoCotizacion()) as CatalogEstadoCotizacion[]);
+    setCodigosCliente((catalogs.catalogCodigoClientes ?? demoData.listCatalogCodigoClientes()) as CatalogCodigoCliente[]);
+    setCodigosUnidad(
+      (catalogs.catalogCodigoUnidadesTrabajo ?? demoData.listCatalogCodigoUnidadesTrabajo()) as CatalogCodigoUnidadTrabajo[],
+    );
+    setProyectosAdjudicados((catalogs.proyectosAdjudicados ?? demoData.listProyectosAdjudicados()) as ProyectoAdjudicado[]);
+  }
+
+  async function reloadCatalogsFromSupabase() {
+    const result = await listCatalogMap();
+    applyCatalogs(result.catalogs);
+    setWarning(result.error ?? null);
+  }
 
   function refresh() {
     setTipos(demoData.listCatalogTipoRecurso());
@@ -171,6 +234,27 @@ export default function DatosContent() {
     setCodigosUnidad(demoData.listCatalogCodigoUnidadesTrabajo());
     setProyectosAdjudicados(demoData.listProyectosAdjudicados());
   }
+
+  useEffect(() => {
+    let active = true;
+    setLoadingCatalogs(true);
+    listCatalogMap()
+      .then((result) => {
+        if (!active) return;
+        applyCatalogs(result.catalogs);
+        setWarning(result.error ?? null);
+      })
+      .catch((error: unknown) => {
+        if (!active) return;
+        setWarning(error instanceof Error ? error.message : "No se pudieron cargar los catálogos desde Supabase.");
+      })
+      .finally(() => {
+        if (active) setLoadingCatalogs(false);
+      });
+    return () => {
+      active = false;
+    };
+  }, []);
 
   const rows = useMemo(() => {
     if (activeTab === "tipos") return tipos;
@@ -488,44 +572,22 @@ export default function DatosContent() {
     setFormOpen(true);
   }
 
-  function save(value: CatalogRecord) {
-    if (activeTab === "tipos") demoData.saveCatalog("catalogTipoRecurso", value as CatalogTipoRecurso);
-    if (activeTab === "unidades") demoData.saveCatalog("catalogUnidades", value as CatalogUnidad);
-    if (activeTab === "marcas") demoData.saveCatalog("catalogMarcas", value as CatalogMarca);
-    if (activeTab === "proveedores") demoData.saveCatalog("catalogProveedores", value as CatalogProveedor);
-    if (activeTab === "monedas") demoData.saveCatalog("catalogMonedas", value as CatalogMoneda);
-    if (activeTab === "estados") demoData.saveCatalog("catalogEstadosRecurso", value as CatalogEstadoRecurso);
-    if (activeTab === "estadoDetalle") demoData.saveCatalog("catalogEstadoDetalleRq", value as CatalogEstadoDetalleRq);
-    if (activeTab === "eq") demoData.saveCatalog("catalogEq", value as CatalogAprobacionItem);
-    if (activeTab === "ll") demoData.saveCatalog("catalogLl", value as CatalogAprobacionItem);
-    if (activeTab === "hb") demoData.saveCatalog("catalogHb", value as CatalogAprobacionItem);
-    if (activeTab === "logistica")
-      demoData.saveCatalog("catalogLogisticaCompra", value as CatalogLogisticaCompraItem);
-    if (activeTab === "tipoServicio")
-      demoData.saveCatalog("catalogTipoServicio", value as CatalogTipoServicio);
-    if (activeTab === "area") demoData.saveCatalog("catalogArea", value as CatalogArea);
-    if (activeTab === "solicitantesRq")
-      demoData.saveCatalog("catalogSolicitanteRq", value as CatalogSolicitanteRq);
-    if (activeTab === "solicitantesCotizacion")
-      demoData.saveCatalog("catalogSolicitanteCotizacion", value as CatalogSolicitanteCotizacion);
-    if (activeTab === "estadosCotizacion")
-      demoData.saveCatalog("catalogEstadoCotizacion", value as CatalogEstadoCotizacion);
-    if (activeTab === "codigosCliente")
-      demoData.saveCatalog("catalogCodigoClientes", value as CatalogCodigoCliente);
-    if (activeTab === "codigosUnidad")
-      demoData.saveCatalog("catalogCodigoUnidadesTrabajo", value as CatalogCodigoUnidadTrabajo);
-    if (activeTab === "proyectosAdjudicados")
-      demoData.saveCatalog("proyectosAdjudicados", value as ProyectoAdjudicado);
-    refresh();
-    setFormOpen(false);
-    setEditing(null);
+  async function save(value: CatalogRecord) {
+    try {
+      await saveCatalogItem(tabCatalogKey[activeTab], value);
+      await reloadCatalogsFromSupabase();
+      setFormOpen(false);
+      setEditing(null);
+    } catch (error) {
+      setWarning(error instanceof Error ? error.message : "No se pudo guardar el catálogo en Supabase.");
+    }
   }
 
   function deactivate(row: CatalogRecord) {
     save({ ...row, activo: false } as CatalogRecord);
   }
 
-  function deleteRow(row: CatalogRecord) {
+  async function deleteRow(row: CatalogRecord) {
     const currentCotizaciones = demoData.listCotizaciones();
     const currentRequerimientos = demoData.listRequerimientos();
     const currentProjects = demoData.listProyectosAdjudicados();
@@ -577,27 +639,14 @@ export default function DatosContent() {
       return;
     }
 
-    if (activeTab === "tipos") demoData.removeCatalog("catalogTipoRecurso", row.id);
-    if (activeTab === "unidades") demoData.removeCatalog("catalogUnidades", row.id);
-    if (activeTab === "marcas") demoData.removeCatalog("catalogMarcas", row.id);
-    if (activeTab === "proveedores") demoData.removeCatalog("catalogProveedores", row.id);
-    if (activeTab === "monedas") demoData.removeCatalog("catalogMonedas", row.id);
-    if (activeTab === "estados") demoData.removeCatalog("catalogEstadosRecurso", row.id);
-    if (activeTab === "estadoDetalle") demoData.removeCatalog("catalogEstadoDetalleRq", row.id);
-    if (activeTab === "eq") demoData.removeCatalog("catalogEq", row.id);
-    if (activeTab === "ll") demoData.removeCatalog("catalogLl", row.id);
-    if (activeTab === "hb") demoData.removeCatalog("catalogHb", row.id);
-    if (activeTab === "logistica") demoData.removeCatalog("catalogLogisticaCompra", row.id);
-    if (activeTab === "tipoServicio") demoData.removeCatalog("catalogTipoServicio", row.id);
-    if (activeTab === "area") demoData.removeCatalog("catalogArea", row.id);
-    if (activeTab === "solicitantesRq") demoData.removeCatalog("catalogSolicitanteRq", row.id);
-    if (activeTab === "solicitantesCotizacion") demoData.removeCatalog("catalogSolicitanteCotizacion", row.id);
-    if (activeTab === "estadosCotizacion") demoData.removeCatalog("catalogEstadoCotizacion", row.id);
-    if (activeTab === "codigosCliente") demoData.removeCatalog("catalogCodigoClientes", row.id);
-    if (activeTab === "codigosUnidad") demoData.removeCatalog("catalogCodigoUnidadesTrabajo", row.id);
-    if (activeTab === "proyectosAdjudicados") demoData.removeCatalog("proyectosAdjudicados", row.id);
-    refresh();
-    setWarning(null);
+    try {
+      await removeCatalogItem(tabCatalogKey[activeTab], row.id);
+      await reloadCatalogsFromSupabase();
+    } catch (error) {
+      setWarning(error instanceof Error ? error.message : "No se pudo eliminar el catálogo en Supabase.");
+      return;
+    }
+
   }
 
   return (
@@ -636,6 +685,7 @@ export default function DatosContent() {
         ))}
       </div>
 
+      {loadingCatalogs ? <p className="mb-2 text-xs text-stone-500">Cargando catálogos desde Supabase...</p> : null}
       {warning ? <p className="mb-2 text-xs text-amber-700">{warning}</p> : null}
 
       <CatalogTable
