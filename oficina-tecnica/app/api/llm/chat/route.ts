@@ -20,8 +20,11 @@ const PROVIDER_CONFIG: Record<string, ProviderCfg> = {
 };
 
 export async function POST(request: Request) {
-  const body = await request.json() as { messages: unknown; provider: string; model: string };
+  const body = await request.json() as { messages: unknown; provider: string; model: string; maxTokens?: number };
   const { messages, provider, model } = body;
+  const maxTokens = typeof body.maxTokens === "number"
+    ? Math.max(128, Math.min(body.maxTokens, 12000))
+    : undefined;
 
   const cfg = PROVIDER_CONFIG[provider];
   if (!cfg) return Response.json({ error: "Provider not supported" }, { status: 400 });
@@ -32,6 +35,9 @@ export async function POST(request: Request) {
 
   let res: Response;
   try {
+    const payload: Record<string, unknown> = { model, messages };
+    if (maxTokens) payload.max_tokens = maxTokens;
+
     res = await fetch(`${cfg.baseUrl}/chat/completions`, {
       method: "POST",
       headers: {
@@ -39,8 +45,8 @@ export async function POST(request: Request) {
         Authorization: `Bearer ${apiKey}`,
         ...(cfg.extraHeaders ?? {}),
       },
-      body: JSON.stringify({ model, messages, max_tokens: 12000 }),
-      signal: AbortSignal.timeout(60000),
+      body: JSON.stringify(payload),
+      signal: AbortSignal.timeout(30000),
     });
   } catch (err) {
     const msg = err instanceof Error ? err.message : "network error";

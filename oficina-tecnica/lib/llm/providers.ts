@@ -17,6 +17,7 @@ export type ModelConfig = {
   model: string;
   baseUrl?: string;
   apiKey?: string;
+  maxTokens?: number;
 };
 
 export type ChatContent =
@@ -48,8 +49,13 @@ export async function sendChat(messages: ChatMessage[], config: ModelConfig): Pr
     const res = await fetch("/api/llm/chat", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ messages, provider: config.provider, model: config.model }),
-      signal: AbortSignal.timeout(45000),
+      body: JSON.stringify({
+        messages,
+        provider: config.provider,
+        model: config.model,
+        maxTokens: config.maxTokens,
+      }),
+      signal: AbortSignal.timeout(30000),
     });
     if (res.ok) {
       const data = await res.json();
@@ -96,6 +102,12 @@ async function sendOpenAICompatChat(
   baseUrl: string,
   extraHeaders: Record<string, string> = {}
 ): Promise<LLMResponse> {
+  const payload: Record<string, unknown> = {
+    model: config.model,
+    messages,
+  };
+  if (config.maxTokens && config.maxTokens > 0) payload.max_tokens = config.maxTokens;
+
   const res = await fetch(`${baseUrl}/chat/completions`, {
     method: "POST",
     headers: {
@@ -103,8 +115,8 @@ async function sendOpenAICompatChat(
       Authorization: `Bearer ${config.apiKey}`,
       ...extraHeaders,
     },
-    body: JSON.stringify({ model: config.model, messages, max_tokens: 12000 }),
-    signal: AbortSignal.timeout(45000),
+    body: JSON.stringify(payload),
+    signal: AbortSignal.timeout(30000),
   });
   if (!res.ok) {
     const errText = await res.text().catch(() => res.statusText);
@@ -131,11 +143,11 @@ async function sendAnthropicChat(messages: ChatMessage[], config: ModelConfig): 
     },
     body: JSON.stringify({
       model: config.model,
-      max_tokens: 8192,
+      max_tokens: config.maxTokens ?? 4096,
       system: typeof systemMsg === "string" ? systemMsg : contentToPlainText(systemMsg),
       messages: userMessages.map((m) => ({ role: m.role, content: contentToPlainText(m.content) })),
     }),
-    signal: AbortSignal.timeout(45000),
+    signal: AbortSignal.timeout(30000),
   });
   if (!res.ok) throw new Error(`Anthropic error: ${res.statusText}`);
   const data = await res.json();
@@ -213,8 +225,8 @@ export async function sendChatWithFallback(
   // Cloud providers: try server proxy (Vercel env vars) first, then localStorage key as fallback
   const deep = complexity !== "simple";
   const CLOUD_FALLBACKS: Array<{ provider: LLMProvider; lsKey: string; model: string }> = [
-    { provider: "gemini",      lsKey: "ot:apikey:gemini",      model: deep ? "gemini-pro-latest" : "gemini-flash-latest" },
     { provider: "openai",      lsKey: "ot:apikey:openai",      model: deep ? "gpt-4o" : "gpt-4o-mini" },
+    { provider: "gemini",      lsKey: "ot:apikey:gemini",      model: deep ? "gemini-pro-latest" : "gemini-flash-latest" },
     { provider: "cerebras",    lsKey: "ot:apikey:cerebras",    model: deep ? "llama3.1-70b" : "llama3.1-8b" },
     { provider: "mistral",     lsKey: "ot:apikey:mistral",     model: deep ? "mistral-large-latest" : "mistral-small-latest" },
     { provider: "groq",        lsKey: "ot:apikey:groq",        model: deep ? "llama-3.1-70b-versatile" : "llama-3.1-8b-instant" },
@@ -228,7 +240,12 @@ export async function sendChatWithFallback(
     if (fb.provider === primaryConfig.provider) continue;
     // Always try server proxy (no key needed); also pass localStorage key if available
     const key = localStorage.getItem(fb.lsKey) ?? undefined;
-    const config: ModelConfig = { provider: fb.provider, model: fb.model, apiKey: key };
+    const config: ModelConfig = {
+      provider: fb.provider,
+      model: fb.model,
+      apiKey: key,
+      maxTokens: deep ? 4096 : 1024,
+    };
     try {
       const response = await sendChat(messages, config);
       return { response, actualConfig: config, usedFallback: true };

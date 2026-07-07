@@ -66,9 +66,9 @@ const LOCAL_KEY_BY_PROVIDER: Partial<Record<LLMProvider, string>> = {
   anthropic: "ot:apikey:anthropic",
 };
 
-function config(provider: LLMProvider, model: string): ModelConfig {
+function config(provider: LLMProvider, model: string, maxTokens?: number): ModelConfig {
   const localKey = LOCAL_KEY_BY_PROVIDER[provider];
-  return { provider, model, apiKey: localKey ? getKey(localKey) || undefined : undefined };
+  return { provider, model, apiKey: localKey ? getKey(localKey) || undefined : undefined, maxTokens };
 }
 
 export function routeRequest(text: string): RoutingDecision {
@@ -77,10 +77,10 @@ export function routeRequest(text: string): RoutingDecision {
   const appGeneration = isAppGenerationRequest(text);
 
   if (isDeep) {
-    const model = appGeneration || complexity !== "generative" ? "gemini-pro-latest" : "gpt-4o";
-    const provider: LLMProvider = appGeneration || complexity !== "generative" ? "gemini" : "openai";
+    const model = "gpt-4o";
+    const provider: LLMProvider = "openai";
     return {
-      config: config(provider, model),
+      config: config(provider, model, appGeneration ? 12000 : 4096),
       complexity,
       reason: appGeneration
         ? "Auto: app HTML/simulador -> modelo largo con mejor tolerancia de salida"
@@ -91,17 +91,17 @@ export function routeRequest(text: string): RoutingDecision {
 
   if (complexity === "technical") {
     return {
-      config: config("cerebras", "llama3.1-70b"),
+      config: config("openai", "gpt-4o-mini", 2048),
       complexity,
-      reason: "Auto: consulta tecnica -> modelo rapido y fuerte para ingenieria",
-      modelLabel: "llama3.1-70b",
+      reason: "Auto: consulta tecnica -> modelo estable y rapido para ingenieria",
+      modelLabel: "gpt-4o-mini",
     };
   }
 
   return {
-    config: config("gemini", "gemini-flash-latest"),
+    config: config("openai", "gpt-4o-mini", 1024),
     complexity,
-    reason: "Auto: consulta simple -> respuesta rapida",
-    modelLabel: "gemini-flash-latest",
+    reason: "Auto: consulta simple -> respuesta rapida y estable",
+    modelLabel: "gpt-4o-mini",
   };
 }
