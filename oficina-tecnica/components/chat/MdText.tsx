@@ -396,12 +396,25 @@ function rangeValues(range: unknown, defaults: { min: number; max: number; step?
 }
 
 function mathScope(primaryVariable: string, primaryValue: number, timeVariable: string, timeValue: number) {
+  const value = primaryVariable === timeVariable ? primaryValue : timeValue;
   return {
     [primaryVariable]: primaryValue,
     [timeVariable]: timeValue,
-    x: primaryVariable === "x" ? primaryValue : timeValue,
-    t: timeVariable === "t" ? timeValue : primaryValue,
+    x: primaryVariable === "x" ? primaryValue : value,
+    t: timeVariable === "t" ? timeValue : value,
+    I: primaryVariable === "I" ? primaryValue : value,
+    V: primaryVariable === "V" ? primaryValue : value,
+    R: primaryVariable === "R" ? primaryValue : value,
+    i: primaryVariable === "i" ? primaryValue : value,
+    v: primaryVariable === "v" ? primaryValue : value,
+    r: primaryVariable === "r" ? primaryValue : value,
   };
+}
+
+function evaluateExpression(expression: string, variable: string, value: number, timeValue = value): number {
+  const parser = new Parser();
+  const expr = parser.parse(expression);
+  return asNumber(expr.evaluate(mathScope(variable, value, "t", timeValue)), NaN);
 }
 
 function buildPlotSpec(kind: "chart" | "graph2d" | "graph3d" | "plotly", jsonText: string): PlotSpec {
@@ -437,7 +450,7 @@ function buildPlotSpec(kind: "chart" | "graph2d" | "graph3d" | "plotly", jsonTex
     const x = rangeValues(spec.x, { min: -10, max: 10, points: 121 });
     const y = x.map((v) => {
       try {
-        return asNumber(expr.evaluate({ [variable]: v, x: v, t: v }), NaN);
+        return asNumber(expr.evaluate(mathScope(variable, v, "t", v)), NaN);
       } catch {
         return NaN;
       }
@@ -525,9 +538,7 @@ function PlotBlock({ kind, code }: { kind: "chart" | "graph2d" | "graph3d" | "pl
         );
         if (plotSpec.animation?.enabled) {
           const x0 = plotSpec.animation.values[0] ?? 0;
-          const parser = new Parser();
-          const expr = parser.parse(plotSpec.animation.expression);
-          const y0 = asNumber(expr.evaluate(mathScope(plotSpec.animation.variable, x0, "t", x0)), NaN);
+          const y0 = evaluateExpression(plotSpec.animation.expression, plotSpec.animation.variable, x0);
           setReadout(`${plotSpec.animation.variable} = ${x0.toFixed(3)} | f = ${Number.isFinite(y0) ? y0.toFixed(3) : "N/D"}`);
         }
       })
@@ -549,9 +560,7 @@ function PlotBlock({ kind, code }: { kind: "chart" | "graph2d" | "graph3d" | "pl
     const xVal = values[idx] ?? 0;
     let yVal = NaN;
     try {
-      const parser = new Parser();
-      const expr = parser.parse(plotSpec.animation.expression);
-      yVal = asNumber(expr.evaluate(mathScope(plotSpec.animation.variable, xVal, "t", xVal)), NaN);
+      yVal = evaluateExpression(plotSpec.animation.expression, plotSpec.animation.variable, xVal);
     } catch {
       yVal = NaN;
     }

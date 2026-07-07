@@ -86,6 +86,7 @@ const GENERAL_CONVERSATION_CTX = `\n\nModo conversacion amplia:
 
 const HTML_APP_GENERATION_CTX = `\n\nGeneracion de aplicaciones HTML en la Mesa:
 - Si el usuario pide una aplicacion, app, simulador, calculadora, dashboard, prototipo, replica/mejora de HTML adjunto o "mostrarlo aqui para probar", responde con un bloque \`\`\`html-app que contenga un documento HTML completo y autocontenido.
+- Si el usuario dice "hazlo en HTML", "por aqui", "en una app", "para probarlo en la mesa" o "descargable", NO cierres con promesas ni texto explicativo solamente: entrega el bloque \`\`\`html-app en ese mismo turno.
 - No te limites a explicar ni resumir el HTML adjunto cuando el usuario pide probar una app. Usa el adjunto como referencia principal de estructura, datos, formulas, estilos, flujo y nivel visual.
 - Si el usuario pide "similar", "replica", "mejora" o "avanzada", NO entregues una calculadora minima de una sola pantalla. El estandar minimo es: cabecera profesional, tarjetas KPI, navegacion por tabs/secciones, tabla editable de datos, recalculo en tiempo real, grafica o canvas/SVG, resultados/resumen, validaciones y botones de exportacion.
 - Para ingenieria, incluye cuando aplique: formulas visibles, supuestos editables, tabla de parametros, perfil/esquema en canvas o SVG, grafica tecnica y reporte resumido. Para costos/gestion/documentos, adapta el mismo nivel: dashboard, matriz, trazabilidad, cronograma, comparativos o indicadores.
@@ -169,7 +170,7 @@ $$
 I = \\frac{P}{\\sqrt{3}\\,V\\,FP}
 $$
 - Variables → explícalas con guiones y símbolo LaTeX, ejemplo: '- $V$: tensión [V]'. Evita viñetas con asterisco junto a símbolos '$'.
-- Gráficas técnicas → si el usuario pide curva, variación en el tiempo, comparación, dashboard o superficie, usa bloques chart/graph2d/graph3d/plotly según corresponda. Para simulación o variación temporal usa graph2d con "animation":{"enabled":true,"variable":"t"}. Si el usuario pide una app, simulador, dashboard editable o replica/mejora de un HTML, usa \`\`\`html-app con HTML/CSS/JS autocontenido.
+- Gráficas técnicas → si el usuario pide curva, variación en el tiempo, comparación, dashboard o superficie, usa bloques chart/graph2d/graph3d/plotly según corresponda. En graph2d, la variable usada en "expression" debe coincidir con "variable"; para Ley de Ohm con R=5 Ω usa {"expression":"5*I","variable":"I","x":{"min":0,"max":5,"points":80},"animation":{"enabled":true,"variable":"I"}}. Para simulación temporal usa "t" solo si la expresión usa t. Si el usuario pide una app, simulador, dashboard editable o replica/mejora de un HTML, usa \`\`\`html-app con HTML/CSS/JS autocontenido.
 - Diagramas básicos/unifilares → si el usuario pide esquema o imagen conceptual, usa bloque Mermaid tipo 'flowchart LR' con barras, interruptores, transformadores, cargas y protecciones. No inventes conexiones no visibles; marca supuestos.
 - Planos PDF/imagen, unifilares, tableros y cuadros de carga → protocolo obligatorio:
   1. Primero lee la leyenda visible y arma una tabla "Leyenda identificada" con Símbolo, Descripción y Texto visible. Si la leyenda muestra, por ejemplo, MCB 2x16A, MCCB 160AF/160AT, punto a tierra, seccionador portafusible o portalámpara, úsalo solo como referencia de esa hoja.
@@ -1068,6 +1069,7 @@ export function RoundtableView() {
 
     setBusy(true);
 
+    try {
     const hasAttachments = (inputCtx?.attachments?.length ?? 0) > 0;
     const coordinationRequested = COORDINATION_RE.test(raw)
       || /^\/(coordinar|coordinacion|coordinación)\b/i.test(raw.trim());
@@ -1433,7 +1435,17 @@ export function RoundtableView() {
       }
     }
 
-    setBusy(false);
+    } catch (err) {
+      appendChat(ROUNDTABLE_THREAD, {
+        role: "agent",
+        agentId: TEAM_COORDINATOR,
+        text: mesaProviderErrorMessage(err),
+        isError: true,
+      });
+    } finally {
+      setHands([]);
+      setBusy(false);
+    }
   }
 
   function clearMesaView() {

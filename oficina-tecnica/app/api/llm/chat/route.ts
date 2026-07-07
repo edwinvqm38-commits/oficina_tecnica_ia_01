@@ -3,6 +3,8 @@
 
 import { apiAuthErrorResponse, assertRateLimit, requireApprovedUser } from "@/lib/api/serverAuth";
 
+export const maxDuration = 60;
+
 type ProviderCfg = {
   envKey: string;
   baseUrl: string;
@@ -35,6 +37,7 @@ export async function POST(request: Request) {
   const maxTokens = typeof body.maxTokens === "number"
     ? Math.max(128, Math.min(body.maxTokens, 12000))
     : undefined;
+  const timeoutMs = maxTokens && maxTokens > 4096 ? 55_000 : 35_000;
 
   const cfg = PROVIDER_CONFIG[provider];
   if (!cfg) return Response.json({ error: "Provider not supported" }, { status: 400 });
@@ -56,7 +59,7 @@ export async function POST(request: Request) {
         ...(cfg.extraHeaders ?? {}),
       },
       body: JSON.stringify(payload),
-      signal: AbortSignal.timeout(30000),
+      signal: AbortSignal.timeout(timeoutMs),
     });
   } catch (err) {
     const msg = err instanceof Error ? err.message : "network error";

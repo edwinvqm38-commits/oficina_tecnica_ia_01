@@ -41,6 +41,10 @@ export type LLMResponse = {
   tokensUsed?: number;
 };
 
+function llmTimeoutMs(config: ModelConfig): number {
+  return config.maxTokens && config.maxTokens > 4096 ? 65_000 : 35_000;
+}
+
 // Tries server proxy first (Vercel env vars); falls back to direct call with localStorage key
 export async function sendChat(messages: ChatMessage[], config: ModelConfig): Promise<LLMResponse> {
   if (config.provider === "anthropic") return sendAnthropicChat(messages, config);
@@ -57,7 +61,7 @@ export async function sendChat(messages: ChatMessage[], config: ModelConfig): Pr
         model: config.model,
         maxTokens: config.maxTokens,
       }),
-      signal: AbortSignal.timeout(30000),
+      signal: AbortSignal.timeout(llmTimeoutMs(config)),
     });
     if (res.ok) {
       const data = await res.json();
@@ -118,7 +122,7 @@ async function sendOpenAICompatChat(
       ...extraHeaders,
     },
     body: JSON.stringify(payload),
-    signal: AbortSignal.timeout(30000),
+    signal: AbortSignal.timeout(llmTimeoutMs(config)),
   });
   if (!res.ok) {
     const errText = await res.text().catch(() => res.statusText);
@@ -149,7 +153,7 @@ async function sendAnthropicChat(messages: ChatMessage[], config: ModelConfig): 
       system: typeof systemMsg === "string" ? systemMsg : contentToPlainText(systemMsg),
       messages: userMessages.map((m) => ({ role: m.role, content: contentToPlainText(m.content) })),
     }),
-    signal: AbortSignal.timeout(30000),
+    signal: AbortSignal.timeout(llmTimeoutMs(config)),
   });
   if (!res.ok) throw new Error(`Anthropic error: ${res.statusText}`);
   const data = await res.json();
