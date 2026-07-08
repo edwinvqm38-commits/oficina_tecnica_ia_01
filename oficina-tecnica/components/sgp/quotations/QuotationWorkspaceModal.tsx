@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type MouseEvent as ReactMouseEvent, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState, type CSSProperties, type MouseEvent as ReactMouseEvent, type ReactNode } from "react";
 import { FieldLabelIcon, type IconName } from "@/components/sgp/ui/FieldLabelIcon";
 import { FieldLockButton } from "@/components/sgp/ui/FieldLockButton";
 import { DateTextInput } from "@/components/sgp/ui/DateTextInput";
@@ -850,10 +850,10 @@ export function QuotationWorkspaceModal({
     return true;
   }
 
-  const handleDocumentationPendingCountChange = useCallback((count: number) => {
+  function handleDocumentationPendingCountChange(count: number) {
     setDocumentationPendingCount(count);
     if (count > 0) setIsQuotationEditing(true);
-  }, []);
+  }
 
   function setEconomicDraftValue(rowType: string, field: "base" | "oferta", value: string) {
     setEconomicEditDrafts((prev) => ({
