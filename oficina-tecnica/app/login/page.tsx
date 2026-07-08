@@ -15,6 +15,26 @@ export default function LoginPage() {
   const [success, setSuccess] = useState("");
   const [loading, setLoading] = useState(false);
 
+  function friendlyAuthError(message: string): string {
+    const lower = message.toLowerCase();
+    if (lower.includes("supabase no configurado")) {
+      return "Supabase no está configurado en este despliegue. Revisa las variables NEXT_PUBLIC_SUPABASE_URL y NEXT_PUBLIC_SUPABASE_ANON_KEY en Vercel y vuelve a desplegar.";
+    }
+    if (lower.includes("invalid api key") || lower.includes("api key")) {
+      return "La anon key de Supabase configurada en Vercel no corresponde al proyecto o está mal copiada. Actualiza NEXT_PUBLIC_SUPABASE_ANON_KEY y redeploy.";
+    }
+    if (lower.includes("failed to fetch") || lower.includes("network")) {
+      return "No se pudo conectar con Supabase desde Vercel. Verifica NEXT_PUBLIC_SUPABASE_URL y que el proyecto Supabase esté activo.";
+    }
+    if (lower.includes("email not confirmed")) {
+      return "El correo todavía no está confirmado en Supabase Auth. Confirma el usuario o desactiva temporalmente la confirmación de email para esta fase.";
+    }
+    if (lower.includes("invalid login credentials")) {
+      return "Credenciales incorrectas. Verifica correo y contraseña.";
+    }
+    return `No se pudo iniciar sesión: ${message}`;
+  }
+
   // Redirect to "/" if already logged in
   useEffect(() => {
     supabase.auth.getSession().then(({ data }) => {
@@ -61,7 +81,7 @@ export default function LoginPage() {
 
     const { error: authError } = await supabase.auth.signInWithPassword({ email: email.trim(), password });
     if (authError) {
-      setError("Credenciales incorrectas. Verifica tu correo y contraseña.");
+      setError(friendlyAuthError(authError.message));
       setLoading(false);
     } else {
       router.replace("/");

@@ -1,12 +1,13 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState, type CSSProperties, type MouseEvent as ReactMouseEvent, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type MouseEvent as ReactMouseEvent, type ReactNode } from "react";
 import { FieldLabelIcon, type IconName } from "@/components/sgp/ui/FieldLabelIcon";
 import { FieldLockButton } from "@/components/sgp/ui/FieldLockButton";
 import { DateTextInput } from "@/components/sgp/ui/DateTextInput";
 import { QuotationCashflowDashboardView } from "@/components/sgp/quotations/QuotationCashflowDashboardView";
 import { QuotationCashflowDrilldownPanel } from "@/components/sgp/quotations/QuotationCashflowDrilldownPanel";
 import { QuotationMonthlyCashflowView } from "@/components/sgp/quotations/QuotationMonthlyCashflowView";
+import { QuotationDocumentationPanel, type QuotationDocumentationPanelHandle } from "@/components/sgp/quotations/QuotationDocumentationPanel";
 import { TechnicalProposalWorkspaceModal } from "@/components/sgp/quotations/TechnicalProposalWorkspaceModal";
 import { EmailThreadButton } from "@/components/sgp/EmailThreadButton";
 import type { Cotizacion, DetalleRequerimientoItem, Recurso, Requerimiento } from "@/lib/sgp/demoData";
@@ -31,9 +32,10 @@ type QuotationWorkspaceModalProps = {
   priorityOptions: Array<Cotizacion["prioridad"]>;
   autoEditOnOpen?: boolean;
   canEditQuotation?: boolean;
+  canUploadQuotationDocuments?: boolean;
   isSavingQuotation?: boolean;
   onClose: () => void;
-  onSave: (finalPatch?: Partial<Cotizacion>) => boolean | void | Promise<boolean | void>;
+  onSave: (finalPatch?: Partial<Cotizacion>) => Cotizacion | boolean | void | Promise<Cotizacion | boolean | void>;
   onDraftChange: (patch: Partial<Cotizacion>) => void;
   onEconomicRowChange: (
     tipo_recurso: string,
@@ -329,6 +331,7 @@ export function QuotationWorkspaceModal({
   priorityOptions,
   autoEditOnOpen = false,
   canEditQuotation = true,
+  canUploadQuotationDocuments = canEditQuotation,
   isSavingQuotation = false,
   onClose,
   onSave,
@@ -345,6 +348,7 @@ export function QuotationWorkspaceModal({
 }: QuotationWorkspaceModalProps) {
   const [isQuotationEditing, setIsQuotationEditing] = useState(false);
   const [isEconomicEditing, setIsEconomicEditing] = useState(false);
+  const [rightPanelMode, setRightPanelMode] = useState<"detail" | "documents">("detail");
   const [summaryViewMode, setSummaryViewMode] = useState<"economic" | "cashflow">("economic");
   const [cashflowViewMode, setCashflowViewMode] = useState<"summary" | "dashboard">("summary");
   const [cashflowTypeFilters, setCashflowTypeFilters] = useState<string[]>([]);
@@ -368,7 +372,9 @@ export function QuotationWorkspaceModal({
   const [montoDraft, setMontoDraft] = useState<string | null>(null);
   const [avanceDraft, setAvanceDraft] = useState<string | null>(null);
   const [technicalProposalOpen, setTechnicalProposalOpen] = useState(false);
+  const [documentationPendingCount, setDocumentationPendingCount] = useState(0);
   const leftWorkspaceRef = useRef<HTMLDivElement | null>(null);
+  const documentationPanelRef = useRef<QuotationDocumentationPanelHandle | null>(null);
   const rqBodyScrollRef = useRef<HTMLDivElement | null>(null);
   const cashflowFilterRef = useRef<HTMLDivElement | null>(null);
   const [leftWorkspaceHeight, setLeftWorkspaceHeight] = useState<number | null>(null);
@@ -728,9 +734,12 @@ export function QuotationWorkspaceModal({
 
   function toggleQuotationEdition() {
     if (isSavingQuotation) return;
-    if (!canEditQuotation) {
+    const hasPendingDocuments = documentationPanelRef.current?.hasPending() ?? false;
+    if (!canEditQuotation && !(canUploadQuotationDocuments && hasPendingDocuments)) {
       setPendingConfirm({
-        message: "No tienes permiso para editar esta cotización.",
+        message: canUploadQuotationDocuments
+          ? "Agrega documentos pendientes antes de guardar documentación."
+          : "No tienes permiso para editar esta cotización.",
         onAccept: () => undefined,
       });
       return;
@@ -764,7 +773,7 @@ export function QuotationWorkspaceModal({
             finalPatch,
           });
         }
-        const saved = await onSave(finalPatch);
+        const saved = await saveQuotationAndPendingDocuments(finalPatch);
         if (saved === false) return;
         setIsQuotationEditing(false);
         setIsEconomicEditing(false);
@@ -821,12 +830,30 @@ export function QuotationWorkspaceModal({
         const finalPatch = buildCommittedEconomicPatch();
         commitAllEconomicDrafts();
         onDraftChange(finalPatch);
-        const saved = await onSave(finalPatch);
+        const saved = await saveQuotationAndPendingDocuments(finalPatch);
         if (saved === false) return;
         setIsEconomicEditing(false);
       },
     });
   }
+
+  async function saveQuotationAndPendingDocuments(finalPatch: Partial<Cotizacion> = {}): Promise<boolean> {
+    if (!draft) return false;
+    const saved = await onSave(finalPatch);
+    if (saved === false) return false;
+    const savedQuotation = saved && typeof saved === "object" ? (saved as Cotizacion) : { ...draft, ...finalPatch };
+    if (documentationPanelRef.current?.hasPending()) {
+      const uploaded = await documentationPanelRef.current.uploadPending(savedQuotation);
+      if (!uploaded) return false;
+      setDocumentationPendingCount(0);
+    }
+    return true;
+  }
+
+  const handleDocumentationPendingCountChange = useCallback((count: number) => {
+    setDocumentationPendingCount(count);
+    if (count > 0) setIsQuotationEditing(true);
+  }, []);
 
   function setEconomicDraftValue(rowType: string, field: "base" | "oferta", value: string) {
     setEconomicEditDrafts((prev) => ({
@@ -1089,6 +1116,22 @@ export function QuotationWorkspaceModal({
               <div className="flex min-h-6 items-center justify-between gap-2">
                 <FieldLabelIcon icon="file-text" label="Datos de la cotización" className="text-[11px] font-medium" />
                 <div className="flex items-center gap-1.5">
+                  {viewGroupPermissions?.quotation_documents !== false ? (
+                    <button
+                      type="button"
+                      onClick={() => setRightPanelMode((mode) => (mode === "documents" ? "detail" : "documents"))}
+                      className={`${actionButtonClassName()} ${
+                        rightPanelMode === "documents" ? "border-sky-200 bg-sky-50 text-sky-700" : ""
+                      }`}
+                      title="Abrir documentación de la cotización"
+                    >
+                      <FieldLabelIcon
+                        icon="files"
+                        label={`Documentación${documentationPendingCount > 0 ? ` (${documentationPendingCount})` : ""}`}
+                        className="text-[11px] font-medium"
+                      />
+                    </button>
+                  ) : null}
                   <EmailThreadButton
                     kind="quotation"
                     entityCode={draft.codigo}
@@ -2039,10 +2082,20 @@ export function QuotationWorkspaceModal({
               <div className="flex min-h-6 items-center justify-between gap-2">
                 <FieldLabelIcon
                   icon="clipboard-list"
-                  label={summaryViewMode === "economic" ? "Requerimientos asociados" : "Detalle mensual"}
+                  label={
+                    rightPanelMode === "documents"
+                      ? "Documentación"
+                      : summaryViewMode === "economic"
+                        ? "Requerimientos asociados"
+                        : "Detalle mensual"
+                  }
                   className="text-[11px] font-medium"
                 />
-                {summaryViewMode === "economic" ? (
+                {rightPanelMode === "documents" ? (
+                  <div className="rounded border border-stone-200 bg-stone-50 px-2 py-1 text-[10px] text-stone-500">
+                    {documentationPendingCount > 0 ? `${documentationPendingCount} pendiente(s) por guardar` : "Drive + auditoría Supabase"}
+                  </div>
+                ) : summaryViewMode === "economic" ? (
                   economicTypeDrill ? (
                     <div className="flex items-center gap-1.5">
                       <div className="rounded border border-stone-200 bg-stone-50 px-2 py-1 text-[10px] text-stone-600">
@@ -2073,7 +2126,22 @@ export function QuotationWorkspaceModal({
                   {requirementCreationError}
                 </p>
               ) : null}
-              {!canViewQuotationRelatedRequirements ? (
+              {rightPanelMode === "documents" ? (
+                viewGroupPermissions?.quotation_documents === false ? (
+                  <div className="mt-1 flex min-h-0 flex-1 items-center justify-center rounded border border-border bg-white px-3 py-8 text-center text-[11px] text-stone-500">
+                    Documentación oculta por permisos.
+                  </div>
+                ) : (
+                  <QuotationDocumentationPanel
+                    key={draft.id}
+                    ref={documentationPanelRef}
+                    quotation={draft}
+                    requerimientos={requerimientos}
+                    enabled={canUploadQuotationDocuments && canViewQuotationActions}
+                    onPendingCountChange={handleDocumentationPendingCountChange}
+                  />
+                )
+              ) : !canViewQuotationRelatedRequirements ? (
                 <div className="mt-1 flex min-h-0 flex-1 items-center justify-center rounded border border-border bg-white px-3 py-8 text-center text-[11px] text-stone-500">
                   Requerimientos asociados ocultos por permisos.
                 </div>

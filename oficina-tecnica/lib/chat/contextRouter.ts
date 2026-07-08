@@ -29,6 +29,7 @@ import {
   buscarProyectoPorCodigo,
   obtenerResumenProyecto,
   contarRegistros,
+  buscarDocumentosCotizacion,
   DEFAULT_CONTEXT_LIMIT,
   type ContextToolResult,
   type RecursosToolFilters,
@@ -47,7 +48,8 @@ export type ContextToolName =
   | "buscarRecursos"
   | "buscarProyectoPorCodigo"
   | "obtenerResumenProyecto"
-  | "contarRegistros";
+  | "contarRegistros"
+  | "buscarDocumentosCotizacion";
 
 export interface ContextToolCall {
   tool: ContextToolName;
@@ -73,6 +75,7 @@ const RESOURCE_COUNT_NOUN_RE = /\brecursos?\b|\bcat[aá]logo\b/i;
 const TABLE_SUMMARY_TRIGGER_RE = /\b(dashboard|tablero|tabla\s+resumen|tabla|resumen|reporte|informe|gr[aá]fico|grafico|mu[eé]strame|mostrar|genera|generar|prepara|preparar)\b/i;
 const COT_AMOUNT_QUESTION_RE = /\b(cu[aá]nto(?:s)?|monto|importe|valor|ofertad[ao]|ofertamos|oferta)\b/i;
 const COT_DETAIL_QUESTION_RE = /\b(detalle|datos|ficha|desglose|informaci[oó]n|resumen)\b/i;
+const DOCUMENTS_RE = /\b(documentos?|documentaci[oó]n|archivos?|adjuntos?|drive|sustentos?|anexos?)\b/i;
 
 type CountIntent = {
   table: CountableContextTable;
@@ -226,7 +229,8 @@ export function detectContextIntent(cleanText: string): ContextRoutingDecision {
 
   // COT por código → resumen / propuesta / cotización según intención.
   for (const code of cotCodes) {
-    if (wantsResumen) calls.push({ tool: "obtenerResumenProyecto", args: { code } });
+    if (DOCUMENTS_RE.test(t)) calls.push({ tool: "buscarDocumentosCotizacion", args: { code } });
+    else if (wantsResumen) calls.push({ tool: "obtenerResumenProyecto", args: { code } });
     else if (wantsProposal) calls.push({ tool: "buscarPropuestaTecnicaPorCodigo", args: { code } });
     else calls.push({ tool: "buscarCotizacionPorCodigo", args: { code } });
   }
@@ -321,6 +325,8 @@ async function executeTool(call: ContextToolCall): Promise<ContextToolResult> {
       return obtenerResumenProyecto(String(call.args.code));
     case "contarRegistros":
       return contarRegistros(call.args.table as CountableContextTable, call.args.filters as CountToolFilters | undefined);
+    case "buscarDocumentosCotizacion":
+      return buscarDocumentosCotizacion(String(call.args.code), call.args.limit as number | undefined);
   }
 }
 

@@ -90,6 +90,22 @@ export interface RecursosToolResult extends ContextToolResultBase {
   source: "recursos";
   records: RecursoLite[];
 }
+export interface QuotationDocumentLite {
+  quotation_code: string;
+  requirement_code: string | null;
+  folder_key: string;
+  folder_name: string;
+  original_name: string;
+  mime_type: string | null;
+  file_size: number;
+  drive_file_url: string;
+  uploaded_at: string;
+  uploaded_by_email: string | null;
+}
+export interface QuotationDocumentsToolResult extends ContextToolResultBase {
+  source: "quotation_documents";
+  records: QuotationDocumentLite[];
+}
 export type CountableContextTable = "cotizaciones" | "requerimientos" | "recursos";
 export interface CountToolFilters {
   estado?: string;
@@ -119,6 +135,7 @@ export type ContextToolResult =
   | RequerimientoItemsToolResult
   | TechnicalProposalsToolResult
   | RecursosToolResult
+  | QuotationDocumentsToolResult
   | CountToolResult
   | ProyectoToolResult;
 
@@ -385,6 +402,43 @@ export async function buscarRecursos(
   } catch (err) {
     devLog("buscarRecursos error", err);
     return { source: "recursos", status: "error", query, records: [], total: 0, message: safeErrorMessage(err) };
+  }
+}
+
+// ── Documentos de cotización en Drive ───────────────────────────────────────
+
+export async function buscarDocumentosCotizacion(
+  quotationCode: string,
+  limit = DEFAULT_CONTEXT_LIMIT,
+): Promise<QuotationDocumentsToolResult> {
+  const query: Record<string, unknown> = { quotation_code: quotationCode, limit: clampLimit(limit) };
+  try {
+    const { data, error, count } = await supabase
+      .from("quotation_documents")
+      .select(
+        "quotation_code, requirement_code, folder_key, folder_name, original_name, mime_type, file_size, drive_file_url, uploaded_at, uploaded_by_email",
+        { count: "exact" },
+      )
+      .eq("quotation_code", quotationCode)
+      .order("uploaded_at", { ascending: false })
+      .limit(clampLimit(limit));
+
+    if (error) {
+      return { source: "quotation_documents", status: "error", query, records: [], total: 0, message: safeErrorMessage(error) };
+    }
+    if (!data || data.length === 0) {
+      return { source: "quotation_documents", status: "empty", query, records: [], total: 0 };
+    }
+    return {
+      source: "quotation_documents",
+      status: "success",
+      query,
+      records: data as QuotationDocumentLite[],
+      total: count ?? data.length,
+    };
+  } catch (err) {
+    devLog("buscarDocumentosCotizacion error", err);
+    return { source: "quotation_documents", status: "error", query, records: [], total: 0, message: safeErrorMessage(err) };
   }
 }
 

@@ -1061,10 +1061,15 @@ export default function CotizacionesPage() {
   const isSupabaseReadOnly = dataSource === "supabase";
   const canCreateQuotationByPermission = modulePermissions?.can_create === true;
   const canEditQuotationByPermission = modulePermissions?.can_edit === true || isElevatedQuotationUser;
+  const canUploadQuotationDocumentsByPermission =
+    modulePermissions?.can_upload_files === true || canEditQuotationByPermission || canCreateQuotationByPermission;
   const canCreateSupabaseQuotation =
     dataSource === "supabase" && permissionsReady && !isDataLoading && canCreateQuotationByPermission;
   const canEditQuotationInCurrentSource =
     dataSource === "demo" || (dataSource === "supabase" && permissionsReady && !isDataLoading && canEditQuotationByPermission);
+  const canUploadQuotationDocumentsInCurrentSource =
+    dataSource === "demo" ||
+    (dataSource === "supabase" && permissionsReady && !isDataLoading && canUploadQuotationDocumentsByPermission);
   const canCreateQuotationInCurrentSource = dataSource === "demo" || canCreateSupabaseQuotation;
   const canSaveCurrentQuotation = editingId ? canEditQuotationInCurrentSource : canCreateQuotationInCurrentSource;
   const canViewQuotationTable = effectiveCanView && canViewQuotationMainTable;
@@ -1189,7 +1194,7 @@ export default function CotizacionesPage() {
     persistWorkspaceState({ quotationCode: null, rqCode: null });
   }
 
-  async function saveDraft(finalPatch: Partial<Cotizacion> = {}): Promise<boolean> {
+  async function saveDraft(finalPatch: Partial<Cotizacion> = {}): Promise<Cotizacion | false> {
     if (!draft) return false;
     if (isQuotationSaving) return false;
     const normalized = normalizeCotizacionDraft({ ...draft, ...finalPatch });
@@ -1210,6 +1215,10 @@ export default function CotizacionesPage() {
 
       if (dataSource === "supabase" && editingId) {
         if (!canEditQuotationInCurrentSource) {
+          if (canUploadQuotationDocumentsInCurrentSource && Object.keys(finalPatch).length === 0) {
+            setWarning("Cotización sin cambios. Se guardará únicamente la documentación pendiente.");
+            return normalized;
+          }
           setWarning("No tienes permiso para editar esta cotización.");
           return false;
         }
@@ -1248,7 +1257,7 @@ export default function CotizacionesPage() {
               codigo: updated.codigo,
             });
           }
-          return true;
+          return updated;
         } catch (error) {
           const errorSummary =
             error instanceof Error
@@ -1308,7 +1317,7 @@ export default function CotizacionesPage() {
           setDraft(created);
           persistWorkspaceState({ page: 1, quotationCode: created.codigo, rqCode: null });
           setWarning(`Cotización ${created.codigo} creada en Supabase como Borrador.`);
-          return true;
+          return created;
         } catch (error) {
           if (error instanceof CreateCotizacionError) {
             setWarning(error.message);
@@ -1331,7 +1340,7 @@ export default function CotizacionesPage() {
         setWarning("Cotización guardada correctamente en datos demo/locales. No se actualizó Supabase.");
       }
       setDraft(normalized);
-      return true;
+      return normalized;
     } finally {
       setIsQuotationSaving(false);
     }
@@ -1909,6 +1918,7 @@ export default function CotizacionesPage() {
         priorityOptions={["Alta", "Media", "Baja"]}
         autoEditOnOpen={!editingId}
         canEditQuotation={canSaveCurrentQuotation}
+        canUploadQuotationDocuments={canUploadQuotationDocumentsInCurrentSource}
         isSavingQuotation={isQuotationSaving}
         onClose={closeModal}
         onSave={saveDraft}

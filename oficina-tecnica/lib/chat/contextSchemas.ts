@@ -59,6 +59,7 @@ export const CONTEXT_SOURCES: Record<string, ContextSource> = {
     relations: [
       { source: "requerimientos", via: "requerimientos.cotizacion_codigo", description: "Una cotización tiene N requerimientos." },
       { source: "technical_proposals", via: "technical_proposals.cotizacion_codigo", description: "Una cotización puede tener propuestas técnicas." },
+      { source: "quotation_documents", via: "quotation_documents.quotation_code", description: "Una cotización tiene N documentos auditados en Drive." },
     ],
     status: "implemented",
   },
@@ -126,6 +127,24 @@ export const CONTEXT_SOURCES: Record<string, ContextSource> = {
     searchFields: ["codigo_recurso", "descripcion", "codigo_eka", "codigo_fabricante"],
     relations: [
       { source: "requerimiento_items", via: "requerimiento_items.recurso_id", description: "Un recurso puede usarse en ítems de RQ." },
+    ],
+    status: "implemented",
+  },
+
+  quotation_documents: {
+    key: "quotation_documents",
+    table: "quotation_documents",
+    label: "Documentos de cotización",
+    description: "Archivos de cotizaciones y requerimientos guardados en Google Drive con auditoría en Supabase.",
+    queryableFields: ["quotation_code", "requirement_code", "folder_key", "original_name"],
+    aiVisibleFields: [
+      "quotation_code", "requirement_code", "folder_name", "original_name",
+      "mime_type", "file_size", "drive_file_url", "uploaded_at", "uploaded_by_email",
+    ],
+    searchFields: ["quotation_code", "requirement_code", "original_name", "folder_name"],
+    relations: [
+      { source: "cotizaciones", via: "quotation_documents.quotation_code", description: "Cada documento pertenece a una cotización." },
+      { source: "requerimientos", via: "quotation_documents.requirement_code", description: "Un documento puede estar asociado a un RQ." },
     ],
     status: "implemented",
   },

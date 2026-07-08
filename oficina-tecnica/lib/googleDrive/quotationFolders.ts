@@ -5,12 +5,7 @@ import {
   getOrCreateDriveFolder,
   safeDriveName,
 } from "@/lib/googleDrive/driveClient";
-
-export type QuotationFolderNode = {
-  key: string;
-  name: string;
-  children: QuotationFolderNode[];
-};
+import { QUOTATION_FOLDER_STRUCTURE, type QuotationFolderNode } from "@/lib/googleDrive/quotationFolderStructure";
 
 export type QuotationFolderStructureResult = {
   quotationCode: string;
@@ -25,30 +20,6 @@ export type QuotationFolderStructureResult = {
     status: "created" | "reused";
   }>;
 };
-
-export const QUOTATION_FOLDER_STRUCTURE: QuotationFolderNode[] = [
-  { key: "control", name: "00_CONTROL", children: [] },
-  { key: "clientDocuments", name: "01_DOCUMENTOS_CLIENTE", children: [] },
-  {
-    key: "proposal",
-    name: "02_PROPUESTA",
-    children: [
-      { key: "proposalTechnicalScope", name: "01_Alcance técnico", children: [] },
-      { key: "proposalEconomicScope", name: "02_Alcance económico", children: [] },
-      { key: "proposalSchedule", name: "03_Cronograma", children: [] },
-      { key: "proposalOrganizationChart", name: "04_Organigrama", children: [] },
-      { key: "proposalWorkPlan", name: "05_Plan de trabajo", children: [] },
-      { key: "proposalExperienceCv", name: "06_Experiencia CV Sustentos", children: [] },
-      { key: "proposalAnnexes", name: "07_Anexos", children: [] },
-    ],
-  },
-  { key: "requirements", name: "03_REQUERIMIENTOS", children: [] },
-  { key: "supplierQuotes", name: "04_COTIZACIONES_PROVEEDORES", children: [] },
-  { key: "costAnalysis", name: "05_ANALISIS_Y_COSTOS", children: [] },
-  { key: "managementReview", name: "06_REVISION_GERENCIA", children: [] },
-  { key: "clientDelivery", name: "07_ENVIO_CLIENTE", children: [] },
-  { key: "archive", name: "99_ARCHIVO", children: [] },
-];
 
 export const QUOTATION_DRIVE_STRUCTURE_VERSION = "cotizacion_drive_v2";
 

@@ -16,6 +16,7 @@ import type {
   ContextToolResult,
   TechnicalProposalLite,
   RecursoLite,
+  QuotationDocumentLite,
 } from "@/lib/chat/contextTools";
 import { CONTEXT_GUARDRAIL_RULES, phraseForStatus } from "@/lib/chat/contextGuardrails";
 
@@ -29,6 +30,7 @@ const SOURCE_LABELS: Record<ContextToolResult["source"], string> = {
   requerimiento_items: "Supabase.requerimiento_items",
   technical_proposals: "Supabase.technical_proposals",
   recursos: "Supabase.recursos",
+  quotation_documents: "Supabase.quotation_documents",
   conteo: "Supabase.conteo",
   proyecto: "Supabase (cascada por código)",
 };
@@ -108,6 +110,16 @@ function renderRecurso(r: RecursoLite): string {
   return bits.join(" · ");
 }
 
+function renderQuotationDocument(d: QuotationDocumentLite): string {
+  const size = d.file_size > 0 ? `${Math.round(d.file_size / 1024)} KB` : "—";
+  const bits = [`**${d.original_name}**`, `Carpeta: ${d.folder_name}`, `Link: ${d.drive_file_url}`];
+  if (d.requirement_code) bits.push(`RQ: ${d.requirement_code}`);
+  if (d.mime_type) bits.push(`Tipo: ${d.mime_type}`);
+  bits.push(`Tamaño: ${size}`);
+  if (d.uploaded_at) bits.push(`Subido: ${d.uploaded_at}`);
+  return bits.join(" · ");
+}
+
 // Construye el cuerpo "Registros" de una sección según la fuente.
 function renderRecords(result: ContextToolResult): string {
   switch (result.source) {
@@ -121,6 +133,8 @@ function renderRecords(result: ContextToolResult): string {
       return result.records.map((p, i) => `${i + 1}. ${renderProposal(p)}`).join("\n");
     case "recursos":
       return result.records.map((r, i) => `${i + 1}. ${renderRecurso(r)}`).join("\n");
+    case "quotation_documents":
+      return result.records.map((d, i) => `${i + 1}. ${renderQuotationDocument(d)}`).join("\n");
     case "conteo":
       return `Conteo real: **${result.total} ${result.label}**.`;
     case "proyecto":

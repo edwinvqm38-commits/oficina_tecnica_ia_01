@@ -67,25 +67,25 @@ export function QuotationMonthlyCashflowView({
   onMonthDoubleClick,
 }: QuotationMonthlyCashflowViewProps) {
   const stickyTypeClass = "sticky left-0 z-20 bg-white";
-  const stickyIndicatorClass = "sticky left-[220px] z-20 bg-white";
-  const stickyTotalClass = "sticky left-[310px] z-20 bg-white";
+  const stickyIndicatorClass = "sticky left-[200px] z-20 bg-white";
+  const stickyTotalClass = "sticky left-[280px] z-20 bg-white";
   const stickyTypeHeaderClass = "sticky left-0 z-30 bg-stone-50";
-  const stickyIndicatorHeaderClass = "sticky left-[220px] z-30 bg-stone-50";
-  const stickyTotalHeaderClass = "sticky left-[310px] z-30 bg-stone-50";
+  const stickyIndicatorHeaderClass = "sticky left-[200px] z-30 bg-stone-50";
+  const stickyTotalHeaderClass = "sticky left-[280px] z-30 bg-stone-50";
   const stickyTypeFooterClass = "sticky left-0 z-30 bg-stone-50";
-  const stickyIndicatorFooterClass = "sticky left-[220px] z-30 bg-stone-50";
-  const stickyTotalFooterClass = "sticky left-[310px] z-30 bg-stone-50";
+  const stickyIndicatorFooterClass = "sticky left-[200px] z-30 bg-stone-50";
+  const stickyTotalFooterClass = "sticky left-[280px] z-30 bg-stone-50";
 
   return (
-    <div className="flex min-h-0 flex-col">
-      <div className="app-table-scroll min-h-0 overflow-auto border-t border-stone-200">
-        <table className="w-max min-w-full table-fixed border-collapse text-[11px] [&_td]:border-r [&_td]:border-stone-200/60 [&_td:last-child]:border-r-0 [&_th]:border-r [&_th]:border-stone-200/70 [&_th:last-child]:border-r-0">
+    <div className="flex min-h-0 flex-1 flex-col">
+      <div className="app-table-scroll max-h-[52vh] min-h-0 flex-1 overflow-auto border-t border-stone-200 xl:max-h-[calc(100dvh-360px)]">
+        <table className="w-max min-w-full table-fixed border-collapse text-[10px] [&_td]:border-r [&_td]:border-stone-200/60 [&_td:last-child]:border-r-0 [&_th]:border-r [&_th]:border-stone-200/70 [&_th:last-child]:border-r-0">
           <colgroup>
-            <col style={{ width: "220px" }} />
-            <col style={{ width: "90px" }} />
-            <col style={{ width: "156px" }} />
+            <col style={{ width: "200px" }} />
+            <col style={{ width: "80px" }} />
+            <col style={{ width: "138px" }} />
             {data.months.map((month) => (
-              <col key={month.key} style={{ width: "148px" }} />
+              <col key={month.key} style={{ width: "132px" }} />
             ))}
           </colgroup>
           <thead className="sticky top-0 z-10 bg-stone-50 text-muted">
