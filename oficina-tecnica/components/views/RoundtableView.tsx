@@ -365,6 +365,7 @@ export function RoundtableView() {
     appendChat,
     chatFor,
     notify,
+    remoteConfigured,
     persistenceIssue,
     reportPersistenceIssue,
     clearPersistenceIssue,
@@ -455,6 +456,7 @@ export function RoundtableView() {
   }, [thread, session?.email, currentUserSlug, notify]);
 
   function persistConversation(...args: Parameters<typeof saveConversation>) {
+    if (!remoteConfigured) return;
     void saveConversation(...args).then((result) => {
       if (result.ok) clearPersistenceIssue("conversation-write");
       else reportPersistenceIssue(result.issue);
@@ -462,6 +464,7 @@ export function RoundtableView() {
   }
 
   async function readConversationHistory(...args: Parameters<typeof loadConversationHistory>) {
+    if (!remoteConfigured) return [];
     const result = await loadConversationHistory(...args);
     if (result.ok) {
       clearPersistenceIssue("conversation-read");

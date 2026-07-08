@@ -10,9 +10,22 @@ import {
   useState,
 } from "react";
 import { APPROVALS, SKILLS } from "../data";
-import type { PersistenceIssue, PersistenceOperation } from "../supabase/persistenceErrors";
+import {
+  persistenceAuthorizationIssue,
+  type PersistenceIssue,
+  type PersistenceOperation,
+} from "../supabase/persistenceErrors";
+import { getSupabaseClient } from "../supabase/client";
 import type { ApprovalStatus, ChatMessage, KnowledgeNote, Project, Skill, SkillStatus } from "../types";
-import { isRemoteConfigured, loadLocal, loadRemote, saveLocal, saveRemote, subscribeRemote } from "./persistence";
+import {
+  cancelPendingRemoteSave,
+  isRemoteConfigured,
+  loadLocal,
+  loadRemote,
+  saveLocal,
+  saveRemote,
+  subscribeRemote,
+} from "./persistence";
 import {
   AppState,
   mergeChats,
@@ -32,6 +45,12 @@ function uid(prefix = "id") {
 // chats and Mesa de trabajo alike, so persisted state (localStorage and
 // `workspace_state`) and rendered history don't grow unbounded over time.
 const MAX_THREAD_MESSAGES = 200;
+const ADMIN_EMAIL = "edwin.qm@outlook.com";
+
+type RemoteAccess = {
+  status: "checking" | "enabled" | "disabled";
+  issue: PersistenceIssue | null;
+};
 
 type StoreActions = {
   /** True once persisted state (local or remote) has finished loading. */
@@ -99,8 +118,15 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
   const [state, setState] = useState<AppState>(() => seedState());
   const [ready, setReady] = useState(false);
   const [persistenceIssue, setPersistenceIssue] = useState<PersistenceIssue | null>(null);
-  const remoteConfigured = useMemo(() => isRemoteConfigured(), []);
+  const remoteAvailable = useMemo(() => isRemoteConfigured(), []);
+  const [remoteAccess, setRemoteAccess] = useState<RemoteAccess>(() => ({
+    status: remoteAvailable ? "checking" : "disabled",
+    issue: null,
+  }));
+  const remoteConfigured = remoteAvailable && remoteAccess.status === "enabled";
   const hydrated = useRef(false);
+  const remoteHydrated = useRef(false);
+  const accessRequestId = useRef(0);
 
   const reportPersistenceIssue = useCallback((issue: PersistenceIssue) => {
     setPersistenceIssue(issue);
@@ -113,6 +139,77 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
     });
   }, []);
 
+  // The store is mounted at the root layout, including login and pending
+  // screens. Keep remote persistence off until Supabase has a session and the
+  // matching profile is confirmed as approved, matching useAccessGate.
+  useEffect(() => {
+    if (!remoteAvailable) {
+      return;
+    }
+
+    const supabase = getSupabaseClient();
+    if (!supabase) {
+      return;
+    }
+    const client = supabase;
+
+    let cancelled = false;
+
+    async function resolveAccess(user: { id: string; email?: string | null } | null | undefined) {
+      if (cancelled) return;
+
+      const requestId = ++accessRequestId.current;
+      const isCurrentRequest = () => !cancelled && accessRequestId.current === requestId;
+
+      if (!user) {
+        remoteHydrated.current = false;
+        cancelPendingRemoteSave();
+        if (isCurrentRequest()) setRemoteAccess({ status: "disabled", issue: null });
+        return;
+      }
+
+      const email = (user.email ?? "").trim().toLowerCase();
+      if (email === ADMIN_EMAIL) {
+        if (isCurrentRequest()) setRemoteAccess({ status: "enabled", issue: null });
+        return;
+      }
+
+      if (isCurrentRequest()) setRemoteAccess({ status: "checking", issue: null });
+      const { data, error } = await client
+        .from("user_profiles")
+        .select("status")
+        .eq("id", user.id)
+        .maybeSingle();
+
+      if (!isCurrentRequest()) return;
+
+      if (!error && data?.status === "approved") {
+        setRemoteAccess({ status: "enabled", issue: null });
+        return;
+      }
+
+      remoteHydrated.current = false;
+      cancelPendingRemoteSave();
+      setRemoteAccess({ status: "disabled", issue: persistenceAuthorizationIssue() });
+    }
+
+    client.auth.getSession().then(({ data }) => {
+      if (cancelled) return;
+      void resolveAccess(data.session?.user);
+    });
+
+    const { data: listener } = client.auth.onAuthStateChange((_event, session) => {
+      if (cancelled) return;
+      void resolveAccess(session?.user);
+    });
+
+    return () => {
+      cancelled = true;
+      accessRequestId.current += 1;
+      listener.subscription.unsubscribe();
+    };
+  }, [remoteAvailable]);
+
   // Hydrate: prefer remote (if configured), fall back to local cache. The
   // remote `workspace_state` row only ever carries the shared `roundtable`
   // thread (see pickSharedChats) — private "Chat privado" threads and
@@ -124,27 +221,34 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
     (async () => {
       const local = loadLocal();
       if (!cancelled) setState(local);
+      hydrated.current = true;
+      if (!cancelled) setReady(true);
+
       if (remoteConfigured) {
+        remoteHydrated.current = false;
         const result = await loadRemote();
         if (!cancelled && result.ok) {
           clearPersistenceIssue("workspace-read");
+          clearPersistenceIssue("workspace-auth");
           const remoteState = result.data;
           if (remoteState) {
             setState((prev) => ({ ...remoteState, chats: mergeChats(prev.chats, remoteState.chats) }));
           }
+          remoteHydrated.current = true;
         } else if (!cancelled && !result.ok) {
           reportPersistenceIssue(result.issue);
+          remoteHydrated.current = true;
         }
-      }
-      if (!cancelled) {
-        hydrated.current = true;
-        setReady(true);
+      } else if (remoteAccess.issue) {
+        reportPersistenceIssue(remoteAccess.issue);
+      } else {
+        clearPersistenceIssue("workspace-auth");
       }
     })();
     return () => {
       cancelled = true;
     };
-  }, [clearPersistenceIssue, remoteConfigured, reportPersistenceIssue]);
+  }, [clearPersistenceIssue, remoteAccess.issue, remoteConfigured, reportPersistenceIssue]);
 
   // Persist on every change (after initial hydration, so we don't overwrite
   // the saved state with the seed during the first render).
@@ -154,7 +258,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
     // When there's no shared backend, appendChat already marks "gg" messages
     // as "sent" immediately (nothing to wait on), so there's nothing to
     // reconcile here.
-    if (remoteConfigured) {
+    if (remoteConfigured && remoteHydrated.current) {
       saveRemote(state, (result) => {
         if (result.ok) clearPersistenceIssue("workspace-write");
         else reportPersistenceIssue(result.issue);
@@ -163,6 +267,8 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
           return chats === s.chats ? s : { ...s, chats };
         });
       });
+    } else if (!remoteConfigured) {
+      cancelPendingRemoteSave();
     }
   }, [clearPersistenceIssue, reportPersistenceIssue, state, remoteConfigured]);
 

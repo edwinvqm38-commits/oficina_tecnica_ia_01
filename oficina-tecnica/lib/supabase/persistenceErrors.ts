@@ -2,11 +2,12 @@ export type PersistenceOperation =
   | "workspace-read"
   | "workspace-write"
   | "workspace-realtime"
+  | "workspace-auth"
   | "conversation-read"
   | "conversation-write"
   | "memory-write";
 
-export type PersistenceErrorCategory = "permission" | "network" | "unavailable" | "unknown";
+export type PersistenceErrorCategory = "authorization" | "permission" | "network" | "unavailable" | "unknown";
 
 export type PersistenceIssue = {
   operation: PersistenceOperation;
@@ -22,6 +23,7 @@ const USER_MESSAGES: Record<PersistenceOperation, string> = {
   "workspace-read": "No se pudo recuperar la información compartida. Puedes continuar con la copia guardada en este dispositivo.",
   "workspace-write": "No se pudo sincronizar el espacio compartido. Tus cambios siguen guardados en este dispositivo.",
   "workspace-realtime": "La actualización en tiempo real está temporalmente interrumpida. La aplicación seguirá intentando recuperar los cambios.",
+  "workspace-auth": "La sincronización compartida está pausada hasta confirmar que tu acceso está aprobado.",
   "conversation-read": "No se pudo recuperar el historial guardado. Puedes continuar con la conversación actual.",
   "conversation-write": "La conversación sigue visible en este dispositivo, pero no pudo guardarse en el historial compartido.",
   "memory-write": "No se pudo guardar la memoria compartida. El contenido no se marcó como persistido.",
@@ -104,4 +106,12 @@ export function persistenceFailure<T>(
   };
   logPersistenceIssue(issue);
   return { ok: false, issue };
+}
+
+export function persistenceAuthorizationIssue(): PersistenceIssue {
+  return {
+    operation: "workspace-auth",
+    category: "authorization",
+    userMessage: USER_MESSAGES["workspace-auth"],
+  };
 }

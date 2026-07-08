@@ -61,6 +61,12 @@ export async function loadRemote(): Promise<PersistenceResult<AppState | null>> 
 
 let pendingSync: ReturnType<typeof setTimeout> | null = null;
 
+export function cancelPendingRemoteSave() {
+  if (!pendingSync) return;
+  clearTimeout(pendingSync);
+  pendingSync = null;
+}
+
 /**
  * Persists state to the shared `workspace_state` row. Before upserting,
  * `chats` is reduced to only the shared threads (private "Chat privado"
@@ -81,6 +87,7 @@ export function saveRemote(
   if (pendingSync) clearTimeout(pendingSync);
   // Debounce writes so rapid local interactions don't flood the database.
   pendingSync = setTimeout(async () => {
+    pendingSync = null;
     const syncable: AppState = {
       ...state,
       chats: pickSharedChats(state.chats),

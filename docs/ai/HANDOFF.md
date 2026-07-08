@@ -21,11 +21,24 @@ funcional del cliente para tolerar un futuro cierre seguro de RLS: captura de
 errores Supabase, avisos no técnicos al usuario y continuidad local/mock cuando
 fallan lecturas, escrituras o Realtime.
 
+En la rama `security/auth-gated-store-hydration` se agregó un gate mínimo de
+autorización para que `workspace_state`, la sincronización remota y el historial
+persistente de Chat/Mesa no se activen hasta confirmar sesión y perfil aprobado.
+La auditoría posterior detectó CR-1: una resolución obsoleta de `resolveAccess`
+podía habilitar remoto después de un cambio de sesión. Se corrigió con un
+`requestId` vigente en `StoreProvider`.
+
+En la rama `security/rls-policies-hardening` se diagnosticó que RLS está
+parcialmente cerrado: `workspace_state` y parte de `agent_conversations` siguen
+abiertos a cualquier `authenticated`, y `agent_memories` tiene lectura amplia.
+Se creó una migración local propuesta, no ejecutada, para exigir
+`user_profiles.status = 'approved'` en esas tablas.
+
 ## Último estado
 
-- Rama: `security/supabase-client-rls-readiness`.
-- HEAD base antes de la preparación funcional:
-  `83b2971 docs: address AI memory RLS audit findings`.
+- Rama: `security/auth-gated-store-hydration`.
+- HEAD base antes del gate de hidratación:
+  `9b52e2f fix: surface Supabase persistence errors in UI`.
 - Base funcional conocida: `e08fa6b`.
 - La rama parte de la capa documental publicada en
   `chore/ai-context-governance`.
@@ -73,17 +86,45 @@ fallan lecturas, escrituras o Realtime.
   error o falla la red.
 - `ChatView` y `RoundtableView` muestran un aviso no técnico si falla la carga
   o guardado de historial/persistencia, manteniendo el flujo local.
+- `StoreProvider` se monta en `app/layout.tsx`, antes de `AppShell`; por eso la
+  persistencia remota ahora valida sesión y `user_profiles.status ===
+  "approved"` antes de leer/escribir `workspace_state`.
+- Mientras no exista sesión, el perfil esté cargando o el usuario esté pendiente,
+  rechazado, bloqueado o deshabilitado, el store se queda en modo local y cancela
+  guardados remotos pendientes.
+- Chat y Mesa saltan lectura/escritura en `agent_conversations` cuando el gate
+  remoto no está habilitado.
+- CR-1 corregido: `resolveAccess` marca cada invocación con un id monotónico y,
+  después de cualquier `await`, descarta la respuesta si ya existe una invocación
+  más reciente o cambió la sesión.
+- Limitación conocida: los guardados remotos ya en vuelo no se abortan
+  completamente desde el cliente; la garantía definitiva debe cerrarse después
+  con RLS/policies correctas.
+- En la fase de gate cliente no se tocó SQL, RLS, policies, grants, Supabase
+  remoto, SISTEMA V2 / SGP-LITE; tampoco se hizo commit ni push.
+- Nueva migración local propuesta:
+  `oficina-tecnica/supabase/sql/037_ai_memory_rls_approved_users.sql`.
+- La migración propone helpers `public.is_approved_user(uuid)` y
+  `public.has_approved_role(text[])` como `SECURITY DEFINER` para evitar
+  recursión RLS al consultar `user_profiles` desde policies de otras tablas.
+- C-1 corregido: `has_approved_role` ahora castea `role` a `text` para
+  compatibilidad con `app_role` enum o `text`; sigue pendiente probar la
+  migración en local/staging antes de cualquier aplicación remota.
+- La migración reemplaza las policies abiertas de `workspace_state`,
+  `agent_conversations` y `agent_memories` por policies que exigen usuario
+  aprobado. Mantiene `user_profiles` sin cambios para no romper login/gate.
+- La migración no fue ejecutada contra Supabase local ni remoto.
+- En esta fase RLS solo se creó un archivo SQL local propuesto; no se ejecutó
+  SQL, no se tocó Supabase remoto ni datos reales, y no se hizo commit ni push.
 
 ## Verificaciones de esta tarea
 
-- Rama verificada: `security/supabase-client-rls-readiness`.
+- Rama verificada: `security/auth-gated-store-hydration`.
 - `git status --short`: muestra cambios en `docs/ai/HANDOFF.md`,
   `oficina-tecnica/components/views/ChatView.tsx`,
   `oficina-tecnica/components/views/RoundtableView.tsx`,
-  `oficina-tecnica/components/views/shared.tsx`,
-  `oficina-tecnica/lib/memory/conversationMemory.ts`,
   `oficina-tecnica/lib/store/StoreProvider.tsx`,
-  `oficina-tecnica/lib/store/persistence.ts` y el nuevo
+  `oficina-tecnica/lib/store/persistence.ts` y
   `oficina-tecnica/lib/supabase/persistenceErrors.ts`.
 - `git diff --check`: sin errores; Git reporta solo avisos CRLF esperados en
   Windows.
@@ -94,13 +135,28 @@ fallan lecturas, escrituras o Realtime.
 - `npx eslint` sobre los archivos modificados: sin errores.
 - `npm run build`: ejecutado dentro de `oficina-tecnica`; completó
   correctamente.
+- Para la migración `037_ai_memory_rls_approved_users.sql`:
+  `git diff --check` sin errores; Git reporta solo aviso CRLF esperado en
+  Windows para `docs/ai/HANDOFF.md`.
+- No aplica `npm run build` mientras los cambios sigan limitados a SQL/MD.
 
 ## Próxima acción recomendada
 
-Revisar el diff funcional/documental de preparación RLS del cliente y validar
-lint/build. Si pasa revisión, preparar un commit local separado sin push. No
-cerrar RLS ni crear migraciones hasta confirmar policies, grants, volumen,
-Realtime, Storage y dependencias reales.
+Revisar el diff funcional/documental del gate de hidratación remota. Si pasa
+revisión, preparar un commit local separado sin push. No cerrar RLS ni crear
+migraciones hasta confirmar policies, grants, volumen, Realtime, Storage y
+dependencias reales.
+
+Para la migración RLS propuesta, ejecutar primero auditoría documental y luego
+pruebas manuales por rol antes de cualquier SQL remoto:
+
+| Rol | workspace_state SELECT/INSERT/UPDATE | agent_conversations SELECT/INSERT/UPDATE/DELETE | agent_memories SELECT/INSERT | user_profiles own SELECT |
+| --- | --- | --- | --- | --- |
+| anon | Denegado | Denegado | Denegado | Denegado |
+| authenticated pending | Denegado | Denegado | Denegado | Permitido |
+| authenticated disabled/rejected | Denegado | Denegado | Denegado | Permitido |
+| authenticated approved | Permitido | Permitido para propias y roundtable | SELECT permitido; INSERT solo admin/gerencia/responsable | Permitido |
+| admin approved | Permitido | Permitido; broad SELECT administrativo | Permitido | Permitido |
 
 ## Cambios pendientes
 
