@@ -1,7 +1,7 @@
 import { aiAgentsMock } from "@/lib/ai-office/aiAgentsMock";
 import { aiAlertsMock } from "@/lib/ai-office/aiAlertsMock";
 import { aiOfficeConnectionsMock } from "@/lib/ai-office/aiOfficeLayoutMock";
-import { AIOfficeCanvas } from "./AIOfficeCanvas";
+import { AIAgentCard } from "./AIAgentCard";
 import { AIPageHeader } from "./AIPageHeader";
 
 export function AIVirtualOfficePage() {
@@ -16,8 +16,8 @@ export function AIVirtualOfficePage() {
     <div className="space-y-3">
       <AIPageHeader
         eyebrow="Oficina IA"
-        title="Organigrama operativo y red de agentes IA."
-        description="Vista compacta de agentes, responsabilidades y conexiones mock. Prepara los modos de estructura, colaboracion y aprobaciones."
+        title="Agentes IA y capacidades operativas"
+        description="Estado de agentes activos, roles, alertas y criterios de activacion. La jerarquia formal y nuevas propuestas viven en Organigrama."
         actions={
           <div className="grid min-w-56 grid-cols-3 gap-1.5">
             <HeroMetric label="Agentes" value={String(subordinateAgents.length)} />
@@ -28,8 +28,9 @@ export function AIVirtualOfficePage() {
       />
 
       <div className="space-y-3">
-        <OfficeModeTabs />
-        <AIOfficeCanvas />
+        <AgentModeTabs />
+        <AgentActivationNotice />
+        <AgentCapabilityPanel agents={subordinateAgents} />
         <CollaborationPanel />
       </div>
     </div>
@@ -47,11 +48,11 @@ function HeroMetric({ label, value }: { label: string; value: string }) {
   );
 }
 
-function OfficeModeTabs() {
+function AgentModeTabs() {
   const modes = [
-    { label: "Estructura", active: true },
-    { label: "Colaboracion", active: false },
-    { label: "Aprobaciones", active: false },
+    { label: "Activos", active: true },
+    { label: "Observadores", active: false },
+    { label: "Propuestos", active: false },
   ];
 
   return (
@@ -72,9 +73,48 @@ function OfficeModeTabs() {
         ))}
       </div>
       <p className="text-xs text-slate-500">
-        Modo mock. La logica real se implementara en Fase 4D.
+        Panel operativo: estado, responsabilidades y alertas. La estructura se edita en Organigrama.
       </p>
     </div>
+  );
+}
+
+function AgentActivationNotice() {
+  return (
+    <section className="rounded-lg border border-emerald-200 bg-emerald-50 px-3.5 py-3 shadow-sm">
+      <p className="text-[10px] font-semibold uppercase tracking-[0.12em] text-emerald-700">
+        Activacion controlada
+      </p>
+      <p className="mt-1 text-sm leading-6 text-emerald-900">
+        Los agentes nuevos se proponen en <strong>Organigrama</strong>. Para que respondan en Mesa necesitan tres piezas:
+        prompt de rol, permisos de datos y mapeo de mencion. Asi evitamos activar perfiles sin contexto ni seguridad.
+      </p>
+    </section>
+  );
+}
+
+function AgentCapabilityPanel({ agents }: { agents: typeof aiAgentsMock }) {
+  return (
+    <section className="rounded-lg border border-slate-200 bg-white p-3.5 shadow-sm">
+      <div className="mb-3 flex items-center justify-between gap-3">
+        <div>
+          <p className="text-[10px] font-semibold uppercase tracking-[0.12em] text-blue-600">
+            Capacidades por agente
+          </p>
+          <h2 className="mt-0.5 text-sm font-semibold text-slate-950">
+            Que revisan, cuando alertan y como aportan
+          </h2>
+        </div>
+        <span className="rounded-full border border-slate-200 bg-slate-50 px-2 py-1 text-[11px] font-semibold text-slate-500">
+          {agents.length} perfiles
+        </span>
+      </div>
+      <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+        {agents.map((agent) => (
+          <AIAgentCard key={agent.id} agent={agent} />
+        ))}
+      </div>
+    </section>
   );
 }
 

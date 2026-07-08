@@ -22,6 +22,7 @@ export interface RequirementSummary {
   avance: number | null;
   solicitante_rq: string | null;
   tipo_servicio_nombre: string | null;
+  proyecto_servicio?: string | null;
   fecha_requerida: string | null;
   cotizacion_codigo: string | null;
   observaciones: string | null;

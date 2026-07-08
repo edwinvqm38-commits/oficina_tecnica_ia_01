@@ -40,12 +40,63 @@ const AI_COMMAND_RE = /^\/(ia|resumen|pendientes|consulta|rfi|revisar|costos|cro
 const AGENT_MENU_RE = /(?:^|\s)\/menu\b/i;
 const AGENT_MENU_SENTINEL = "__AGENT_MENU__:";
 const AGENT_MENU_USAGE_KEY = "ot:rt:agent-menu-usage";
+const LLM_USAGE_KEY = "ot:rt:llm-usage";
+const LLM_WINDOW_MS = 60_000;
+const LLM_WINDOW_LIMIT = 40;
 const AGENT_TO_AGENT_MENTION_RE = /@(IC|PM|IE|CD|TI)\b/gi;
 const MAX_AGENT_FOLLOWUPS = 2;
 const NO_RESPONDER_RE = /\[(?:no\s+responder|sin\s+ia|solo\s+humanos?)\]/i;
 const SOCIAL_GREETING_RE = /^(hola|buenos\s+d[ií]as|buen\s+d[ií]a|buenas\s+tardes|buenas\s+noches|saludos)\b/i;
 const COORDINATION_RE = /\b(coordina|coordine|coordinar|coordinaci[oó]n|gestiona|gestione|gestionar|organiza|organice|organizar|lidera|lidere|liderar|asigna|asigne|asignar|delega|delegue|delegar|objetivo|plan\s+de\s+acci[oó]n|haz\s+seguimiento|seguimiento\s+con\s+el\s+equipo|equipo\s+ia)\b/i;
 const APP_DELIVERY_RE = /\b(p[aá]same|env[ií]ame|m[aá]ndame|comp[aá]rteme|dame)\b.*\b(aplicaci[oó]n|app|html|archivo)\b.*\b(probar|probarlo|aqu[ií]|mesa)\b/i;
+
+type LlmUsageSnapshot = {
+  count: number;
+  resetAt: number;
+  lastLabel: string;
+};
+
+function loadLlmUsage(): LlmUsageSnapshot {
+  const now = Date.now();
+  if (typeof window === "undefined") return { count: 0, resetAt: now + LLM_WINDOW_MS, lastLabel: "sin uso" };
+  try {
+    const raw = localStorage.getItem(LLM_USAGE_KEY);
+    const parsed = raw ? JSON.parse(raw) as Partial<LlmUsageSnapshot> : {};
+    const resetAt = typeof parsed.resetAt === "number" ? parsed.resetAt : now + LLM_WINDOW_MS;
+    if (resetAt <= now) return { count: 0, resetAt: now + LLM_WINDOW_MS, lastLabel: parsed.lastLabel || "sin uso" };
+    return {
+      count: typeof parsed.count === "number" ? parsed.count : 0,
+      resetAt,
+      lastLabel: parsed.lastLabel || "sin uso",
+    };
+  } catch {
+    return { count: 0, resetAt: now + LLM_WINDOW_MS, lastLabel: "sin uso" };
+  }
+}
+
+function saveLlmUsage(snapshot: LlmUsageSnapshot) {
+  if (typeof window === "undefined") return;
+  localStorage.setItem(LLM_USAGE_KEY, JSON.stringify(snapshot));
+}
+
+function contextPipelineWithTimeout(query: string) {
+  return Promise.race([
+    runContextPipeline(query),
+    new Promise<Awaited<ReturnType<typeof runContextPipeline>>>((resolve) => {
+      window.setTimeout(() => resolve({
+        block: "\n\n(No pude completar la consulta de contexto en el tiempo esperado. Responde sin inventar datos y pide reintentar o acotar la consulta.)",
+        decision: {
+          intent: "timeout_contexto",
+          toolsToCall: [],
+          confidence: 0,
+          reason: "La consulta de contexto tardó demasiado.",
+        },
+        results: [],
+        hasData: false,
+      }), 12_000);
+    }),
+  ]);
+}
 
 // Whether the AI team should jump into every message (vs. only when
 // explicitly @mentioned or asked via a /command). Off by default so
@@ -912,6 +963,7 @@ export function RoundtableView() {
   const [visibleCount, setVisibleCount] = useState(VISIBLE_MESSAGES_STEP);
   const [narrow, setNarrow] = useState(false);
   const [usersDrawerOpen, setUsersDrawerOpen] = useState(false);
+  const [llmUsage, setLlmUsage] = useState<LlmUsageSnapshot>(() => loadLlmUsage());
   const scrollRef = useRef<HTMLDivElement>(null);
 
   const thread = chatFor(ROUNDTABLE_THREAD);
@@ -924,6 +976,21 @@ export function RoundtableView() {
 
   const approvedUsers = useApprovedUsers();
   const { presence, now } = useRoomPresence(ROOM_PRESENCE_CHANNEL, session?.email, senderName);
+  const llmUsageDisplay = useMemo(() => {
+    const current = llmUsage.resetAt <= now ? { ...llmUsage, count: 0 } : llmUsage;
+    const remaining = Math.max(0, LLM_WINDOW_LIMIT - current.count);
+    return `IA: ${current.lastLabel} · aprox ${remaining}/${LLM_WINDOW_LIMIT} min`;
+  }, [llmUsage, now]);
+
+  function markLlmUse(label: string) {
+    setLlmUsage((prev) => {
+      const current = Date.now();
+      const base = prev.resetAt <= current ? { count: 0, resetAt: current + LLM_WINDOW_MS, lastLabel: prev.lastLabel } : prev;
+      const next = { count: Math.min(LLM_WINDOW_LIMIT, base.count + 1), resetAt: base.resetAt, lastLabel: label };
+      saveLlmUsage(next);
+      return next;
+    });
+  }
 
   // Directory used by parseMd/MdText to render "@FullName" mentions as chips.
   const userDirectory: UserDirectory = useMemo(() => {
@@ -1160,7 +1227,7 @@ export function RoundtableView() {
     let autoCodeCtx = "";
     let deterministicAnswer: string | null = null;
     if (!simple) {
-      const pipeline = await runContextPipeline(contextQueryText);
+      const pipeline = await contextPipelineWithTimeout(contextQueryText);
       autoCodeCtx = pipeline.block;
       deterministicAnswer = buildDeterministicAnswerFromResults(contextQueryText, pipeline.results);
     }
@@ -1252,6 +1319,7 @@ export function RoundtableView() {
       try {
         const { response, actualConfig } = await sendChatWithFallback(messages, agRouting.config, agRouting.complexity);
         const label = `${actualConfig.provider}/${response.model}`;
+        markLlmUse(label);
         appendChat(ROUNDTABLE_THREAD, { role: "agent", agentId: agId, text: response.content, modelLabel: label, modelSuggestion: agRouting.suggestion });
         saveConversation(userId, agId, parsed.cleanText + fileCtx, response.content, label, agRouting.complexity, activeProject?.id).catch(() => {});
         let proposedKnowledge = false;
@@ -1368,6 +1436,7 @@ export function RoundtableView() {
       try {
         const { response, actualConfig } = await sendChatWithFallback(messages, agRouting.config, agRouting.complexity);
         const label = `${actualConfig.provider}/${response.model}`;
+        markLlmUse(label);
         appendChat(ROUNDTABLE_THREAD, { role: "agent", agentId: agId, text: response.content, modelLabel: label, modelSuggestion: agRouting.suggestion });
         agentOutputs.push({ agentId: agId, content: response.content });
         saveConversation(userId, agId, parsed.cleanText + fileCtx, response.content, label, agRouting.complexity, activeProject?.id).catch(() => {});
@@ -1469,7 +1538,18 @@ export function RoundtableView() {
         eyebrow="Mesa de trabajo"
         title="Discusión coordinada con tu equipo IA"
         description="Plantea un tema — los agentes responden según su dominio. Usa @IC, @PM, @IE, @CD, @TI o /menu para consultas rápidas."
-        actions={<span className="badge badge--green badge--dot">IA activa</span>}
+        actions={
+          <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap", justifyContent: "flex-end" }}>
+            <span
+              className="badge"
+              title="Indicador local aproximado: cuenta respuestas IA de esta ventana en el último minuto. No representa la cuota real del proveedor."
+              style={{ background: "var(--bg-subtle)", color: "var(--t2)", border: "1px solid var(--border)" }}
+            >
+              {llmUsageDisplay}
+            </span>
+            <span className="badge badge--green badge--dot">IA activa</span>
+          </div>
+        }
       />
 
       <div style={{ display: "grid", gridTemplateColumns: narrow ? "230px 1fr" : "230px 1fr 230px", gap: 10, alignItems: "start" }}>
@@ -1508,6 +1588,13 @@ export function RoundtableView() {
             </div>
             <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
               <span className="badge badge--green">IA activa</span>
+              <span
+                className="badge"
+                title="Uso aproximado en esta ventana: no es cuota real de OpenAI/Gemini/etc."
+                style={{ background: "var(--bg-subtle)", color: "var(--t2)", border: "1px solid var(--border)", maxWidth: 220, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}
+              >
+                {llmUsageDisplay}
+              </span>
               <button
                 className="btn btn--ghost btn--sm"
                 style={{ fontSize: 10, color: aiAssist ? "var(--blue)" : "var(--t3)" }}

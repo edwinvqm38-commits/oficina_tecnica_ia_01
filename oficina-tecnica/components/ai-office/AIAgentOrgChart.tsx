@@ -23,6 +23,7 @@ export function AIAgentOrgChart() {
   const [open, setOpen] = useState(false);
   const [draft, setDraft] = useState({ name: "", role: "", focus: "" });
   const agents = [...baseAgents, ...customAgents];
+  const connectorColumns = `repeat(${Math.max(agents.length, 1)}, minmax(0, 1fr))`;
 
   useEffect(() => {
     setCustomAgents(readCustomAgents());
@@ -67,6 +68,9 @@ export function AIAgentOrgChart() {
           <h2 className="mt-1 text-xl font-semibold text-slate-950">
             Supervision ejecutiva con agentes subordinados
           </h2>
+          <p className="mt-2 max-w-2xl text-sm leading-6 text-slate-500">
+            Esta vista define jerarquia y propuestas. Para revisar estado operativo, alertas y capacidades activas usa la pestaña Agentes.
+          </p>
         </div>
         <span className="hidden rounded-full bg-slate-100 px-3 py-1 text-sm font-medium text-slate-600 sm:inline-flex">
           Autonomia supervisada
@@ -87,7 +91,7 @@ export function AIAgentOrgChart() {
       <div className="relative mx-auto mt-2 hidden max-w-3xl px-8 lg:block">
         <div className="mx-auto h-10 w-px bg-slate-300" />
         <div className="mx-auto h-px w-5/6 bg-slate-300" />
-        <div className="grid grid-cols-4">
+        <div className="grid" style={{ gridTemplateColumns: connectorColumns }}>
           {agents.map((agent) => (
             <div key={agent.id} className="mx-auto h-8 w-px bg-slate-300" />
           ))}
@@ -96,7 +100,7 @@ export function AIAgentOrgChart() {
 
       <div className="mx-auto h-8 w-px bg-slate-300 lg:hidden" />
 
-      <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+      <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4">
         {agents.map((agent) => (
           <AIAgentCard key={agent.id} agent={agent} />
         ))}

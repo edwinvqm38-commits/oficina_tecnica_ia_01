@@ -336,6 +336,69 @@ function formatMoney(value: number): string {
   return value.toLocaleString("es-PE", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 }
 
+function summarizeQuery(query: Record<string, unknown>): string {
+  const parts: string[] = [];
+  if (query.periodLabel) parts.push(`periodo: ${query.periodLabel}`);
+  if (query.estado) parts.push(`estado: ${query.estado}`);
+  if (query.dateFrom || query.dateTo) parts.push(`rango: ${query.dateFrom ?? "inicio"} a ${query.dateTo ?? "fin"}`);
+  return parts.length ? parts.join(" · ") : "sin filtros adicionales";
+}
+
+function cotizacionRow(cot: import("@/lib/chat/contextQuery").CotizacionSummary): string {
+  const moneda = moneyPrefix(cot.moneda_codigo);
+  const monto = cot.monto == null ? "—" : `${moneda} ${formatMoney(cot.monto)}`;
+  return `| ${cot.codigo} | ${cot.proyecto ?? "—"} | ${cot.cliente_nombre ?? "—"} | ${cot.unidad_trabajo_nombre ?? "—"} | ${cot.estado_propuesta ?? cot.estado ?? "—"} | ${cot.avance ?? "—"}% | ${monto} |`;
+}
+
+function requerimientoRow(rq: import("@/lib/chat/contextQuery").RequirementSummary): string {
+  return `| ${rq.codigo} | ${rq.cotizacion_codigo ?? "—"} | ${rq.proyecto_servicio ?? "—"} | ${rq.estado ?? "—"} | ${rq.avance ?? "—"}% | ${rq.responsable ?? "—"} |`;
+}
+
+function recursoRow(r: import("@/lib/chat/contextTools").RecursoLite): string {
+  const precio = r.precio_unitario_ref == null ? "—" : `${r.moneda_codigo ?? "PEN"} ${formatMoney(r.precio_unitario_ref)}`;
+  return `| ${r.codigo_recurso} | ${r.descripcion} | ${r.tipo_recurso_nombre ?? "—"} | ${r.estado ?? "—"} | ${precio} |`;
+}
+
+function countSummaryAnswer(results: ContextToolResult[]): string | null {
+  const count = results.find((res) => res.source === "conteo" && res.status === "success");
+  if (!count || count.source !== "conteo") return null;
+
+  const lines = [
+    `Tenemos **${count.total} ${count.label}** registrados en Supabase (${summarizeQuery(count.query)}).`,
+  ];
+
+  const cotizaciones = results.find((res) => res.source === "cotizaciones" && res.status === "success");
+  if (cotizaciones?.source === "cotizaciones" && cotizaciones.records.length > 0) {
+    lines.push("", "| Cotización | Proyecto | Cliente | Unidad | Estado | Avance | Monto |", "|---|---|---|---|---|---:|---:|");
+    lines.push(...cotizaciones.records.map(cotizacionRow));
+    if (cotizaciones.total > cotizaciones.records.length) {
+      lines.push("", `Mostré ${cotizaciones.records.length} de ${cotizaciones.total}. Usa un filtro para acotar más.`);
+    }
+    return lines.join("\n");
+  }
+
+  const requerimientos = results.find((res) => res.source === "requerimientos" && res.status === "success");
+  if (requerimientos?.source === "requerimientos" && requerimientos.records.length > 0) {
+    lines.push("", "| RQ | Cotización | Proyecto/servicio | Estado | Avance | Responsable |", "|---|---|---|---|---:|---|");
+    lines.push(...requerimientos.records.map(requerimientoRow));
+    if (requerimientos.total > requerimientos.records.length) {
+      lines.push("", `Mostré ${requerimientos.records.length} de ${requerimientos.total}. Usa un filtro para acotar más.`);
+    }
+    return lines.join("\n");
+  }
+
+  const recursos = results.find((res) => res.source === "recursos" && res.status === "success");
+  if (recursos?.source === "recursos" && recursos.records.length > 0) {
+    lines.push("", "| Código | Descripción | Tipo | Estado | P.U. ref. |", "|---|---|---|---|---:|");
+    lines.push(...recursos.records.map(recursoRow));
+    if (recursos.total > recursos.records.length) {
+      lines.push("", `Mostré ${recursos.records.length} de ${recursos.total}. Usa un filtro para acotar más.`);
+    }
+  }
+
+  return lines.join("\n");
+}
+
 function cotizacionDetailAnswer(cot: import("@/lib/chat/contextQuery").CotizacionSummary): string {
   const moneda = moneyPrefix(cot.moneda_codigo);
   const rows = [
@@ -395,6 +458,9 @@ export function buildDeterministicAnswerFromResults(
   cleanText: string,
   results: ContextToolResult[],
 ): string | null {
+  const countAnswer = countSummaryAnswer(results);
+  if (countAnswer) return countAnswer;
+
   const cotResult = results.find(
     (res) => res.source === "cotizaciones" && res.status === "success" && res.records.length === 1,
   );

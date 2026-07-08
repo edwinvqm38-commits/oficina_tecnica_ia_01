@@ -49,12 +49,12 @@ export function isTeamMessage(text: string): boolean {
 // do something or answer something — as opposed to just greeting/thanking
 // them or talking near their name ("Buenos días @gg", "Gracias @ic",
 // "@gg estamos revisando esto").
-const QUESTION_WORD_RE = /\b(qu[eé]|cu[aá]l|cu[aá]nto|cu[aá]ndo|d[oó]nde|c[oó]mo|por qu[eé])\b/i;
+const QUESTION_WORD_RE = /\b(qu[eé]|cu[aá]l(?:es)?|cu[aá]nt[oa]s?|cu[aá]ndo|d[oó]nde|c[oó]mo|por qu[eé])\b/i;
 // Not anchored to the start: when an @mention is followed by a code or
 // other text before the actual verb ("@IC RQ-CJM075-001_2025 dame la
 // lista..."), the verb no longer sits at position 0 of cleanText once the
 // mention is stripped, so this must match anywhere in the message.
-const REQUEST_VERB_RE = /\b(revisa|revisar|revisen|revisemos|genera|generar|generen|dame|denme|necesito|necesitamos|puedes|podr[ií]as|pueden|podr[ií]an|ay[uú]dame|ay[uú]denme|analiza|analizar|analicen|calcula|calcular|calculen|resume|resumir|resuman|prepara|preparar|preparen|verifica|verificar|verifiquen|actualiza|actualizar|actualicen|env[ií]a|enviar|env[ií]en|crea|crear|creen|arma|armar|armen|cotiza|cotizar|cotizen|valida|validar|validen|indica|indicar|indiquen|dime|dinos|confirma|confirmar|confirmen|manda|mandar|manden|contin[uú]a|continuar|sigue|seguir|prosigue|adelante)\b/i;
+const REQUEST_VERB_RE = /\b(revisa|revisar|revisen|revisemos|responde|responder|resp[oó]ndeme|respondan|respondiste|genera|generar|generen|dame|denme|necesito|necesitamos|puedes|podr[ií]as|pueden|podr[ií]an|ay[uú]dame|ay[uú]denme|analiza|analizar|analicen|calcula|calcular|calculen|resume|resumir|resuman|prepara|preparar|preparen|verifica|verificar|verifiquen|actualiza|actualizar|actualicen|env[ií]a|enviar|env[ií]en|crea|crear|creen|arma|armar|armen|cotiza|cotizar|cotizen|valida|validar|validen|indica|indicar|indiquen|dime|dinos|confirma|confirmar|confirmen|manda|mandar|manden|contin[uú]a|continuar|sigue|seguir|prosigue|adelante)\b/i;
 // A pasted document/historical code (RQ-..., COT-..., FOR-EKA-PRO-...) is
 // itself a clear instruction — the user wants that case looked up.
 const CODE_LIKE_RE = /\b[A-Z]{2,6}(?:[-_][A-Za-z0-9]+){1,6}\b/;
@@ -83,6 +83,15 @@ export type ParsedInput = {
   isHelp: boolean;
 };
 
+const AGENT_NAME_ALIASES: Array<{ id: AgentId; re: RegExp }> = [
+  { id: "ic", re: /^(ingenier[oa]\s+de\s+costos|ing\.?\s+de\s+costos|costos)\b/i },
+  { id: "pm", re: /^(project\s+management|project\s+manager|pm)\b/i },
+  { id: "ie", re: /^(ingenier[ao]\s+el[eé]ctric[ao]|ing\.?\s+el[eé]ctric[ao]|el[eé]ctrica|el[eé]ctrico)\b/i },
+  { id: "cd", re: /^(control\s+documentario|documentario|control\s+doc)\b/i },
+  { id: "ti", re: /^(ingenier[oa]\s+de\s+sistemas|ing\.?\s+de\s+sistemas|sistemas|ti)\b/i },
+  { id: "gg", re: /^(gerente\s+general|gg)\b/i },
+];
+
 export function parseInput(raw: string): ParsedInput {
   let text = raw.trim();
 
@@ -95,6 +104,15 @@ export function parseInput(raw: string): ParsedInput {
   // @IC @PM @IE @GG — supports one or more agent mentions in any position
   // (e.g. "@IC @PM revisen este RQ", "@IC RQ-001 dame la lista...").
   const targetAgentIds: string[] = [];
+
+  for (const alias of AGENT_NAME_ALIASES) {
+    if (alias.re.test(text)) {
+      text = text.replace(alias.re, "").replace(/\s+/g, " ").trim();
+      if (!targetAgentIds.includes(alias.id)) targetAgentIds.push(alias.id);
+      break;
+    }
+  }
+
   text = text.replace(/@(IC|PM|IE|CD|TI|GG)\b/gi, (_m, id) => {
     const lower = id.toLowerCase();
     if (!targetAgentIds.includes(lower)) targetAgentIds.push(lower);
