@@ -1,6 +1,14 @@
-import { demoData, type Requerimiento, type Cotizacion } from "@/lib/sgp/demoData";
+import {
+  demoData,
+  type CatalogCodigoCliente,
+  type CatalogCodigoUnidadTrabajo,
+  type Cotizacion,
+  type ProyectoAdjudicado,
+  type Requerimiento,
+} from "@/lib/sgp/demoData";
 import { readHistoricalImportQuality } from "@/lib/sgp/historicalImportQuality";
 import { supabase } from "@/lib/sgp/supabaseClient";
+import { listCatalogItems } from "@/lib/sgp/catalogsRepository";
 
 export type RequirementsDataSource = "supabase" | "demo";
 
@@ -58,6 +66,12 @@ type RequirementCodeParts = {
   projectTag: string;
   anio: number;
   source: "metadata" | "related_requirement" | "catalog";
+};
+
+type RequirementCodeCatalogs = {
+  clientes: CatalogCodigoCliente[];
+  unidades: CatalogCodigoUnidadTrabajo[];
+  proyectos: ProyectoAdjudicado[];
 };
 
 const CURRENT_RQ_CODE_PATTERN = /^RQ-(\d{4})-([A-Z0-9]+)-([A-Z0-9]+)-(P\d{3})-(\d{3})$/;
@@ -118,6 +132,26 @@ function sameText(left: unknown, right: unknown): boolean {
   return Boolean(normalizedLeft && normalizedRight) && normalizedLeft.localeCompare(normalizedRight, "es", { sensitivity: "base" }) === 0;
 }
 
+function readCotizacionField(cotizacion: CotizacionWithRequirementMetadata, modernKey: string, legacyKey: keyof Cotizacion): string {
+  const record = cotizacion as unknown as Record<string, unknown>;
+  return normalizeString(record[legacyKey] ?? record[modernKey]);
+}
+
+function getYearFromDate(value: unknown): number | null {
+  const normalized = normalizeString(value);
+  const year = Number(normalized.slice(0, 4));
+  return Number.isFinite(year) && year >= 2000 ? year : null;
+}
+
+function getRqCreationYear(cotizacion: CotizacionWithRequirementMetadata): number {
+  return (
+    getYearFromDate(readCotizacionField(cotizacion, "fecha_oc", "fecha_oc")) ??
+    getYearFromDate(readCotizacionField(cotizacion, "fecha_entregada", "fecha_entregada")) ??
+    getYearFromDate(readCotizacionField(cotizacion, "fecha_entrega", "fecha_entrega")) ??
+    new Date().getFullYear()
+  );
+}
+
 function normalizeProjectTag(value: unknown): string {
   const token = normalizeToken(value);
   if (!token) return "";
@@ -138,6 +172,119 @@ function resolveControlledUnitCode(value: unknown): string {
   const token = normalizeToken(value);
   if (!token) return "";
   return CONTROLLED_UNIT_CODE_ALIASES[token] ?? "";
+}
+
+function getDefaultRequirementCodeCatalogs(): RequirementCodeCatalogs {
+  return {
+    clientes: demoData.listCatalogCodigoClientes(),
+    unidades: demoData.listCatalogCodigoUnidadesTrabajo(),
+    proyectos: demoData.listProyectosAdjudicados(),
+  };
+}
+
+async function loadRequirementCodeCatalogs(): Promise<RequirementCodeCatalogs> {
+  const [clientes, unidades, proyectos] = await Promise.all([
+    listCatalogItems<CatalogCodigoCliente>("catalogCodigoClientes"),
+    listCatalogItems<CatalogCodigoUnidadTrabajo>("catalogCodigoUnidadesTrabajo"),
+    listCatalogItems<ProyectoAdjudicado>("proyectosAdjudicados"),
+  ]);
+
+  return {
+    clientes: clientes.rows,
+    unidades: unidades.rows,
+    proyectos: proyectos.rows,
+  };
+}
+
+function nextProjectCodeForYear(projects: ProyectoAdjudicado[], anio: number): string {
+  const values = projects
+    .filter((item) => Number(item.anio) === anio)
+    .map((item) => Number(normalizeString(item.codigo_proyecto).replace(/^P/i, "")))
+    .filter((item) => Number.isFinite(item));
+  const next = (values.length > 0 ? Math.max(...values) : 0) + 1;
+  return `P${String(next).padStart(3, "0")}`;
+}
+
+async function ensureProjectTagForQuotation(
+  cotizacion: CotizacionWithRequirementMetadata,
+  catalogs: RequirementCodeCatalogs,
+  codigoCliente: string,
+  codigoUnidad: string,
+  anio: number,
+): Promise<string> {
+  const cotizacionCodigo = readCotizacionField(cotizacion, "codigo", "codigo");
+  const cliente = readCotizacionField(cotizacion, "cliente_nombre", "cliente");
+  const unidad = readCotizacionField(cotizacion, "unidad_trabajo_nombre", "unidad_trabajo");
+  const oc = readCotizacionField(cotizacion, "oc", "oc");
+
+  const existing = catalogs.proyectos.find(
+    (item) =>
+      (Number(item.anio) === anio && sameText(item.cotizacion, cotizacionCodigo)) ||
+      (normalizeToken(item.codigo_cliente) === codigoCliente &&
+        normalizeToken(item.codigo_unidad) === codigoUnidad &&
+        (sameText(item.cliente, cliente) || sameText(item.unidad_trabajo, unidad))),
+  );
+  const existingTag = normalizeProjectTag(existing?.codigo_proyecto);
+  if (existingTag) return existingTag;
+
+  const generatedProjectCode = nextProjectCodeForYear(catalogs.proyectos, anio);
+  const payload: ProyectoAdjudicado = {
+    id: `pa-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`,
+    anio,
+    codigo_proyecto: generatedProjectCode,
+    cotizacion: cotizacionCodigo,
+    oc,
+    cliente,
+    codigo_cliente: codigoCliente,
+    unidad_trabajo: unidad,
+    codigo_unidad: codigoUnidad,
+    fecha_adjudicacion:
+      readCotizacionField(cotizacion, "fecha_oc", "fecha_oc") ||
+      readCotizacionField(cotizacion, "fecha_entregada", "fecha_entregada") ||
+      readCotizacionField(cotizacion, "fecha_entrega", "fecha_entrega") ||
+      new Date().toISOString().slice(0, 10),
+    estado: "Activo",
+    activo: true,
+  };
+
+  const { error } = await supabase.from("proyectos_adjudicados").insert(payload);
+  if (error && process.env.NODE_ENV === "development") {
+    console.warn("[requirementsRepository] No se pudo registrar proyecto adjudicado automático", {
+      cotizacion: cotizacionCodigo,
+      generatedProjectCode,
+      error,
+    });
+  }
+
+  return generatedProjectCode;
+}
+
+function resolveClientUnitCodesFromQuotation(
+  cotizacion: CotizacionWithRequirementMetadata,
+  catalogs: RequirementCodeCatalogs,
+): {
+  cliente: string;
+  unidad: string;
+  codigoCliente: string;
+  codigoUnidad: string;
+} {
+  const meta = cotizacion.metadata || {};
+  const cliente = readCotizacionField(cotizacion, "cliente_nombre", "cliente");
+  const unidad = readCotizacionField(cotizacion, "unidad_trabajo_nombre", "unidad_trabajo");
+
+  const clienteFromCatalog = catalogs.clientes.find(
+    (item) => sameText(item.cliente, cliente) || normalizeToken(item.codigo_cliente) === normalizeToken(cliente),
+  )?.codigo_cliente;
+  const unidadFromCatalog = catalogs.unidades.find(
+    (item) => sameText(item.unidad_trabajo, unidad) || normalizeToken(item.codigo_unidad) === normalizeToken(unidad),
+  )?.codigo_unidad;
+
+  return {
+    cliente,
+    unidad,
+    codigoCliente: normalizeToken(meta.codigo_cliente) || normalizeToken(clienteFromCatalog) || resolveControlledClientCode(cliente),
+    codigoUnidad: normalizeToken(meta.codigo_unidad) || normalizeToken(unidadFromCatalog) || resolveControlledUnitCode(unidad),
+  };
 }
 
 function isCurrentRequirementCode(value: unknown): boolean {
@@ -210,27 +357,18 @@ async function fetchAllRequerimientos(): Promise<{ rows: SupabaseRequerimiento[]
  */
 export function resolveRequirementCodePartsFromQuotation(
   cotizacion: CotizacionWithRequirementMetadata,
+  catalogs: RequirementCodeCatalogs = getDefaultRequirementCodeCatalogs(),
 ): ({ ok: true } & RequirementCodeParts) | { ok: false; message: string } {
   const meta = cotizacion.metadata || {};
-
-  const clienteFromCatalog = demoData
-    .listCatalogCodigoClientes()
-    .find((item) => sameText(item.cliente, cotizacion.cliente) || normalizeToken(item.codigo_cliente) === normalizeToken(cotizacion.cliente))?.codigo_cliente;
-  const unidadFromCatalog = demoData
-    .listCatalogCodigoUnidadesTrabajo()
-    .find((item) => sameText(item.unidad_trabajo, cotizacion.unidad_trabajo) || normalizeToken(item.codigo_unidad) === normalizeToken(cotizacion.unidad_trabajo))?.codigo_unidad;
-
-  const codigo_cliente =
-    normalizeToken(meta.codigo_cliente) || normalizeToken(clienteFromCatalog) || resolveControlledClientCode(cotizacion.cliente);
-  const codigo_unidad =
-    normalizeToken(meta.codigo_unidad) || normalizeToken(unidadFromCatalog) || resolveControlledUnitCode(cotizacion.unidad_trabajo);
-  const projectFromCatalog = demoData
-    .listProyectosAdjudicados()
+  const cotizacionCodigo = readCotizacionField(cotizacion, "codigo", "codigo");
+  const { cliente, unidad, codigoCliente: codigo_cliente, codigoUnidad: codigo_unidad } =
+    resolveClientUnitCodesFromQuotation(cotizacion, catalogs);
+  const projectFromCatalog = catalogs.proyectos
     .find(
       (item) =>
-        sameText(item.cotizacion, cotizacion.codigo) ||
+        sameText(item.cotizacion, cotizacionCodigo) ||
         (normalizeToken(item.codigo_cliente) === codigo_cliente && normalizeToken(item.codigo_unidad) === codigo_unidad) ||
-        (sameText(item.cliente, cotizacion.cliente) && sameText(item.unidad_trabajo, cotizacion.unidad_trabajo)),
+        (sameText(item.cliente, cliente) && sameText(item.unidad_trabajo, unidad)),
     )?.codigo_proyecto;
   const project_tag = normalizeProjectTag(meta.codigo_proyecto_adjudicado || meta.project_tag || projectFromCatalog);
   const source: RequirementCodeParts["source"] =
@@ -244,7 +382,7 @@ export function resolveRequirementCodePartsFromQuotation(
     
     return { 
       ok: false as const, 
-      message: `Faltan datos maestros en la metadata de la cotización: ${missing.join(", ")}.` 
+      message: `Faltan datos maestros para generar el RQ: ${missing.join(", ")}.` 
     };
   }
 
@@ -253,7 +391,7 @@ export function resolveRequirementCodePartsFromQuotation(
     codigoCliente: codigo_cliente,
     codigoUnidad: codigo_unidad,
     projectTag: project_tag,
-    anio: new Date().getFullYear(),
+    anio: getRqCreationYear(cotizacion),
     source,
   };
 }
@@ -281,8 +419,9 @@ function resolveRequirementCodePartsFromRelatedRequirements(
 function resolveRequirementCodePartsForNewFormat(
   cotizacion: CotizacionWithRequirementMetadata,
   relatedRequirements: Array<{ codigo: string | null }>,
+  catalogs: RequirementCodeCatalogs = getDefaultRequirementCodeCatalogs(),
 ): { ok: true; parts: RequirementCodeParts } | { ok: false; message: string } {
-  const parts = resolveRequirementCodePartsFromQuotation(cotizacion);
+  const parts = resolveRequirementCodePartsFromQuotation(cotizacion, catalogs);
   if (parts.ok) return { ok: true, parts };
 
   const relatedParts = resolveRequirementCodePartsFromRelatedRequirements(relatedRequirements);
@@ -290,7 +429,7 @@ function resolveRequirementCodePartsForNewFormat(
 
   return {
     ok: false,
-    message: `${parts.message} Para cotizaciones históricas, completa la leyenda vigente de cliente/unidad y el PTag del proyecto antes de crear un RQ nuevo. Los códigos RQ históricos se conservan, pero no se reutilizan para generar el formato vigente.`,
+    message: `${parts.message} Completa Datos > Cotizaciones > Leyenda clientes, Leyenda unidades y Proyectos adjudicados/OC antes de crear un RQ nuevo. Los códigos RQ históricos se conservan, pero no se reutilizan para generar el formato vigente.`,
   };
 }
 
@@ -411,8 +550,34 @@ export async function createRequirementFromWonQuotationSupabase(
     };
   }
 
-  // 1. Resolver partes del código vigente. Los RQ históricos no se reutilizan.
-  const partsResult = resolveRequirementCodePartsForNewFormat(cotizacion, relatedRequirements ?? []);
+  // 1. Resolver partes del código vigente desde catálogos reales de Supabase.
+  // Los RQ históricos no se reutilizan.
+  const catalogs = await loadRequirementCodeCatalogs();
+  let partsResult = resolveRequirementCodePartsForNewFormat(cotizacion, relatedRequirements ?? [], catalogs);
+
+  if (!partsResult.ok && partsResult.message.includes("Código de Proyecto")) {
+    const baseCodes = resolveClientUnitCodesFromQuotation(cotizacion, catalogs);
+    if (baseCodes.codigoCliente && baseCodes.codigoUnidad) {
+      const anio = getRqCreationYear(cotizacion);
+      const generatedProjectTag = await ensureProjectTagForQuotation(
+        cotizacion,
+        catalogs,
+        baseCodes.codigoCliente,
+        baseCodes.codigoUnidad,
+        anio,
+      );
+      partsResult = {
+        ok: true,
+        parts: {
+          codigoCliente: baseCodes.codigoCliente,
+          codigoUnidad: baseCodes.codigoUnidad,
+          projectTag: normalizeProjectTag(generatedProjectTag),
+          anio,
+          source: "catalog",
+        },
+      };
+    }
+  }
   if (!partsResult.ok) return partsResult;
   const { parts } = partsResult;
 
@@ -443,30 +608,36 @@ export async function createRequirementFromWonQuotationSupabase(
   }
 
   const now = new Date().toISOString().slice(0, 10);
+  const cotizacionCodigo = readCotizacionField(cotizacion, "codigo", "codigo");
+  const proyecto = readCotizacionField(cotizacion, "proyecto", "proyecto");
+  const oc = readCotizacionField(cotizacion, "oc", "oc");
+  const tipoServicio = readCotizacionField(cotizacion, "tipo_servicio_nombre", "tipo_servicio");
+  const fechaEntrega = readCotizacionField(cotizacion, "fecha_entrega", "fecha_entrega");
+  const responsableTecnico = readCotizacionField(cotizacion, "responsable_tecnico", "responsable_tecnico");
   const payload = {
     codigo: finalCode,
     cotizacion_id: cotizacion.id,
-    cotizacion_codigo: cotizacion.codigo,
+    cotizacion_codigo: cotizacionCodigo,
     codigo_cliente: parts.codigoCliente,
     codigo_unidad: parts.codigoUnidad,
-    proyecto_servicio: cotizacion.proyecto,
-    oc: cotizacion.oc || null,
+    proyecto_servicio: proyecto,
+    oc: oc || null,
     codigo_proyecto_adjudicado: parts.projectTag,
     anio: parts.anio,
     solicitante_rq: options.userEmail || "Oficina Técnica",
-    tipo_servicio_nombre: cotizacion.tipo_servicio,
+    tipo_servicio_nombre: tipoServicio,
     estado: "Pendiente",
     fecha_solicitud: now,
-    fecha_requerida: cotizacion.fecha_entrega || now,
-    responsable: cotizacion.responsable_tecnico || options.userEmail || "Por asignar",
+    fecha_requerida: fechaEntrega || now,
+    responsable: responsableTecnico || options.userEmail || "Por asignar",
     avance: 0,
     total_rq: 0,
-    observaciones: `Creado automáticamente desde cotización ganada ${cotizacion.codigo}.`,
+    observaciones: `Creado automáticamente desde cotización ganada ${cotizacionCodigo}.`,
     metadata: {
       created_from: "cotizacion_ganada",
       source_module: "cotizaciones",
       quotation_status_at_creation: "Ganada",
-      cotizacion_codigo: cotizacion.codigo,
+      cotizacion_codigo: cotizacionCodigo,
       generated_by: "sgp-lite",
       app_source: "sgp-lite",
       user_creator: options.userEmail
