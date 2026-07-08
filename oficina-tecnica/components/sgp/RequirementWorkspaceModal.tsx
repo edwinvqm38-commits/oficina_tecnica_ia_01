@@ -94,6 +94,10 @@ function generalInfoDateInputClassName(): string {
   return "h-6 min-h-6 w-[150px] rounded border border-stone-300 bg-white px-1.5 py-0 text-[11px] leading-6 outline-none";
 }
 
+function generalInfoTextInputClassName(): string {
+  return "h-6 min-h-6 w-[190px] rounded border border-stone-300 bg-white px-1.5 py-0 text-[11px] font-semibold leading-6 text-stone-800 outline-none";
+}
+
 function generalInfoDateReadClassName(): string {
   return "inline-flex h-6 min-h-6 w-[150px] items-center justify-end px-1.5 text-[11px] font-medium leading-6 text-stone-700";
 }
@@ -252,6 +256,7 @@ export function RequirementWorkspaceModal({
   const generalComparable = useMemo(() => {
     if (!draft) return "";
     return JSON.stringify({
+      codigo: draft.codigo,
       solicitante_rq: draft.solicitante_rq,
       estado: draft.estado,
       fecha_solicitud: draft.fecha_solicitud,
@@ -379,7 +384,22 @@ export function RequirementWorkspaceModal({
                         hidden={isBusinessFieldHidden("proyecto")}
                       />
                     </div>
-                    <LabelValueRow icon="clipboard-list" label="Requerimiento" value={draft.codigo} />
+                    <LabelValueRow
+                      icon="clipboard-list"
+                      label="Requerimiento"
+                      value={
+                        isGeneralInfoEditing ? (
+                          <input
+                            value={draft.codigo}
+                            onChange={(event) => onDraftChange({ codigo: event.target.value })}
+                            className={generalInfoTextInputClassName()}
+                            placeholder="Código RQ"
+                          />
+                        ) : (
+                          <span className={generalInfoReadValueClassName()}>{draft.codigo}</span>
+                        )
+                      }
+                    />
                     <LabelValueRow icon="file-text" label="Cotización" value={cotizacionCodigo} />
                     <LabelValueRow icon="file-text" label="OC" value={cotizacionOc || "-"} hidden={isBusinessFieldHidden("oc")} />
                     <LabelValueRow icon="building" label="Cliente" value={cliente} hidden={isBusinessFieldHidden("cliente")} />

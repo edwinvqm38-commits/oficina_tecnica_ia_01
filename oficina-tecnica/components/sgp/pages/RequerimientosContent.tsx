@@ -22,6 +22,7 @@ import {
   loadRequirementItemsForRequirement,
 } from "@/lib/sgp/clientDataCache";
 import { saveRequirementItemsForRequirement } from "@/lib/sgp/requirementItemsRepository";
+import { updateRequirementSupabase } from "@/lib/sgp/requirementsRepository";
 import { formatDate, normalizeDateForStorage } from "@/lib/sgp/utils";
 import {
   attachLifecycleDiagnostics,
@@ -625,14 +626,6 @@ export default function RequerimientosPage() {
         workspaceItemsLength: workspaceItems.length,
       });
     }
-    if (itemsToSave.length === 0) {
-      setWarning(
-        workspaceDirtyRef.current
-          ? "Error al guardar tabla: había cambios locales, pero el detalle llegó vacío al guardado. No se guardó en Supabase."
-          : "Error al guardar tabla: no hay filas para guardar en el requerimiento.",
-      );
-      return;
-    }
     const normalizedDraft = normalizeRequirementDates(draft);
     const normalized: DetalleRequerimientoItem[] = itemsToSave
       .filter((row) =>
@@ -704,7 +697,40 @@ export default function RequerimientosPage() {
         archivo_guia: row.archivo_guia_files[0] ?? null,
         archivo_guia_files: row.archivo_guia_files,
       }));
-    if (normalized.length === 0) {
+    if (!shouldPersistToSupabase) {
+      demoData.updateRequerimiento(selectedId, normalizedDraft);
+      if (normalized.length > 0) {
+        demoData.replaceDetalleItems(selectedId, normalized);
+        setDetalleItems((prev) => [...normalized, ...prev.filter((it) => it.requerimiento_id !== selectedId)]);
+      }
+      setDraft(normalizedDraft);
+      setRequerimientos((prev) => prev.map((rq) => (rq.id === selectedId ? normalizedDraft : rq)));
+      workspaceDirtyRef.current = false;
+      setWarning(
+        normalized.length > 0
+          ? "Requerimiento guardado correctamente en datos demo/locales. No se actualizó Supabase."
+          : "Datos del requerimiento guardados correctamente en datos demo/locales. No se actualizó Supabase.",
+      );
+      return;
+    }
+
+    let persistedDraft = normalizedDraft;
+    try {
+      const draftSave = await updateRequirementSupabase(selectedId, normalizedDraft);
+      if (!draftSave.ok) {
+        setWarning(`Error al guardar datos del requerimiento: ${draftSave.message}`);
+        return;
+      }
+      persistedDraft = normalizeRequirementDates(draftSave.requerimiento);
+      setDraft(persistedDraft);
+      setRequerimientos((prev) => prev.map((rq) => (rq.id === selectedId ? persistedDraft : rq)));
+      updateUrlState({ page, rqCode: persistedDraft.codigo, rqId: persistedDraft.id });
+    } catch (error) {
+      setWarning(`Error al guardar datos del requerimiento: ${formatSupabaseSaveError(error)}`);
+      return;
+    }
+
+    if (itemsToSave.length > 0 && normalized.length === 0) {
       setWarning(
         workspaceDirtyRef.current
           ? "Error al guardar tabla: había cambios locales, pero las filas llegaron sin recurso o descripción. No se guardó en Supabase."
@@ -713,13 +739,9 @@ export default function RequerimientosPage() {
       return;
     }
 
-    if (!shouldPersistToSupabase) {
-      demoData.updateRequerimiento(selectedId, normalizedDraft);
-      demoData.replaceDetalleItems(selectedId, normalized);
-      setRequerimientos((prev) => prev.map((rq) => (rq.id === selectedId ? normalizedDraft : rq)));
-      setDetalleItems((prev) => [...normalized, ...prev.filter((it) => it.requerimiento_id !== selectedId)]);
+    if (normalized.length === 0) {
       workspaceDirtyRef.current = false;
-      setWarning("Tabla guardada correctamente en datos demo/locales. No se actualizó Supabase.");
+      setWarning("Datos del requerimiento guardados correctamente en Supabase.");
       return;
     }
 

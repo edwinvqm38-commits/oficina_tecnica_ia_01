@@ -37,6 +37,7 @@ import {
 import {
   createRequirementFromWonQuotationSupabase,
   deleteNewRequirementIfEmpty,
+  updateRequirementSupabase,
 } from "@/lib/sgp/requirementsRepository";
 import { saveRequirementItemsForRequirement } from "@/lib/sgp/requirementItemsRepository";
 import { createCotizacion, CreateCotizacionError, updateCotizacion, UpdateCotizacionError } from "@/lib/sgp/quotationsRepository";
@@ -1482,11 +1483,6 @@ export default function CotizacionesPage() {
         currentItemsLength: itemsToSave.length,
       });
     }
-    if (itemsToSave.length === 0) {
-      setWarning("Error al guardar tabla: no hay filas para guardar en el requerimiento.");
-      return;
-    }
-
     const normalized: DetalleRequerimientoItem[] = itemsToSave
       .filter((row) =>
         Boolean(
@@ -1557,17 +1553,45 @@ export default function CotizacionesPage() {
         archivo_guia: row.archivo_guia_files[0] ?? null,
         archivo_guia_files: row.archivo_guia_files,
       }));
-    if (normalized.length === 0) {
+    if (!shouldPersistToSupabase) {
+      demoData.updateRequerimiento(selectedRequirementId, normalizedDraft);
+      if (normalized.length > 0) {
+        demoData.replaceDetalleItems(selectedRequirementId, normalized);
+        setDetalleItems((prev) => [...normalized, ...prev.filter((it) => it.requerimiento_id !== selectedRequirementId)]);
+      }
+      setRequirementDraft(normalizedDraft);
+      setRequerimientos((prev) => prev.map((rq) => (rq.id === selectedRequirementId ? normalizedDraft : rq)));
+      setWarning(
+        normalized.length > 0
+          ? "Requerimiento guardado correctamente en datos demo/locales. No se actualizó Supabase."
+          : "Datos del requerimiento guardados correctamente en datos demo/locales. No se actualizó Supabase.",
+      );
+      return;
+    }
+
+    let persistedDraft = normalizedDraft;
+    try {
+      const draftSave = await updateRequirementSupabase(selectedRequirementId, normalizedDraft);
+      if (!draftSave.ok) {
+        setWarning(`Error al guardar datos del requerimiento: ${draftSave.message}`);
+        return;
+      }
+      persistedDraft = normalizeRequirementDates(draftSave.requerimiento);
+      setRequirementDraft(persistedDraft);
+      setRequerimientos((prev) => prev.map((rq) => (rq.id === selectedRequirementId ? persistedDraft : rq)));
+      persistWorkspaceState({ rqCode: persistedDraft.codigo, quotationCode: draft?.codigo ?? null });
+    } catch (error) {
+      setWarning(`Error al guardar datos del requerimiento: ${formatSupabaseSaveError(error)}`);
+      return;
+    }
+
+    if (itemsToSave.length > 0 && normalized.length === 0) {
       setWarning("Error al guardar tabla: las filas visibles no tienen recurso o descripción para guardar.");
       return;
     }
 
-    if (!shouldPersistToSupabase) {
-      demoData.updateRequerimiento(selectedRequirementId, normalizedDraft);
-      demoData.replaceDetalleItems(selectedRequirementId, normalized);
-      setRequerimientos((prev) => prev.map((rq) => (rq.id === selectedRequirementId ? normalizedDraft : rq)));
-      setDetalleItems((prev) => [...normalized, ...prev.filter((it) => it.requerimiento_id !== selectedRequirementId)]);
-      setWarning("Tabla guardada correctamente en datos demo/locales. No se actualizó Supabase.");
+    if (normalized.length === 0) {
+      setWarning("Datos del requerimiento guardados correctamente en Supabase.");
       return;
     }
 

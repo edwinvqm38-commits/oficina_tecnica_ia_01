@@ -666,6 +666,55 @@ export async function createRequirementFromWonQuotationSupabase(
   };
 }
 
+export async function updateRequirementSupabase(
+  requirementId: string,
+  draft: Requerimiento,
+): Promise<{ ok: true; requerimiento: Requerimiento } | { ok: false; message: string }> {
+  const codigo = normalizeString(draft.codigo);
+  if (!codigo) {
+    return { ok: false, message: "El código de requerimiento no puede estar vacío." };
+  }
+
+  const payload = {
+    codigo,
+    cotizacion_codigo: normalizeString(draft.cotizacion_codigo) || null,
+    codigo_cliente: normalizeString(draft.codigo_cliente) || null,
+    codigo_unidad: normalizeString(draft.codigo_unidad) || null,
+    proyecto_servicio: normalizeString(draft.proyecto_servicio) || null,
+    oc: normalizeString(draft.oc) || null,
+    anio: typeof draft.anio === "number" && Number.isFinite(draft.anio) ? draft.anio : null,
+    solicitante_rq: normalizeString(draft.solicitante_rq) || null,
+    tipo_servicio_nombre: normalizeString(draft.tipo_servicio) || null,
+    area_nombre: normalizeString(draft.area) || null,
+    estado: normalizeString(draft.estado) || "Pendiente",
+    fecha_solicitud: normalizeString(draft.fecha_solicitud) || null,
+    fecha_requerida: normalizeString(draft.fecha_requerida) || null,
+    responsable: normalizeString(draft.responsable) || null,
+    avance: Number.isFinite(Number(draft.avance)) ? Number(draft.avance) : 0,
+    total_rq: Number.isFinite(Number(draft.total_rq)) ? Number(draft.total_rq) : 0,
+    observaciones: normalizeString(draft.observaciones) || null,
+  };
+
+  const { data, error } = await supabase
+    .from("requerimientos")
+    .update(payload)
+    .eq("id", requirementId)
+    .select(REQUIREMENTS_SELECT)
+    .single();
+
+  if (error) {
+    return {
+      ok: false,
+      message:
+        error.code === "23505"
+          ? "Ya existe un requerimiento con ese código. Usa un código único."
+          : error.message || "Supabase rechazó la actualización del requerimiento.",
+    };
+  }
+
+  return { ok: true, requerimiento: mapSupabaseRequerimiento(data as SupabaseRequerimiento) };
+}
+
 type DeleteNewRequirementRpcRow = {
   success?: boolean | null;
   message?: string | null;
