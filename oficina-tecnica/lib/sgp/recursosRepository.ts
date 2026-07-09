@@ -29,6 +29,7 @@ export type RecursosColumnFilters = {
 
 export type RecursosQueryParams = {
   search?: string;
+  showInactive?: boolean;
   codigoRecurso?: string;
   codigoEka?: string;
   codigoFabricante?: string;
@@ -583,6 +584,7 @@ function normalizeSearchText(value: string): string {
 function filterDemoRows(rows: Recurso[], params: ReturnType<typeof normalizeQuery>): Recurso[] {
   const search = normalizeSearchText(params.search ?? "");
   return rows.filter((row) => {
+    if (!params.showInactive && row.estado === "Inactivo") return false;
     if (params.tipoRecurso && row.tipo_recurso !== params.tipoRecurso) return false;
     if (params.estado && row.estado !== params.estado) return false;
     if (params.moneda && row.moneda !== params.moneda) return false;
@@ -756,6 +758,10 @@ export async function listRecursos(params: RecursosQueryParams = {}): Promise<Re
     .from("recursos")
     .select(RESOURCE_SELECT, { count: "exact" })
     .is("deleted_at", null);
+
+  if (!query.showInactive) {
+    request = request.neq("estado", "Inactivo");
+  }
 
   if (query.search?.trim()) {
     const search = query.search.trim().replaceAll("%", "\\%").replaceAll("_", "\\_");

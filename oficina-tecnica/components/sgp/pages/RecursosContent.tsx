@@ -128,6 +128,7 @@ export default function RecursosPage() {
   const [debouncedFilters, setDebouncedFilters] = useState<RecursosColumnFilters>(EMPTY_FILTERS);
   const [sortBy, setSortBy] = useState<RecursoSortField>("codigo_recurso");
   const [sortDirection, setSortDirection] = useState<RecursoSortDirection>("asc");
+  const [showInactive, setShowInactive] = useState(false);
   const [modalOpen, setModalOpen] = useState(false);
   const [editing, setEditing] = useState<Recurso | null>(null);
   const [savingResource, setSavingResource] = useState(false);
@@ -247,6 +248,7 @@ export default function RecursosPage() {
 
     listRecursos({
       ...debouncedFilters,
+      showInactive,
       sortBy,
       sortDirection,
       page,
@@ -278,7 +280,7 @@ export default function RecursosPage() {
     return () => {
       active = false;
     };
-  }, [debouncedFilters, page, pageSize, refreshKey, sortBy, sortDirection]);
+  }, [debouncedFilters, page, pageSize, refreshKey, showInactive, sortBy, sortDirection]);
 
   useEffect(() => {
     const resourceCode = searchParams.get("resourceCode")?.trim();
@@ -515,6 +517,19 @@ export default function RecursosPage() {
               + Logo cliente
             </button>
           </div>
+        ) : activeResourceView === "resources" ? (
+          <label className="ml-auto flex h-7 items-center gap-2 rounded-md border border-border bg-white px-3 text-xs font-semibold text-stone-700">
+            <input
+              type="checkbox"
+              checked={showInactive}
+              onChange={(event) => {
+                setShowInactive(event.target.checked);
+                setPage(1);
+              }}
+              className="h-3.5 w-3.5 accent-teal-700"
+            />
+            <span>Mostrar inactivos</span>
+          </label>
         ) : null}
       </div>
 
