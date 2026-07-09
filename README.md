@@ -1,25 +1,59 @@
-# CODING AGENTS: READ THIS FIRST
+# TRABAJO-MODELO02 | Oficina Tecnica IA
 
-This is a **handoff bundle** from Claude Design (claude.ai/design).
+Repositorio de trabajo para la aplicacion **Oficina Tecnica IA**.
 
-A user mocked up designs in HTML/CSS/JS using an AI design tool, then exported this bundle so a coding agent can implement the designs for real.
+## Aplicacion principal
 
-## What you should do — IMPORTANT
+La aplicacion productiva real esta en:
 
-**Read the chat transcripts first.** There are 1 chat transcript(s) in `chats/`. The transcripts show the full back-and-forth between the user and the design assistant — they tell you **what the user actually wants** and **where they landed** after iterating. Don't skip them. The final HTML files are the output, but the chat is where the intent lives.
+```text
+oficina-tecnica/
+```
 
-**Read `project/IA Gerencial.html` in full.** The user had this file open when they triggered the handoff, so it's almost certainly the primary design they want built. Read it top to bottom — don't skim. Then **follow its imports**: open every file it pulls in (shared components, CSS, scripts) so you understand how the pieces fit together before you start implementing.
+Ese directorio contiene el proyecto Next.js, sus componentes, servicios, integraciones, documentacion tecnica y scripts SQL de Supabase.
 
-**If anything is ambiguous, ask the user to confirm before you start implementing.** It's much cheaper to clarify scope up front than to build the wrong thing.
+## Estructura del repositorio
 
-## About the design files
+```text
+oficina_tecnica_ia_01/
+  oficina-tecnica/        # Aplicacion principal Next.js
+  project/                # Prototipo / historico / referencias antiguas
+  chats/                  # Historial de diseno y conversaciones de referencia
+  PROJECT_CONTEXT.md      # Contexto operativo para humanos e IA
+```
 
-The design medium is **HTML/CSS/JS** — these are prototypes, not production code. Your job is to **recreate them pixel-perfectly** in whatever technology makes sense for the target codebase (React, Vue, native, whatever fits). Match the visual output; don't copy the prototype's internal structure unless it happens to fit.
+Las carpetas `project/`, `chats/` y `project/uploads/ops-ia-v2-demo-main/` se consideran material historico o prototipo. No deben eliminarse ni moverse sin una decision explicita.
 
-**Don't render these files in a browser or take screenshots unless the user asks you to.** Everything you need — dimensions, colors, layout rules — is spelled out in the source. Read the HTML and CSS directly; a screenshot won't tell you anything they don't.
+## Trabajo local
 
-## Bundle contents
+Entrar a la aplicacion principal:
 
-- `README.md` — this file
-- `chats/` — conversation transcripts (read these!)
-- `project/` — the `OFICINA TECNICA` project files (HTML prototypes, assets, components)
+```bash
+cd oficina-tecnica
+npm install
+npm run dev
+```
+
+Validacion recomendada antes de publicar cambios funcionales:
+
+```bash
+npm run build
+```
+
+## Archivos que no deben subirse
+
+No subir al repositorio:
+
+- `.env`, `.env.local`, `.env.*.local`
+- `node_modules/`
+- `.next/`
+- `.vercel/`
+- `tsconfig.tsbuildinfo`
+- logs locales
+- archivos ZIP o bundles exportados pesados
+
+Usar `oficina-tecnica/.env.example` como plantilla sin secretos para configurar entornos locales o Vercel.
+
+## Regla de seguridad
+
+Nunca copiar valores reales de `.env.local` a documentacion, issues, commits, prompts o respuestas. Los secretos deben vivir solo en variables de entorno locales o del proveedor de despliegue.
