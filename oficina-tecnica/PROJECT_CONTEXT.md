@@ -157,3 +157,44 @@ Los recursos desactivados lógicamente con estado = "Inactivo" deben poder react
 - npm run lint: pasa sin errores bloqueantes, con 87 warnings conocidos por deuda técnica temporal.
 - npm run build: pasa correctamente.
 - Prueba manual: reactivación validada correctamente en /recursos.
+
+## 2026-07-09 | Módulo Recursos | Corrección de carga de imágenes en galería
+
+### Proyecto
+TRABAJO-MODELO02 | Oficina Técnica IA
+
+### Módulo
+Recursos
+
+### Problema detectado
+En la Galería de recursos, las tarjetas mostraban "Sin acceso" aunque los recursos contaban con metadata de imagen asociada a Google Drive.
+
+### Causa identificada
+La galería intentaba mostrar primero la imagen mediante el proxy autenticado /api/drive/file/{id}. Si esa lectura fallaba, no intentaba fuentes alternativas como driveWebContentLink, URL directa de Drive o URL directa de imagen.
+
+### Corrección implementada
+- Se actualizó ResourceGallery.tsx para construir una lista de fuentes posibles de imagen.
+- El orden de intento queda:
+  1. Proxy autenticado /api/drive/file/{id}
+  2. driveWebContentLink, si existe.
+  3. URL directa de Google Drive tipo https://drive.google.com/uc?export=view&id=...
+  4. URL directa si ya corresponde a una imagen.
+- Si una fuente falla, la galería intenta la siguiente antes de mostrar "Sin acceso".
+- Si realmente no hay imagen o no hay acceso real al archivo, se mantiene el placeholder correspondiente.
+
+### Archivo modificado
+- components/sgp/resources/ResourceGallery.tsx
+
+### Restricciones respetadas
+- No se modificó Supabase SQL.
+- No se modificó schema.
+- No se modificó .env.local.
+- No se modificó configuración de Google Drive.
+- No se modificaron APIs.
+- No se cambió lógica de activo/inactivo.
+- No se cambió el toggle "Mostrar inactivos".
+- No se cambió desactivación ni reactivación de recursos.
+
+### Validación reportada
+- npm run lint: pasa sin errores bloqueantes, con 87 warnings conocidos.
+- npm run build: pasa correctamente después de limpiar .next.

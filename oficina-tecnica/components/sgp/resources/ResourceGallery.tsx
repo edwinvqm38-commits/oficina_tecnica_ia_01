@@ -45,28 +45,45 @@ function internalDriveFileUrl(fileId: string): string {
   return `/api/drive/file/${encodeURIComponent(fileId)}`;
 }
 
-function driveThumbnailUrl(file: ResourceFileMeta | null | undefined): string {
-  if (!file) return "";
-  if (file.localPreviewUrl) return file.localPreviewUrl;
+function directDriveImageUrl(fileId: string): string {
+  return `https://drive.google.com/uc?export=view&id=${encodeURIComponent(fileId)}`;
+}
+
+function uniqueSources(values: string[]): string[] {
+  return Array.from(new Set(values.map((value) => value.trim()).filter(Boolean)));
+}
+
+function driveThumbnailSources(file: ResourceFileMeta | null | undefined): string[] {
+  if (!file) return [];
+  if (file.localPreviewUrl) return [file.localPreviewUrl];
   const fileId = file.futureDriveFileId || driveFileIdFromUrl(file.futureDriveUrl);
-  if (fileId) return internalDriveFileUrl(fileId);
-  if (file.futureDriveUrl && /\.(png|jpe?g|webp|gif|svg)(\?|#|$)/i.test(file.futureDriveUrl)) return file.futureDriveUrl;
-  return "";
+  return uniqueSources([
+    fileId ? internalDriveFileUrl(fileId) : "",
+    file.driveWebContentLink ?? "",
+    fileId ? directDriveImageUrl(fileId) : "",
+    file.futureDriveUrl && /\.(png|jpe?g|webp|gif|svg)(\?|#|$)/i.test(file.futureDriveUrl) ? file.futureDriveUrl : "",
+  ]);
 }
 
-function resourceImage(resource: Recurso, resolvedImages: Record<string, ResolvedDriveImage>): string {
+function resourceImageSources(resource: Recurso, resolvedImages: Record<string, ResolvedDriveImage>): string[] {
   const imageFile = resource.resourceFiles.imagenes?.[0] ?? resource.resourceFiles.imagen ?? null;
-  const explicitImage = driveThumbnailUrl(imageFile);
-  if (explicitImage) return explicitImage;
+  const explicitImages = driveThumbnailSources(imageFile);
+  if (explicitImages.length > 0) return explicitImages;
   const resolved = resolvedImages[resource.codigo_recurso];
-  return resolved?.fileId ? internalDriveFileUrl(resolved.fileId) : "";
+  return resolved?.fileId ? [internalDriveFileUrl(resolved.fileId), directDriveImageUrl(resolved.fileId)] : [];
 }
 
-function SecureDriveImage({ src, alt }: { src: string; alt: string }) {
+function SecureDriveImage({ sources, alt }: { sources: string[]; alt: string }) {
   const [blobUrl, setBlobUrl] = useState("");
   const [failed, setFailed] = useState(false);
+  const [sourceIndex, setSourceIndex] = useState(0);
+  const src = sources[sourceIndex] ?? "";
 
   useEffect(() => {
+    if (!src) {
+      return;
+    }
+
     if (!src.startsWith("/api/drive/file/")) {
       setBlobUrl(src);
       setFailed(false);
@@ -89,7 +106,12 @@ function SecureDriveImage({ src, alt }: { src: string; alt: string }) {
         });
       })
       .catch(() => {
-        if (active) setFailed(true);
+        if (!active) return;
+        if (sourceIndex + 1 < sources.length) {
+          setSourceIndex((current) => current + 1);
+        } else {
+          setFailed(true);
+        }
       });
 
     return () => {
@@ -99,7 +121,7 @@ function SecureDriveImage({ src, alt }: { src: string; alt: string }) {
         return "";
       });
     };
-  }, [src]);
+  }, [sourceIndex, sources.length, src]);
 
   if (failed || !blobUrl) {
     return (
@@ -109,8 +131,22 @@ function SecureDriveImage({ src, alt }: { src: string; alt: string }) {
     );
   }
 
-  // eslint-disable-next-line @next/next/no-img-element
-  return <img src={blobUrl} alt={alt} className="max-h-full max-w-full object-contain" loading="lazy" />;
+  return (
+    // eslint-disable-next-line @next/next/no-img-element
+    <img
+      src={blobUrl}
+      alt={alt}
+      className="max-h-full max-w-full object-contain"
+      loading="lazy"
+      onError={() => {
+        if (sourceIndex + 1 < sources.length) {
+          setSourceIndex((current) => current + 1);
+        } else {
+          setFailed(true);
+        }
+      }}
+    />
+  );
 }
 
 function matchesResource(resource: Recurso, query: string): boolean {
@@ -154,7 +190,7 @@ export function ResourceGallery({ rows, loading = false, onEdit, canEdit = false
   const missingImageCodes = useMemo(
     () =>
       rows
-        .filter((row) => !resourceImage(row, resolvedImages))
+        .filter((row) => resourceImageSources(row, resolvedImages).length === 0)
         .map((row) => row.codigo_recurso)
         .filter(Boolean),
     [resolvedImages, rows],
@@ -222,15 +258,15 @@ export function ResourceGallery({ rows, loading = false, onEdit, canEdit = false
         ) : (
           <div className="grid grid-cols-1 gap-2.5 sm:grid-cols-2 lg:grid-cols-4 xl:grid-cols-5 2xl:grid-cols-6">
             {filteredRows.map((resource) => {
-              const imageUrl = resourceImage(resource, resolvedImages);
+              const imageSources = resourceImageSources(resource, resolvedImages);
               return (
                 <article
                   key={resource.id}
                   className="group overflow-hidden rounded-lg border border-border bg-white shadow-sm transition hover:border-teal-300 hover:shadow-md"
                 >
                   <div className="flex aspect-[2/1] items-center justify-center bg-stone-50 p-3">
-                    {imageUrl ? (
-                      <SecureDriveImage src={imageUrl} alt={resource.descripcion} />
+                    {imageSources.length > 0 ? (
+                      <SecureDriveImage key={imageSources.join("|")} sources={imageSources} alt={resource.descripcion} />
                     ) : (
                       <div className="flex h-full w-full items-center justify-center text-stone-400">
                         <FieldLabelIcon icon="image" label="Sin imagen" className="text-xs font-semibold" />
