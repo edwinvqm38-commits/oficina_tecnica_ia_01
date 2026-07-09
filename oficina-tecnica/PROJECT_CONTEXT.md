@@ -73,3 +73,41 @@ Cuando el usuario active el toggle "Mostrar inactivos", los recursos con estado 
 ### Validación reportada
 - npm run lint: pasa sin errores bloqueantes, con 87 warnings conocidos por deuda técnica temporal.
 - npm run build: pasa correctamente con Next.js 16.2.7.
+
+## 2026-07-09 | Módulo Recursos | Confirmación antes de desactivar recurso
+
+### Proyecto
+TRABAJO-MODELO02 | Oficina Técnica IA
+
+### Módulo
+Recursos
+
+### Decisión funcional
+Antes de desactivar un recurso, el sistema debe solicitar confirmación al usuario para evitar desactivaciones accidentales. La confirmación debe aclarar que el recurso no será eliminado físicamente, sino marcado como Inactivo.
+
+### Lógica implementada
+- Se ajustó el mensaje de confirmación previo a la desactivación.
+- Si el usuario cancela, no se ejecuta deactivateRecurso.
+- Si el usuario confirma, continúa la lógica existente de desactivación.
+- La desactivación lógica sigue usando estado = "Inactivo".
+- No se modifica el filtro "Mostrar inactivos".
+- No se modifica la identificación visual de recursos inactivos.
+
+### Archivo modificado
+- components/sgp/pages/RecursosContent.tsx
+
+### Restricciones respetadas
+- No se modificó Supabase SQL.
+- No se modificó schema.
+- No se modificaron APIs.
+- No se modificó repository.
+- No se usó deleted_at.
+- No se borraron recursos físicamente.
+- No se tocó Google Drive.
+- No se tocó .env.local.
+- No se instalaron paquetes.
+- No se tocaron Requerimientos ni Cotizaciones.
+
+### Validación reportada
+- npm run lint: pasa sin errores bloqueantes, con 87 warnings conocidos por deuda técnica temporal.
+- npm run build: pasa correctamente.

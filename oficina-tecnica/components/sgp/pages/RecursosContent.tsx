@@ -436,7 +436,7 @@ export default function RecursosPage() {
     }
 
     const confirmed = window.confirm(
-      `¿Desactivar el recurso ${resource.codigo_recurso}? El registro no se borrará; solo cambiará su estado a Inactivo.`,
+      `¿Deseas desactivar este recurso (${resource.codigo_recurso})? No se eliminará de la base de datos; solo quedará marcado como Inactivo.`,
     );
     if (!confirmed) return;
 
