@@ -1050,3 +1050,46 @@ export async function updateRecurso(id: string, row: RecursoWritePayload): Promi
   });
   return updated;
 }
+
+export async function deactivateRecurso(id: string): Promise<void> {
+  if (!hasSupabaseConfig()) {
+    throw new RecursoWriteError("Supabase no está configurado para desactivar recursos reales.", "supabase_not_configured");
+  }
+
+  const normalizedId = normalizeString(id);
+  if (!normalizedId) {
+    throw new RecursoWriteError("No se encontró el ID del recurso a desactivar.", "missing_required_fields");
+  }
+
+  const { data: current, error: currentError } = await supabase
+    .from("recursos")
+    .select("id,estado")
+    .eq("id", normalizedId)
+    .is("deleted_at", null)
+    .maybeSingle();
+
+  if (currentError) {
+    const serialized = serializeSupabaseError(currentError);
+    debugResourceWrite("deactivate current read error", { id: normalizedId, error: serialized });
+    throw new RecursoWriteError(writeErrorMessage(serialized), classifySupabaseWriteError(serialized));
+  }
+
+  if (!current) {
+    throw new RecursoWriteError("No se encontró el recurso a desactivar.", "not_found");
+  }
+
+  const { error } = await supabase
+    .from("recursos")
+    .update({
+      estado: "Inactivo",
+      updated_at: new Date().toISOString(),
+    })
+    .eq("id", normalizedId)
+    .is("deleted_at", null);
+
+  if (error) {
+    const serialized = serializeSupabaseError(error);
+    debugResourceWrite("deactivate error", { id: normalizedId, error: serialized });
+    throw new RecursoWriteError(writeErrorMessage(serialized), classifySupabaseWriteError(serialized));
+  }
+}

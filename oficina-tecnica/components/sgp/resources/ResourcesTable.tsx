@@ -23,8 +23,10 @@ type ResourcesTableProps = {
   onClearFilters: () => void;
   onCreate: () => void;
   onEdit: (resource: Recurso) => void;
+  onDeactivate?: (resource: Recurso) => void;
   canCreate?: boolean;
   canEdit?: boolean;
+  canDeactivate?: boolean;
   modulePermissions?: ModulePermissions | null;
   sortBy: RecursoSortField;
   sortDirection: RecursoSortDirection;
@@ -167,7 +169,7 @@ const COLUMNS: ColumnDef[] = [
     permissionKeys: ["estado"],
   },
   { key: "docs", label: "Archivos", icon: "files", minWidth: 120, operational: true },
-  { key: "acciones", label: "Acciones", icon: "settings2", minWidth: 170, operational: true },
+  { key: "acciones", label: "Acciones", icon: "settings2", minWidth: 240, operational: true },
 ];
 
 const resourcesTableWidthMemory = new Map<string, Record<string, number>>();
@@ -271,8 +273,10 @@ export function ResourcesTable({
   onClearFilters,
   onCreate,
   onEdit,
+  onDeactivate,
   canCreate = false,
   canEdit = false,
+  canDeactivate = false,
   modulePermissions = null,
   sortBy,
   sortDirection,
@@ -382,11 +386,24 @@ export function ResourcesTable({
       );
     }
     if (column.key === "acciones") {
-      return canEdit ? (
-        <div className="flex gap-1">
-          <button onClick={() => onEdit(row)} className="rounded border border-border px-2 py-0.5 text-[11px]">
+      return canEdit || canDeactivate ? (
+        <div className="flex flex-wrap gap-1">
+          {canEdit ? (
+          <button type="button" onClick={() => onEdit(row)} className="rounded border border-border px-2 py-0.5 text-[11px]">
             Ver / Editar
           </button>
+          ) : null}
+          {canDeactivate ? (
+            <button
+              type="button"
+              onClick={() => onDeactivate?.(row)}
+              disabled={row.estado === "Inactivo"}
+              className="rounded border border-amber-200 bg-amber-50 px-2 py-0.5 text-[11px] text-amber-800 disabled:cursor-not-allowed disabled:opacity-50"
+              title={row.estado === "Inactivo" ? "El recurso ya está inactivo" : "Desactivar recurso sin borrarlo"}
+            >
+              Desactivar
+            </button>
+          ) : null}
         </div>
       ) : (
         <span className="rounded border border-border px-2 py-0.5 text-[11px] text-stone-500">Solo lectura</span>

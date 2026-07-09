@@ -11,6 +11,7 @@ import { getModulePermissions, type ModulePermissions } from "@/lib/sgp/modulePe
 import { createProposalLogoDraft, readProposalLogos, writeProposalLogos, type ProposalLogo, type ProposalLogoEntityType } from "@/lib/sgp/proposalLogos";
 import {
   createRecurso,
+  deactivateRecurso,
   getNextResourceDraftCode,
   listAllRecursos,
   listRecursos,
@@ -418,6 +419,43 @@ export default function RecursosPage() {
     }
   }
 
+  async function handleDeactivate(resource: Recurso) {
+    if (dataSource !== "supabase") {
+      setWarning("Modo demo local: no se pueden desactivar recursos reales.");
+      return;
+    }
+    if (!canEditResource) {
+      setWarning("Desactivar recursos requiere permiso can_edit en el módulo Recursos.");
+      return;
+    }
+    if (resource.estado === "Inactivo") {
+      setWarning(`El recurso ${resource.codigo_recurso} ya está inactivo.`);
+      return;
+    }
+
+    const confirmed = window.confirm(
+      `¿Desactivar el recurso ${resource.codigo_recurso}? El registro no se borrará; solo cambiará su estado a Inactivo.`,
+    );
+    if (!confirmed) return;
+
+    setSavingResource(true);
+    try {
+      await deactivateRecurso(resource.id);
+      setWarning(`Recurso ${resource.codigo_recurso} desactivado. No se eliminó el registro.`);
+      setRefreshKey((prev) => prev + 1);
+      setGalleryLoaded(false);
+      void listRecursosFilterOptions().then((result) => setFilterOptions(result));
+    } catch (error) {
+      if (error instanceof RecursoWriteError) {
+        setWarning(error.message);
+      } else {
+        setWarning(error instanceof Error ? error.message : "No se pudo desactivar el recurso.");
+      }
+    } finally {
+      setSavingResource(false);
+    }
+  }
+
   async function handleUploadResourceFile(resourceId: string, category: ResourceStorageFileCategory, file: File): Promise<ResourceFileMeta> {
     if (!canManageResourceDocuments) {
       throw new Error("Subir archivos requiere permiso can_upload_files o can_edit en Recursos.");
@@ -561,8 +599,10 @@ export default function RecursosPage() {
             onClearFilters={clearFilters}
             onCreate={openNew}
             onEdit={openEdit}
+            onDeactivate={handleDeactivate}
             canCreate={canCreateResource}
             canEdit={canOpenResourceModal}
+            canDeactivate={canEditResource}
             modulePermissions={modulePermissions}
             sortBy={sortBy}
             sortDirection={sortDirection}
