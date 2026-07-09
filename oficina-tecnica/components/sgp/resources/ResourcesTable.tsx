@@ -264,6 +264,10 @@ function getSelectOptions(column: ColumnDef, filterOptions: RecursosFilterOption
   return [];
 }
 
+function isInactiveResource(row: Recurso): boolean {
+  return row.estado === "Inactivo";
+}
+
 export function ResourcesTable({
   rows,
   emptyMessage = "No se encontraron recursos con los filtros aplicados.",
@@ -372,7 +376,16 @@ export function ResourcesTable({
     if (column.key === "modelo") return row.modelo || "-";
     if (column.key === "tiempo_entrega_ref") return row.tiempo_entrega_ref || "-";
     if (column.key === "fecha_actualizacion") return row.fecha_actualizacion || "-";
-    if (column.key === "estado") return <StatusBadge status={row.estado} />;
+    if (column.key === "estado") {
+      if (isInactiveResource(row)) {
+        return (
+          <span className="inline-flex items-center rounded-full border border-stone-300 bg-stone-100 px-2 py-0.5 text-[10px] font-semibold uppercase text-stone-600">
+            Inactivo
+          </span>
+        );
+      }
+      return <StatusBadge status={row.estado} />;
+    }
     if (column.key === "docs") {
       return (
         <div className="flex gap-1">
@@ -564,18 +577,26 @@ export function ResourcesTable({
                 </td>
               </tr>
             ) : null}
-            {rows.map((row) => (
-              <tr key={row.id} className="h-8 border-t border-border align-middle hover:bg-stone-50">
-                {visibleColumns.map((column) => (
-                  <td
-                    key={`${row.id}-${column.key}`}
-                    className={`h-8 px-2 py-1 ${column.align === "right" ? "text-right" : ""}`}
-                  >
-                    {renderCell(row, column)}
-                  </td>
-                ))}
-              </tr>
-            ))}
+            {rows.map((row) => {
+              const isInactive = isInactiveResource(row);
+              return (
+                <tr
+                  key={row.id}
+                  className={`h-8 border-t border-border align-middle ${
+                    isInactive ? "bg-stone-50 text-stone-500 hover:bg-stone-100" : "hover:bg-stone-50"
+                  }`}
+                >
+                  {visibleColumns.map((column) => (
+                    <td
+                      key={`${row.id}-${column.key}`}
+                      className={`h-8 px-2 py-1 ${column.align === "right" ? "text-right" : ""}`}
+                    >
+                      {renderCell(row, column)}
+                    </td>
+                  ))}
+                </tr>
+              );
+            })}
           </tbody>
         </table>
       </div>
