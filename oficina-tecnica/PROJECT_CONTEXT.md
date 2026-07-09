@@ -111,3 +111,49 @@ Antes de desactivar un recurso, el sistema debe solicitar confirmación al usuar
 ### Validación reportada
 - npm run lint: pasa sin errores bloqueantes, con 87 warnings conocidos por deuda técnica temporal.
 - npm run build: pasa correctamente.
+
+## 2026-07-09 | Módulo Recursos | Reactivación de recursos inactivos
+
+### Proyecto
+TRABAJO-MODELO02 | Oficina Técnica IA
+
+### Módulo
+Recursos
+
+### Decisión funcional
+Los recursos desactivados lógicamente con estado = "Inactivo" deben poder reactivarse desde la interfaz cuando el usuario active el toggle "Mostrar inactivos".
+
+### Lógica implementada
+- Se agregó la operación reactivateRecurso(id) como inversa mínima de deactivateRecurso.
+- La reactivación actualiza solo:
+  - estado = "Activo"
+  - updated_at = now
+- En la tabla de Recursos, si un recurso tiene estado === "Inactivo", aparece una acción/botón "Reactivar".
+- Antes de reactivar, se muestra confirmación al usuario.
+- Si el usuario cancela, no se ejecuta ningún cambio.
+- Si el usuario confirma, el recurso vuelve a estado = "Activo".
+- Luego de reactivarse, el recurso vuelve a estar disponible en la lista principal.
+- Se mantiene el filtro "Mostrar inactivos".
+- Se mantiene el badge visual "Inactivo".
+
+### Archivos modificados
+- lib/sgp/recursosRepository.ts
+- components/sgp/pages/RecursosContent.tsx
+- components/sgp/resources/ResourcesTable.tsx
+
+### Restricciones respetadas
+- No se modificó Supabase SQL.
+- No se modificó schema.
+- No se usó deleted_at.
+- No se borraron recursos físicamente.
+- No se modificaron APIs.
+- No se tocó Google Drive.
+- No se tocó .env.local.
+- No se instalaron paquetes.
+- No se tocaron Requerimientos ni Cotizaciones.
+- No se creó commit desde Codex.
+
+### Validación reportada
+- npm run lint: pasa sin errores bloqueantes, con 87 warnings conocidos por deuda técnica temporal.
+- npm run build: pasa correctamente.
+- Prueba manual: reactivación validada correctamente en /recursos.

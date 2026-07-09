@@ -16,6 +16,7 @@ import {
   listAllRecursos,
   listRecursos,
   listRecursosFilterOptions,
+  reactivateRecurso,
   uploadResourceFile,
   createResourceFileSignedUrl,
   updateRecurso,
@@ -458,6 +459,43 @@ export default function RecursosPage() {
     }
   }
 
+  async function handleReactivate(resource: Recurso) {
+    if (dataSource !== "supabase") {
+      setWarning("Modo demo local: no se pueden reactivar recursos reales.");
+      return;
+    }
+    if (!canEditResource) {
+      setWarning("Reactivar recursos requiere permiso can_edit en el módulo Recursos.");
+      return;
+    }
+    if (resource.estado !== "Inactivo") {
+      setWarning(`El recurso ${resource.codigo_recurso} no está inactivo.`);
+      return;
+    }
+
+    const confirmed = window.confirm(
+      `¿Deseas reactivar este recurso (${resource.codigo_recurso})? Volverá a estar disponible en la lista principal de recursos.`,
+    );
+    if (!confirmed) return;
+
+    setSavingResource(true);
+    try {
+      await reactivateRecurso(resource.id);
+      setWarning(`Recurso ${resource.codigo_recurso} reactivado.`);
+      setRefreshKey((prev) => prev + 1);
+      setGalleryLoaded(false);
+      void listRecursosFilterOptions().then((result) => setFilterOptions(result));
+    } catch (error) {
+      if (error instanceof RecursoWriteError) {
+        setWarning(error.message);
+      } else {
+        setWarning(error instanceof Error ? error.message : "No se pudo reactivar el recurso.");
+      }
+    } finally {
+      setSavingResource(false);
+    }
+  }
+
   async function handleUploadResourceFile(resourceId: string, category: ResourceStorageFileCategory, file: File): Promise<ResourceFileMeta> {
     if (!canManageResourceDocuments) {
       throw new Error("Subir archivos requiere permiso can_upload_files o can_edit en Recursos.");
@@ -615,6 +653,7 @@ export default function RecursosPage() {
             onCreate={openNew}
             onEdit={openEdit}
             onDeactivate={handleDeactivate}
+            onReactivate={handleReactivate}
             canCreate={canCreateResource}
             canEdit={canOpenResourceModal}
             canDeactivate={canEditResource}

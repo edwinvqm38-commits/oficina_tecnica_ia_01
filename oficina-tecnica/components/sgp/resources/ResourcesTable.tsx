@@ -24,6 +24,7 @@ type ResourcesTableProps = {
   onCreate: () => void;
   onEdit: (resource: Recurso) => void;
   onDeactivate?: (resource: Recurso) => void;
+  onReactivate?: (resource: Recurso) => void;
   canCreate?: boolean;
   canEdit?: boolean;
   canDeactivate?: boolean;
@@ -278,6 +279,7 @@ export function ResourcesTable({
   onCreate,
   onEdit,
   onDeactivate,
+  onReactivate,
   canCreate = false,
   canEdit = false,
   canDeactivate = false,
@@ -399,6 +401,7 @@ export function ResourcesTable({
       );
     }
     if (column.key === "acciones") {
+      const isInactive = isInactiveResource(row);
       return canEdit || canDeactivate ? (
         <div className="flex flex-wrap gap-1">
           {canEdit ? (
@@ -410,11 +413,21 @@ export function ResourcesTable({
             <button
               type="button"
               onClick={() => onDeactivate?.(row)}
-              disabled={row.estado === "Inactivo"}
+              disabled={isInactive}
               className="rounded border border-amber-200 bg-amber-50 px-2 py-0.5 text-[11px] text-amber-800 disabled:cursor-not-allowed disabled:opacity-50"
-              title={row.estado === "Inactivo" ? "El recurso ya está inactivo" : "Desactivar recurso sin borrarlo"}
+              title={isInactive ? "El recurso ya está inactivo" : "Desactivar recurso sin borrarlo"}
             >
               Desactivar
+            </button>
+          ) : null}
+          {canDeactivate && isInactive ? (
+            <button
+              type="button"
+              onClick={() => onReactivate?.(row)}
+              className="rounded border border-emerald-200 bg-emerald-50 px-2 py-0.5 text-[11px] text-emerald-800 hover:bg-emerald-100"
+              title="Reactivar recurso y volver a mostrarlo como activo"
+            >
+              Reactivar
             </button>
           ) : null}
         </div>
