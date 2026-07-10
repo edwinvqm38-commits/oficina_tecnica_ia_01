@@ -41,7 +41,7 @@ import {
 } from "@/lib/sgp/requirementsRepository";
 import { saveRequirementItemsForRequirement } from "@/lib/sgp/requirementItemsRepository";
 import { createCotizacion, CreateCotizacionError, updateCotizacion, UpdateCotizacionError } from "@/lib/sgp/quotationsRepository";
-import { listAllRecursos } from "@/lib/sgp/recursosRepository";
+import { listRecursosLookupOptions } from "@/lib/sgp/recursosRepository";
 import {
   debugUiState,
   attachLifecycleDiagnostics,
@@ -691,7 +691,7 @@ export default function CotizacionesPage() {
     try {
       const [result, recursosResult] = await Promise.all([
         loadCoreAppData({ module: "cotizaciones", reason: "manual-refresh", forceRefresh: true }),
-        listAllRecursos(),
+        listRecursosLookupOptions(),
       ]);
       const { cotizaciones: cotizacionesResult, requerimientos: requerimientosResult } = result;
       setCotizaciones(cotizacionesResult.rows.map(normalizeCotizacionDraft));
@@ -725,7 +725,7 @@ export default function CotizacionesPage() {
     setIsDataLoading(!cached);
     debugUiState("cotizaciones", "fetch-start", { reason, cacheAvailable: Boolean(cached) });
 
-    Promise.all([loadCoreAppData({ module: "cotizaciones", reason }), listAllRecursos()])
+    Promise.all([loadCoreAppData({ module: "cotizaciones", reason }), listRecursosLookupOptions()])
       .then(([result, recursosResult]) => {
         if (!active) return;
 

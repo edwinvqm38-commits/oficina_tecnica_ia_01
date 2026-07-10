@@ -23,6 +23,7 @@ import {
 } from "@/lib/sgp/clientDataCache";
 import { saveRequirementItemsForRequirement } from "@/lib/sgp/requirementItemsRepository";
 import { updateRequirementSupabase } from "@/lib/sgp/requirementsRepository";
+import { listRecursosLookupOptions } from "@/lib/sgp/recursosRepository";
 import { formatDate, normalizeDateForStorage } from "@/lib/sgp/utils";
 import {
   attachLifecycleDiagnostics,
@@ -277,7 +278,7 @@ export default function RequerimientosPage() {
   const initialUiState = initialUiStateRef.current;
   const [requerimientos, setRequerimientos] = useState<Requerimiento[]>([]);
   const [cotizaciones, setCotizaciones] = useState<Cotizacion[]>([]);
-  const [recursos] = useState(() => demoData.listRecursos());
+  const [recursos, setRecursos] = useState(() => demoData.listRecursos().filter((recurso) => recurso.estado !== "Inactivo"));
   // Los recursos inactivos se conservan para historicos, pero no se ofrecen para nuevas selecciones.
   const selectableRecursos = useMemo(() => recursos.filter((recurso) => recurso.estado !== "Inactivo"), [recursos]);
   const [detalleItems, setDetalleItems] = useState<DetalleRequerimientoItem[]>([]);
@@ -303,6 +304,28 @@ export default function RequerimientosPage() {
     return () => {
       debugUiState("requerimientos", "unmounted", {});
       cleanupLifecycleDiagnostics();
+    };
+  }, []);
+
+  useEffect(() => {
+    let active = true;
+
+    listRecursosLookupOptions()
+      .then((result) => {
+        if (!active) return;
+        setRecursos(result.rows);
+        if (result.warning) {
+          setWarning((current) => current ?? result.warning ?? null);
+        }
+      })
+      .catch((error: unknown) => {
+        if (!active) return;
+        const message = error instanceof Error ? error.message : "No se pudieron cargar recursos para selección.";
+        setWarning((current) => current ?? message);
+      });
+
+    return () => {
+      active = false;
     };
   }, []);
 

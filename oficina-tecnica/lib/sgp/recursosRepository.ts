@@ -266,6 +266,35 @@ const RESOURCE_SELECT = `
   updated_at
 `;
 
+const RESOURCE_LOOKUP_SELECT = `
+  id,
+  codigo_recurso,
+  codigo_eka,
+  codigo_fabricante,
+  tipo_recurso_id,
+  tipo_recurso_nombre,
+  descripcion,
+  unidad_id,
+  unidad_codigo,
+  precio_unitario_ref,
+  moneda_codigo,
+  proveedor_nombre,
+  marca_nombre,
+  modelo,
+  tiempo_entrega_ref,
+  estado,
+  fecha_actualizacion,
+  observaciones
+`;
+
+type SupabaseRecursoLookup = Omit<
+  SupabaseRecurso,
+  "proveedor_id" | "marca_id" | "metadata" | "deleted_at" | "created_at" | "updated_at"
+>;
+
+const RECURSOS_LOOKUP_CACHE_TTL_MS = 5 * 60 * 1000;
+let recursosLookupCache: { expiresAt: number; result: RecursosAllResult } | null = null;
+
 const ALLOWED_SORT_FIELDS: RecursoSortField[] = [
   "codigo_recurso",
   "descripcion",
@@ -553,6 +582,43 @@ function mapSupabaseRecurso(row: SupabaseRecurso): Recurso {
       cotizaciones,
       archivos,
     },
+  };
+}
+
+function emptyResourceFiles(): Recurso["resourceFiles"] {
+  return {
+    fichaTecnica: null,
+    imagen: null,
+    cotizacion: null,
+    fichasTecnicas: [],
+    imagenes: [],
+    cotizaciones: [],
+    archivos: [],
+  };
+}
+
+function mapSupabaseRecursoLookup(row: SupabaseRecursoLookup): Recurso {
+  return {
+    id: row.id,
+    codigo_recurso: row.codigo_recurso,
+    codigo_eka: row.codigo_eka ?? "",
+    codigo_fabricante: row.codigo_fabricante ?? "",
+    tipo_recurso: row.tipo_recurso_nombre ?? "",
+    descripcion: row.descripcion,
+    unidad: row.unidad_codigo ?? "",
+    precio_unitario_ref: Number(row.precio_unitario_ref ?? 0),
+    moneda: row.moneda_codigo === "USD" ? "USD" : "PEN",
+    proveedor: row.proveedor_nombre ?? "",
+    marca: row.marca_nombre ?? "",
+    modelo: row.modelo ?? "",
+    tiempo_entrega_ref: row.tiempo_entrega_ref ?? "",
+    ficha_tecnica: "",
+    imagen: "",
+    archivos: "",
+    estado: normalizeResourceStatus(row.estado),
+    fecha_actualizacion: row.fecha_actualizacion ?? "",
+    observaciones: row.observaciones ?? "",
+    resourceFiles: emptyResourceFiles(),
   };
 }
 
@@ -853,6 +919,67 @@ export async function listAllRecursos(): Promise<RecursosAllResult> {
   };
 }
 
+export function invalidateRecursosLookupCache(): void {
+  recursosLookupCache = null;
+}
+
+export async function listRecursosLookupOptions(): Promise<RecursosAllResult> {
+  const now = Date.now();
+  if (recursosLookupCache && recursosLookupCache.expiresAt > now) {
+    return {
+      ...recursosLookupCache.result,
+      rows: [...recursosLookupCache.result.rows],
+    };
+  }
+
+  if (!hasSupabaseConfig()) {
+    const result: RecursosAllResult = {
+      rows: demoData.listRecursos().filter((row) => row.estado !== "Inactivo"),
+      source: "demo",
+      warning: "No se encontraron variables públicas de Supabase; se usa data demo local.",
+    };
+    recursosLookupCache = { expiresAt: now + RECURSOS_LOOKUP_CACHE_TTL_MS, result };
+    return result;
+  }
+
+  const batchSize = 1000;
+  let from = 0;
+  const rows: SupabaseRecursoLookup[] = [];
+
+  while (true) {
+    const to = from + batchSize - 1;
+    const { data, error } = await supabase
+      .from("recursos")
+      .select(RESOURCE_LOOKUP_SELECT)
+      .is("deleted_at", null)
+      .or("estado.neq.Inactivo,estado.is.null")
+      .order("codigo_recurso", { ascending: true })
+      .range(from, to);
+
+    if (error) {
+      const result: RecursosAllResult = {
+        rows: demoData.listRecursos().filter((row) => row.estado !== "Inactivo"),
+        source: "demo",
+        warning: `No se pudo leer public.recursos desde Supabase: ${error.message}. Se usa data demo local.`,
+      };
+      recursosLookupCache = { expiresAt: now + RECURSOS_LOOKUP_CACHE_TTL_MS, result };
+      return result;
+    }
+
+    const chunk = (data ?? []) as SupabaseRecursoLookup[];
+    rows.push(...chunk);
+    if (chunk.length < batchSize) break;
+    from += batchSize;
+  }
+
+  const result: RecursosAllResult = {
+    rows: rows.map(mapSupabaseRecursoLookup),
+    source: "supabase",
+  };
+  recursosLookupCache = { expiresAt: now + RECURSOS_LOOKUP_CACHE_TTL_MS, result };
+  return result;
+}
+
 export async function uploadResourceFile(
   resourceId: string,
   category: ResourceStorageFileCategory,
@@ -959,6 +1086,7 @@ export async function createRecurso(row: RecursoWritePayload): Promise<Recurso> 
   }
 
   const created = mapSupabaseRecurso(data as SupabaseRecurso);
+  invalidateRecursosLookupCache();
   debugResourceWrite("created", {
     id: created.id,
     codigo_recurso: created.codigo_recurso,
@@ -1048,6 +1176,7 @@ export async function updateRecurso(id: string, row: RecursoWritePayload): Promi
   }
 
   const updated = mapSupabaseRecurso(data as SupabaseRecurso);
+  invalidateRecursosLookupCache();
   debugResourceWrite("updated", {
     id: updated.id,
     codigo_recurso: updated.codigo_recurso,
@@ -1100,6 +1229,8 @@ export async function deactivateRecurso(id: string): Promise<void> {
     debugResourceWrite("deactivate error", { id: normalizedId, error: serialized });
     throw new RecursoWriteError(writeErrorMessage(serialized), classifySupabaseWriteError(serialized));
   }
+
+  invalidateRecursosLookupCache();
 }
 
 export async function reactivateRecurso(id: string): Promise<void> {
@@ -1143,4 +1274,6 @@ export async function reactivateRecurso(id: string): Promise<void> {
     debugResourceWrite("reactivate error", { id: normalizedId, error: serialized });
     throw new RecursoWriteError(writeErrorMessage(serialized), classifySupabaseWriteError(serialized));
   }
+
+  invalidateRecursosLookupCache();
 }

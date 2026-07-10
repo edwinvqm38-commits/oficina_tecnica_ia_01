@@ -277,3 +277,54 @@ CotizacionesContent mantenía el estado de recursos inicializado con demoData.li
 - npm run lint: pasa sin errores bloqueantes, con 87 warnings conocidos.
 - npm run build: pasa correctamente.
 - Validación manual: en /cotizaciones ya aparecen recursos reales activos en el detalle de requerimiento.
+
+## 2026-07-10 | Cotizaciones/Requerimientos | Recursos reales, lookup liviano y autocomplete fluido
+
+### Proyecto
+TRABAJO-MODELO02 | Oficina Técnica IA
+
+### Módulos
+- Cotizaciones
+- Requerimientos
+- Recursos
+
+### Problemas resueltos
+1. En /cotizaciones, el detalle de requerimiento usaba recursos demo o lista incompleta en lugar de recursos reales de Supabase.
+2. El autocomplete cargaba recursos completos para búsqueda, generando riesgo de lentitud y mayor transferencia de datos.
+3. La escritura en la columna Descripción tenía lag porque cada letra actualizaba estado padre de la grilla.
+4. Era posible eliminar un ítem/recurso aunque la tabla no estuviera en modo Editar tabla.
+
+### Correcciones implementadas
+- CotizacionesContent ahora usa recursos reales activos para selección de RQ.
+- RequerimientosContent usa opciones seleccionables coherentes con Recursos.
+- Se creó listRecursosLookupOptions() con consulta liviana para autocompletes.
+- Se agregó cache temporal en memoria de 5 minutos para evitar recargas repetidas.
+- La cache se invalida cuando se crea, edita, desactiva o reactiva un recurso.
+- Se mantiene la regla funcional: solo estado === "Inactivo" queda excluido de nuevas selecciones.
+- Los recursos con estado null, undefined, vacío, "Activo", "Por revisar" u otro valor no se ocultan por error.
+- Se creó ResourceAutocompleteCell con estado local para que la escritura sea fluida.
+- Descripción, Código fabricante y Recurso a suministrar ya no actualizan activeAuto global por cada letra.
+- onPatchRow solo se ejecuta al confirmar: blur, Enter o selección de sugerencia.
+- Las sugerencias se calculan dentro de la celda, con mínimo 2 caracteres y máximo 20 resultados.
+- No hay llamadas a Supabase por cada tecla.
+- La eliminación de ítems queda bloqueada fuera del modo Editar tabla.
+
+### Archivos modificados
+- components/sgp/RequirementItemsGrid.tsx
+- components/sgp/pages/CotizacionesContent.tsx
+- components/sgp/pages/RequerimientosContent.tsx
+- lib/sgp/recursosRepository.ts
+
+### Restricciones respetadas
+- No se modificó Supabase SQL.
+- No se modificó schema.
+- No se modificó .env.local.
+- No se modificó Google Drive.
+- No se modificaron APIs.
+- No se alteraron históricos, IDs ni precios.
+- No se instalaron paquetes.
+
+### Validación
+- npx eslint focalizado: pasa con 0 errores y warnings de deuda técnica temporal.
+- npm run build: pasa correctamente.
+- Validación manual: escritura fluida en Descripción y eliminación bloqueada fuera de modo edición.

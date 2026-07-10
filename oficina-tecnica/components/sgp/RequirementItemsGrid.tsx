@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
+import { memo, useCallback, useDeferredValue, useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import { usePathname } from "next/navigation";
 import type { Recurso, ResourceFileMeta } from "@/lib/sgp/demoData";
 import { formatCurrencyNumber, formatDate } from "@/lib/sgp/utils";
@@ -121,10 +121,12 @@ type RequirementItemContext = {
 
 type AutoField = "fabricante" | "descripcion" | "recurso_a_suministrar";
 
-type ActiveAuto = {
-  rowId: string;
-  field: AutoField;
-  query: string;
+type SearchableResource = {
+  resource: Recurso;
+  codigoFabricante: string;
+  codigoEka: string;
+  codigoRecurso: string;
+  descripcion: string;
 };
 
 type PreviewState = {
@@ -580,6 +582,240 @@ function normalizeSearchText(value: string): string {
     .trim();
 }
 
+type DraftTextCellProps = {
+  value: string;
+  className: string;
+  onCommit: (value: string) => void;
+};
+
+const DraftTextCell = memo(function DraftTextCell({ value, className, onCommit }: DraftTextCellProps) {
+  const [draft, setDraft] = useState(value);
+
+  useEffect(() => {
+    setDraft(value);
+  }, [value]);
+
+  function commit(nextValue = draft) {
+    if (nextValue !== value) onCommit(nextValue);
+  }
+
+  return (
+    <input
+      value={draft}
+      onChange={(event) => setDraft(event.target.value)}
+      onBlur={() => commit()}
+      onKeyDown={(event) => {
+        if (event.key === "Enter") {
+          commit(event.currentTarget.value);
+          event.currentTarget.blur();
+        }
+        if (event.key === "Escape") {
+          setDraft(value);
+          event.currentTarget.blur();
+        }
+      }}
+      className={className}
+    />
+  );
+});
+
+type DraftTextareaCellProps = {
+  value: string;
+  className: string;
+  maxLength?: number;
+  onCommit: (value: string) => void;
+};
+
+const DraftTextareaCell = memo(function DraftTextareaCell({ value, className, maxLength, onCommit }: DraftTextareaCellProps) {
+  const [draft, setDraft] = useState(value);
+
+  useEffect(() => {
+    setDraft(value);
+  }, [value]);
+
+  function commit(nextValue = draft) {
+    if (nextValue !== value) onCommit(nextValue);
+  }
+
+  return (
+    <textarea
+      value={draft}
+      maxLength={maxLength}
+      onChange={(event) => setDraft(event.target.value)}
+      onBlur={() => commit()}
+      onKeyDown={(event) => {
+        if (event.key === "Enter" && event.altKey) {
+          event.preventDefault();
+          const target = event.currentTarget;
+          const start = target.selectionStart ?? draft.length;
+          const end = target.selectionEnd ?? draft.length;
+          const nextValue = `${draft.slice(0, start)}\n${draft.slice(end)}`;
+          setDraft(nextValue);
+          window.requestAnimationFrame(() => {
+            target.selectionStart = start + 1;
+            target.selectionEnd = start + 1;
+          });
+          return;
+        }
+        if (event.key === "Enter" && !event.shiftKey) {
+          event.preventDefault();
+          commit(event.currentTarget.value);
+          event.currentTarget.blur();
+        }
+        if (event.key === "Escape") {
+          setDraft(value);
+          event.currentTarget.blur();
+        }
+      }}
+      className={className}
+    />
+  );
+});
+
+type ResourceAutocompleteCellProps = {
+  field: AutoField;
+  value: string;
+  className: string;
+  searchableResources: SearchableResource[];
+  dropdownClassName: string;
+  renderSuggestion: (resource: Recurso) => ReactNode;
+  onCommit: (value: string) => void;
+  onSelectResource: (resource: Recurso) => void;
+};
+
+function resourceMatchesQuery(item: SearchableResource, field: AutoField, query: string): boolean {
+  if (!query) return true;
+  if (field === "fabricante") {
+    return item.codigoFabricante.includes(query) || item.codigoEka.includes(query) || item.codigoRecurso.includes(query);
+  }
+  return item.descripcion.includes(query) || item.codigoFabricante.includes(query) || item.codigoEka.includes(query) || item.codigoRecurso.includes(query);
+}
+
+function findExactResourceMatch(items: SearchableResource[], field: AutoField, rawValue: string): Recurso | null {
+  if (field === "recurso_a_suministrar") return null;
+  const value = normalizeSearchText(rawValue);
+  if (!value) return null;
+  return (
+    items.find((item) => {
+      const byDescripcion = item.descripcion === value;
+      const byFabricante = item.codigoFabricante === value || item.codigoEka === value || item.codigoRecurso === value;
+      if (field === "fabricante") return byFabricante;
+      return byDescripcion || byFabricante;
+    })?.resource ?? null
+  );
+}
+
+const ResourceAutocompleteCell = memo(function ResourceAutocompleteCell({
+  field,
+  value,
+  className,
+  searchableResources,
+  dropdownClassName,
+  renderSuggestion,
+  onCommit,
+  onSelectResource,
+}: ResourceAutocompleteCellProps) {
+  const [draft, setDraft] = useState(value);
+  const [isOpen, setIsOpen] = useState(false);
+  const [activeIndex, setActiveIndex] = useState(0);
+  const deferredQuery = useDeferredValue(draft);
+  const inputRef = useRef<HTMLInputElement | null>(null);
+
+  useEffect(() => {
+    setDraft(value);
+  }, [value]);
+
+  const suggestions = useMemo(() => {
+    const query = normalizeSearchText(deferredQuery);
+    if (!isOpen || query.length < 2) return [];
+    return searchableResources.filter((item) => resourceMatchesQuery(item, field, query)).slice(0, 20).map((item) => item.resource);
+  }, [deferredQuery, field, isOpen, searchableResources]);
+
+  useEffect(() => {
+    setActiveIndex(0);
+  }, [deferredQuery, field]);
+
+  function commit(nextValue = draft) {
+    if (nextValue !== value) onCommit(nextValue);
+    const exactMatch = findExactResourceMatch(searchableResources, field, nextValue);
+    if (exactMatch) onSelectResource(exactMatch);
+  }
+
+  function selectSuggestion(resource: Recurso) {
+    onSelectResource(resource);
+    setDraft(field === "fabricante" ? resource.codigo_fabricante || resource.codigo_eka || resource.codigo_recurso || "" : resource.descripcion || "");
+    setIsOpen(false);
+    window.requestAnimationFrame(() => inputRef.current?.focus());
+  }
+
+  return (
+    <div className="relative">
+      <input
+        ref={inputRef}
+        value={draft}
+        onFocus={() => setIsOpen(true)}
+        onChange={(event) => {
+          setDraft(event.target.value);
+          setIsOpen(true);
+        }}
+        onBlur={() => {
+          commit();
+          window.setTimeout(() => setIsOpen(false), 80);
+        }}
+        onKeyDown={(event) => {
+          if (event.key === "Escape") {
+            setDraft(value);
+            setIsOpen(false);
+            event.currentTarget.blur();
+            return;
+          }
+          if (event.key === "ArrowDown" && suggestions.length > 0) {
+            event.preventDefault();
+            setActiveIndex((prev) => (prev + 1) % suggestions.length);
+            return;
+          }
+          if (event.key === "ArrowUp" && suggestions.length > 0) {
+            event.preventDefault();
+            setActiveIndex((prev) => (prev - 1 + suggestions.length) % suggestions.length);
+            return;
+          }
+          if (event.key === "Enter") {
+            event.preventDefault();
+            if (suggestions.length > 0 && isOpen) {
+              selectSuggestion(suggestions[Math.max(0, Math.min(activeIndex, suggestions.length - 1))]);
+              return;
+            }
+            commit(event.currentTarget.value);
+            event.currentTarget.blur();
+          }
+        }}
+        className={className}
+      />
+      {isOpen && suggestions.length > 0 ? (
+        <div className={dropdownClassName}>
+          {suggestions.map((resource, idx) => (
+            <button
+              key={resource.id}
+              type="button"
+              onMouseEnter={() => setActiveIndex(idx)}
+              onMouseDown={(event) => {
+                event.preventDefault();
+                event.stopPropagation();
+                selectSuggestion(resource);
+              }}
+              className={`block w-full border-b border-stone-100 px-2 py-1 text-left text-xs ${
+                idx === activeIndex ? "bg-stone-100" : "hover:bg-stone-50"
+              }`}
+            >
+              {renderSuggestion(resource)}
+            </button>
+          ))}
+        </div>
+      ) : null}
+    </div>
+  );
+});
+
 export function RequirementItemsGrid({
   items,
   recursos,
@@ -627,12 +863,24 @@ export function RequirementItemsGrid({
   const isColumnHidden = useCallback((key: ColumnKey) => hiddenColumnSet.has(key), [hiddenColumnSet]);
   const [editingMode, setEditingMode] = useState(false);
   const canUseGridActions = !isColumnHidden("acciones");
-  const [activeAuto, setActiveAuto] = useState<ActiveAuto | null>(null);
-  const [activeAutoIndex, setActiveAutoIndex] = useState(0);
   const [preview, setPreview] = useState<PreviewState>(null);
   const [numericDrafts, setNumericDrafts] = useState<Record<string, string>>({});
   const [columnFilters, setColumnFilters] = useState<Partial<Record<ColumnKey, string>>>({});
   const [sortConfig, setSortConfig] = useState<SortConfig>({ key: null, direction: null });
+  const searchableResources = useMemo<SearchableResource[]>(
+    () =>
+      recursos
+        // Los recursos inactivos no se ofrecen para nuevas selecciones.
+        .filter((resource) => resource.estado !== "Inactivo")
+        .map((resource) => ({
+          resource,
+          codigoFabricante: normalizeSearchText(resource.codigo_fabricante),
+          codigoEka: normalizeSearchText(resource.codigo_eka),
+          codigoRecurso: normalizeSearchText(resource.codigo_recurso),
+          descripcion: normalizeSearchText(resource.descripcion),
+        })),
+    [recursos],
+  );
   const [columnWidths, setColumnWidths] = useState<Record<ColumnKey, number>>(() =>
     readRequirementGridWidths(
       buildRequirementGridWidthStorageKey(pathname, widthContextKey),
@@ -1012,78 +1260,9 @@ export function RequirementItemsGrid({
     return sorted;
   }, [items, columnFilters, sortConfig, getColumnFilterValue, getColumnSortValue]);
 
-  const suggestions = useMemo(() => {
-    if (!activeAuto) return [];
-    const query = normalizeSearchText(activeAuto.query);
-    const filtered = recursos.filter((item) => {
-      if (!query) return true;
-      const codigoFabricante = normalizeSearchText(item.codigo_fabricante);
-      const codigoEka = normalizeSearchText(item.codigo_eka);
-      const codigoRecurso = normalizeSearchText(item.codigo_recurso);
-      const descripcion = normalizeSearchText(item.descripcion);
-      if (activeAuto.field === "fabricante") {
-        return codigoFabricante.includes(query) || codigoEka.includes(query) || codigoRecurso.includes(query);
-      }
-      if (activeAuto.field === "recurso_a_suministrar") {
-        return descripcion.includes(query) || codigoFabricante.includes(query) || codigoEka.includes(query) || codigoRecurso.includes(query);
-      }
-      return descripcion.includes(query) || codigoFabricante.includes(query) || codigoEka.includes(query) || codigoRecurso.includes(query);
-    });
-    // Keep all resources available even if already used in other rows.
-    // We only limit render count for UX/performance, not by "used" state.
-    return filtered.slice(0, 30);
-  }, [activeAuto, recursos]);
-
-  useEffect(() => {
-    if (process.env.NODE_ENV !== "development" || !activeAuto) return;
-    console.debug("[RequirementItemsGrid] resource autocomplete", {
-      recursosCount: recursos.length,
-      query: activeAuto.query,
-      matchesCount: suggestions.length,
-      field: activeAuto.field,
-    });
-  }, [activeAuto, recursos.length, suggestions.length]);
-
-  useEffect(() => {
-    setActiveAutoIndex(0);
-  }, [activeAuto?.rowId, activeAuto?.field, activeAuto?.query]);
-
-  function openAuto(rowId: string, field: AutoField, currentValue: string) {
+  function requestRemoveRow(rowId: string) {
     if (!editingMode) return;
-    setActiveAutoIndex(0);
-    setActiveAuto({ rowId, field, query: currentValue });
-  }
-
-  function selectAutoSuggestion(rowId: string, index = activeAutoIndex) {
-    if (!suggestions.length) return;
-    const safeIndex = Math.max(0, Math.min(index, suggestions.length - 1));
-    const selected = suggestions[safeIndex];
-    if (!selected) return;
-    onSelectRecurso(rowId, selected.id);
-    setActiveAuto(null);
-  }
-
-  function trySelectResourceByText(rowId: string, field: AutoField, rawValue: string) {
-    const value = normalizeSearchText(rawValue);
-    if (!value) return;
-    const match = recursos.find((resource) => {
-      const byDescripcion = normalizeSearchText(resource.descripcion) === value;
-      const byFabricante =
-        normalizeSearchText(resource.codigo_fabricante) === value ||
-        normalizeSearchText(resource.codigo_eka) === value ||
-        normalizeSearchText(resource.codigo_recurso) === value;
-      if (field === "fabricante") return byFabricante;
-      if (field === "descripcion") return byDescripcion || byFabricante;
-      return false;
-    });
-    if (match) {
-      onSelectRecurso(rowId, match.id);
-      setActiveAuto(null);
-    }
-  }
-
-  function closeAutoWithDelay() {
-    window.setTimeout(() => setActiveAuto(null), 120);
+    onRemoveRow(rowId);
   }
 
   async function toggleTableEdit() {
@@ -1180,25 +1359,6 @@ export function RequirementItemsGrid({
   function numericInputValue(rowId: string, field: NumericField, fallbackValue: number): string {
     const key = numericDraftKey(rowId, field);
     return numericDrafts[key] ?? formatEditableNumber(fallbackValue);
-  }
-
-  function handleAltEnterInTextarea(
-    event: React.KeyboardEvent<HTMLTextAreaElement>,
-    rowId: string,
-    currentValue: string,
-    key: "observaciones_item",
-  ) {
-    if (!(event.key === "Enter" && event.altKey)) return;
-    event.preventDefault();
-    const target = event.currentTarget;
-    const start = target.selectionStart ?? currentValue.length;
-    const end = target.selectionEnd ?? currentValue.length;
-    const nextValue = `${currentValue.slice(0, start)}\n${currentValue.slice(end)}`;
-    onPatchRow(rowId, { [key]: nextValue } as Partial<EditableRequirementItem>);
-    window.requestAnimationFrame(() => {
-      target.selectionStart = start + 1;
-      target.selectionEnd = start + 1;
-    });
   }
 
   function onResizeStart(event: React.MouseEvent, key: ColumnKey) {
@@ -1636,14 +1796,9 @@ export function RequirementItemsGrid({
           </thead>
           <tbody>
             {filteredSortedItems.map((item, index) => {
-              const fabAutoActive = activeAuto?.rowId === item.id && activeAuto.field === "fabricante";
-              const descAutoActive = activeAuto?.rowId === item.id && activeAuto.field === "descripcion";
-              const suministroAutoActive = activeAuto?.rowId === item.id && activeAuto.field === "recurso_a_suministrar";
               const context = getItemContext(item.id);
               const dynamicRowHeight = rowHeightPx(item);
-              const fabricanteCellStyle = fabAutoActive
-                ? { ...cellStyle("codigo_fabricante", codigoFabricanteSticky), zIndex: 260 }
-                : cellStyle("codigo_fabricante", codigoFabricanteSticky);
+              const fabricanteCellStyle = cellStyle("codigo_fabricante", codigoFabricanteSticky);
               const multilineCellHeight = Math.max(
                 24,
                 Math.max(multilineRows(item.informacion_adicional), multilineRows(item.observaciones_item)) * 16 + 8,
@@ -1814,64 +1969,26 @@ export function RequirementItemsGrid({
                   ) : null}
 
                   <td style={fabricanteCellStyle} className="px-1.5 py-0.5">
-                    <div className={`relative ${fabAutoActive ? "z-[140]" : ""}`}>
-                      {editingMode ? (
-                        <input
-                          value={fabAutoActive ? activeAuto?.query ?? "" : item.codigo_fabricante}
-                          onFocus={() => openAuto(item.id, "fabricante", item.codigo_fabricante)}
-                          onChange={(event) => {
-                            const nextValue = event.target.value;
-                            onPatchRow(item.id, { codigo_fabricante: nextValue });
-                            setActiveAutoIndex(0);
-                            setActiveAuto({ rowId: item.id, field: "fabricante", query: nextValue });
-                          }}
-                          onBlur={(event) => {
-                            trySelectResourceByText(item.id, "fabricante", event.currentTarget.value);
-                            closeAutoWithDelay();
-                          }}
-                          onKeyDown={(event) => {
-                            if (event.key === "Escape") setActiveAuto(null);
-                            if (event.key === "ArrowDown" && fabAutoActive && suggestions.length > 0) {
-                              event.preventDefault();
-                              setActiveAutoIndex((prev) => (prev + 1) % suggestions.length);
-                            }
-                            if (event.key === "ArrowUp" && fabAutoActive && suggestions.length > 0) {
-                              event.preventDefault();
-                              setActiveAutoIndex((prev) => (prev - 1 + suggestions.length) % suggestions.length);
-                            }
-                            if (event.key === "Enter" && fabAutoActive && suggestions.length > 0) {
-                              event.preventDefault();
-                              selectAutoSuggestion(item.id);
-                            }
-                          }}
-                          className={cellClassName()}
-                        />
-                      ) : (
-                        <span className={readCellClassName()}>{item.codigo_fabricante || "-"}</span>
-                      )}
-                      {fabAutoActive && suggestions.length > 0 ? (
-                        <div className="absolute left-0 top-full z-[320] mt-1 max-h-40 w-full min-w-[260px] overflow-y-auto rounded border border-border bg-white shadow-xl">
-                          {suggestions.map((resource, idx) => (
-                            <button
-                              key={resource.id}
-                              onMouseEnter={() => setActiveAutoIndex(idx)}
-                              onMouseDown={() => {
-                                selectAutoSuggestion(item.id, idx);
-                              }}
-                              className={`block w-full border-b border-stone-100 px-2 py-1 text-left text-xs ${
-                                idx === activeAutoIndex ? "bg-stone-100" : "hover:bg-stone-50"
-                              }`}
-                            >
-                              <span className="block truncate text-[11px]">
-                                {[resource.codigo_fabricante, resource.codigo_eka, resource.codigo_recurso]
-                                  .filter((code, codeIndex, arr) => !!code && arr.indexOf(code) === codeIndex)
-                                  .join(" · ") || "-"}
-                              </span>
-                            </button>
-                          ))}
-                        </div>
-                      ) : null}
-                    </div>
+                    {editingMode ? (
+                      <ResourceAutocompleteCell
+                        field="fabricante"
+                        value={item.codigo_fabricante}
+                        searchableResources={searchableResources}
+                        onCommit={(value) => onPatchRow(item.id, { codigo_fabricante: value })}
+                        onSelectResource={(resource) => onSelectRecurso(item.id, resource.id)}
+                        className={cellClassName()}
+                        dropdownClassName="absolute left-0 top-full z-[320] mt-1 max-h-40 w-full min-w-[260px] overflow-y-auto rounded border border-border bg-white shadow-xl"
+                        renderSuggestion={(resource) => (
+                          <span className="block truncate text-[11px]">
+                            {[resource.codigo_fabricante, resource.codigo_eka, resource.codigo_recurso]
+                              .filter((code, codeIndex, arr) => !!code && arr.indexOf(code) === codeIndex)
+                              .join(" · ") || "-"}
+                          </span>
+                        )}
+                      />
+                    ) : (
+                      <span className={readCellClassName()}>{item.codigo_fabricante || "-"}</span>
+                    )}
                   </td>
 
                   <td style={cellStyle("tipo_recurso")} className="px-1.5 py-0.5">
@@ -1885,68 +2002,28 @@ export function RequirementItemsGrid({
                   </td>
 
                   <td style={cellStyle("descripcion")} className="px-1.5 py-0.5">
-                    <div className="relative">
-                      {editingMode ? (
-                        <input
-                          value={descAutoActive ? activeAuto?.query ?? "" : item.descripcion}
-                          onFocus={() => openAuto(item.id, "descripcion", item.descripcion)}
-                          onChange={(event) => {
-                            const nextValue = event.target.value;
-                            onPatchRow(item.id, { descripcion: nextValue });
-                            setActiveAutoIndex(0);
-                            setActiveAuto({ rowId: item.id, field: "descripcion", query: nextValue });
-                          }}
-                          onBlur={(event) => {
-                            trySelectResourceByText(item.id, "descripcion", event.currentTarget.value);
-                            closeAutoWithDelay();
-                          }}
-                          onKeyDown={(event) => {
-                            if (event.key === "Escape") setActiveAuto(null);
-                            if (event.key === "ArrowDown" && descAutoActive && suggestions.length > 0) {
-                              event.preventDefault();
-                              setActiveAutoIndex((prev) => (prev + 1) % suggestions.length);
-                            }
-                            if (event.key === "ArrowUp" && descAutoActive && suggestions.length > 0) {
-                              event.preventDefault();
-                              setActiveAutoIndex((prev) => (prev - 1 + suggestions.length) % suggestions.length);
-                            }
-                            if (event.key === "Enter" && descAutoActive && suggestions.length > 0) {
-                              event.preventDefault();
-                              selectAutoSuggestion(item.id);
-                            }
-                          }}
-                          className={cellClassName()}
-                        />
-                      ) : (
-                        <span className={readCellClassName()}>{item.descripcion || "-"}</span>
-                      )}
-                      {descAutoActive && suggestions.length > 0 ? (
-                        <div className="absolute left-0 top-full z-[120] mt-1 max-h-40 w-[420px] overflow-y-auto rounded border border-border bg-white shadow-xl">
-                          {suggestions.map((resource, idx) => (
-                            <button
-                              key={resource.id}
-                              onMouseEnter={() => setActiveAutoIndex(idx)}
-                              onMouseDown={() => {
-                                selectAutoSuggestion(item.id, idx);
-                              }}
-                              className={`block w-full border-b border-stone-100 px-2 py-1 text-left text-xs ${
-                                idx === activeAutoIndex ? "bg-stone-100" : "hover:bg-stone-50"
-                              }`}
-                            >
-                              {resource.descripcion}
-                            </button>
-                          ))}
-                        </div>
-                      ) : null}
-                    </div>
+                    {editingMode ? (
+                      <ResourceAutocompleteCell
+                        field="descripcion"
+                        value={item.descripcion}
+                        searchableResources={searchableResources}
+                        onCommit={(value) => onPatchRow(item.id, { descripcion: value })}
+                        onSelectResource={(resource) => onSelectRecurso(item.id, resource.id)}
+                        className={cellClassName()}
+                        dropdownClassName="absolute left-0 top-full z-[120] mt-1 max-h-40 w-[420px] overflow-y-auto rounded border border-border bg-white shadow-xl"
+                        renderSuggestion={(resource) => resource.descripcion}
+                      />
+                    ) : (
+                      <span className={readCellClassName()}>{item.descripcion || "-"}</span>
+                    )}
                   </td>
 
                   <td style={cellStyle("informacion_adicional")} className="px-1.5 py-0.5">
                     <div style={{ height: `${multilineCellHeight}px` }} className="w-full">
                       {editingMode ? (
-                        <textarea
+                        <DraftTextareaCell
                           value={item.informacion_adicional}
-                          onChange={(e) => onPatchRow(item.id, { informacion_adicional: e.target.value })}
+                          onCommit={(value) => onPatchRow(item.id, { informacion_adicional: value })}
                           maxLength={180}
                           className="h-full w-full resize-none overflow-y-auto rounded border border-stone-300 bg-white px-1.5 py-1 text-[11px] leading-4 outline-none box-border focus:border-stone-500"
                         />
@@ -1964,10 +2041,9 @@ export function RequirementItemsGrid({
                   <td style={cellStyle("observaciones_item")} className="px-1.5 py-0.5">
                     <div style={{ height: `${multilineCellHeight}px` }} className="w-full">
                       {editingMode ? (
-                        <textarea
+                        <DraftTextareaCell
                           value={item.observaciones_item}
-                          onChange={(e) => onPatchRow(item.id, { observaciones_item: e.target.value })}
-                          onKeyDown={(event) => handleAltEnterInTextarea(event, item.id, item.observaciones_item, "observaciones_item")}
+                          onCommit={(value) => onPatchRow(item.id, { observaciones_item: value })}
                           className="h-full w-full resize-none overflow-y-auto overflow-x-hidden rounded border border-stone-300 bg-white px-1.5 py-1 text-[11px] leading-4 outline-none box-border focus:border-stone-500"
                         />
                       ) : (
@@ -2175,56 +2251,20 @@ export function RequirementItemsGrid({
                     {editingMode ? <select value={item.estado} onChange={(e) => onPatchRow(item.id, { estado: e.target.value })} className={selectCellClassName()}>{statusOptions.map((opt) => <option key={opt} value={opt}>{opt}</option>)}</select> : <span className={readSelectCellClassName()}>{item.estado}</span>}
                   </td>
                   <td style={cellStyle("recurso_a_suministrar")} className="px-1.5 py-0.5">
-                    <div className="relative">
-                      {editingMode ? (
-                        <input
-                          value={suministroAutoActive ? activeAuto?.query ?? "" : item.recurso_a_suministrar}
-                          onFocus={() => openAuto(item.id, "recurso_a_suministrar", item.recurso_a_suministrar)}
-                          onChange={(event) => {
-                            const nextValue = event.target.value;
-                            onPatchRow(item.id, { recurso_a_suministrar: nextValue });
-                            setActiveAuto({ rowId: item.id, field: "recurso_a_suministrar", query: nextValue });
-                          }}
-                          onBlur={closeAutoWithDelay}
-                          onKeyDown={(event) => {
-                            if (event.key === "Escape") setActiveAuto(null);
-                            if (event.key === "ArrowDown" && suministroAutoActive && suggestions.length > 0) {
-                              event.preventDefault();
-                              setActiveAutoIndex((prev) => (prev + 1) % suggestions.length);
-                            }
-                            if (event.key === "ArrowUp" && suministroAutoActive && suggestions.length > 0) {
-                              event.preventDefault();
-                              setActiveAutoIndex((prev) => (prev - 1 + suggestions.length) % suggestions.length);
-                            }
-                            if (event.key === "Enter" && suggestions.length > 0 && suministroAutoActive) {
-                              event.preventDefault();
-                              selectAutoSuggestion(item.id);
-                            }
-                          }}
-                          className={cellClassName()}
-                        />
-                      ) : (
-                        <span className={readCellClassName()}>{item.recurso_a_suministrar || "-"}</span>
-                      )}
-                      {suministroAutoActive && suggestions.length > 0 ? (
-                        <div className="absolute left-0 top-full z-[120] mt-1 max-h-40 w-[420px] overflow-y-auto rounded border border-border bg-white shadow-lg">
-                          {suggestions.map((resource, idx) => (
-                            <button
-                              key={resource.id}
-                              onMouseEnter={() => setActiveAutoIndex(idx)}
-                              onMouseDown={() => {
-                                selectAutoSuggestion(item.id, idx);
-                              }}
-                              className={`block w-full border-b border-stone-100 px-2 py-1 text-left text-xs ${
-                                idx === activeAutoIndex ? "bg-stone-100" : "hover:bg-stone-50"
-                              }`}
-                            >
-                              {resource.descripcion}
-                            </button>
-                          ))}
-                        </div>
-                      ) : null}
-                    </div>
+                    {editingMode ? (
+                      <ResourceAutocompleteCell
+                        field="recurso_a_suministrar"
+                        value={item.recurso_a_suministrar}
+                        searchableResources={searchableResources}
+                        onCommit={(value) => onPatchRow(item.id, { recurso_a_suministrar: value })}
+                        onSelectResource={(resource) => onSelectRecurso(item.id, resource.id)}
+                        className={cellClassName()}
+                        dropdownClassName="absolute left-0 top-full z-[120] mt-1 max-h-40 w-[420px] overflow-y-auto rounded border border-border bg-white shadow-lg"
+                        renderSuggestion={(resource) => resource.descripcion}
+                      />
+                    ) : (
+                      <span className={readCellClassName()}>{item.recurso_a_suministrar || "-"}</span>
+                    )}
                   </td>
                   <td style={cellStyle("ficha_tecnica_a_suministrar")} className="px-1.5 py-0.5">
                     {editingMode ? (
@@ -2279,8 +2319,20 @@ export function RequirementItemsGrid({
                   <td style={cellStyle("proveedor")} className="px-1.5 py-0.5">
                     {editingMode ? <select value={item.proveedor} onChange={(e) => onPatchRow(item.id, { proveedor: e.target.value })} className={selectCellClassName()}>{providerOptions.map((opt) => <option key={opt} value={opt}>{opt}</option>)}</select> : <span className={readSelectCellClassName()}>{item.proveedor}</span>}
                   </td>
-                  <td style={cellStyle("condicion_pago")} className="px-1.5 py-0.5">{editingMode ? <input value={item.condicion_pago} onChange={(e) => onPatchRow(item.id, { condicion_pago: e.target.value })} className={cellClassName()} /> : <span className={readCellClassName()}>{item.condicion_pago || "-"}</span>}</td>
-                  <td style={cellStyle("tiempo_entrega")} className="px-1.5 py-0.5">{editingMode ? <input value={item.tiempo_entrega} onChange={(e) => onPatchRow(item.id, { tiempo_entrega: e.target.value })} className={cellClassName()} /> : <span className={readCellClassName()}>{item.tiempo_entrega || "-"}</span>}</td>
+                  <td style={cellStyle("condicion_pago")} className="px-1.5 py-0.5">
+                    {editingMode ? (
+                      <DraftTextCell value={item.condicion_pago} onCommit={(value) => onPatchRow(item.id, { condicion_pago: value })} className={cellClassName()} />
+                    ) : (
+                      <span className={readCellClassName()}>{item.condicion_pago || "-"}</span>
+                    )}
+                  </td>
+                  <td style={cellStyle("tiempo_entrega")} className="px-1.5 py-0.5">
+                    {editingMode ? (
+                      <DraftTextCell value={item.tiempo_entrega} onCommit={(value) => onPatchRow(item.id, { tiempo_entrega: value })} className={cellClassName()} />
+                    ) : (
+                      <span className={readCellClassName()}>{item.tiempo_entrega || "-"}</span>
+                    )}
+                  </td>
                   <td style={cellStyle("eq")} className="px-1.5 py-0.5">{editingMode ? <select value={item.eq} onChange={(e) => onPatchRow(item.id, { eq: e.target.value })} className={selectCellClassName()}>{eqOptions.map((opt) => <option key={opt} value={opt}>{opt}</option>)}</select> : <span className={readSelectCellClassName()}>{item.eq || "-"}</span>}</td>
                   <td style={cellStyle("eq_fecha_aprob")} className="px-1.5 py-0.5">{editingMode ? <DateTextInput value={item.eq_fecha_aprob} onChange={(value) => onPatchRow(item.id, { eq_fecha_aprob: value })} className={dateCellClassName()} /> : <span className={readDateCellClassName()}>{formatDate(item.eq_fecha_aprob) || "-"}</span>}</td>
                   <td style={cellStyle("ll")} className="px-1.5 py-0.5">{editingMode ? <select value={item.ll} onChange={(e) => onPatchRow(item.id, { ll: e.target.value })} className={selectCellClassName()}>{llOptions.map((opt) => <option key={opt} value={opt}>{opt}</option>)}</select> : <span className={readSelectCellClassName()}>{item.ll || "-"}</span>}</td>
@@ -2289,9 +2341,21 @@ export function RequirementItemsGrid({
                   <td style={cellStyle("hb_fecha_aprob")} className="px-1.5 py-0.5">{editingMode ? <DateTextInput value={item.hb_fecha_aprob} onChange={(value) => onPatchRow(item.id, { hb_fecha_aprob: value })} className={dateCellClassName()} /> : <span className={readDateCellClassName()}>{formatDate(item.hb_fecha_aprob) || "-"}</span>}</td>
                   <td style={cellStyle("logistica_compra")} className="px-1.5 py-0.5">{editingMode ? <select value={item.logistica_compra} onChange={(e) => onPatchRow(item.id, { logistica_compra: e.target.value })} className={selectCellClassName()}>{logisticaCompraOptions.map((opt) => <option key={opt} value={opt}>{opt}</option>)}</select> : <span className={readSelectCellClassName()}>{item.logistica_compra || "-"}</span>}</td>
                   <td style={cellStyle("fecha_compra")} className="px-1.5 py-0.5">{editingMode ? <DateTextInput value={item.fecha_compra} onChange={(value) => onPatchRow(item.id, { fecha_compra: value })} className={dateCellClassName()} /> : <span className={readDateCellClassName()}>{formatDate(item.fecha_compra) || "-"}</span>}</td>
-                  <td style={cellStyle("oc_os_recurso")} className="px-1.5 py-0.5">{editingMode ? <input value={item.oc_os_recurso} onChange={(e) => onPatchRow(item.id, { oc_os_recurso: e.target.value })} className={cellClassName()} /> : <span className={readCellClassName()}>{item.oc_os_recurso || "-"}</span>}</td>
+                  <td style={cellStyle("oc_os_recurso")} className="px-1.5 py-0.5">
+                    {editingMode ? (
+                      <DraftTextCell value={item.oc_os_recurso} onCommit={(value) => onPatchRow(item.id, { oc_os_recurso: value })} className={cellClassName()} />
+                    ) : (
+                      <span className={readCellClassName()}>{item.oc_os_recurso || "-"}</span>
+                    )}
+                  </td>
                   <td style={cellStyle("fecha_entrega")} className="px-1.5 py-0.5">{editingMode ? <DateTextInput value={item.fecha_entrega} onChange={(value) => onPatchRow(item.id, { fecha_entrega: value })} className={dateCellClassName()} /> : <span className={readDateCellClassName()}>{formatDate(item.fecha_entrega) || "-"}</span>}</td>
-                  <td style={cellStyle("guia_remision")} className="px-1.5 py-0.5">{editingMode ? <input value={item.guia_remision} onChange={(e) => onPatchRow(item.id, { guia_remision: e.target.value })} className={cellClassName()} /> : <span className={readCellClassName()}>{item.guia_remision || "-"}</span>}</td>
+                  <td style={cellStyle("guia_remision")} className="px-1.5 py-0.5">
+                    {editingMode ? (
+                      <DraftTextCell value={item.guia_remision} onCommit={(value) => onPatchRow(item.id, { guia_remision: value })} className={cellClassName()} />
+                    ) : (
+                      <span className={readCellClassName()}>{item.guia_remision || "-"}</span>
+                    )}
+                  </td>
                   <td style={cellStyle("archivo_guia")} className="px-1.5 py-0.5">
                     {editingMode ? (
                       <div className="flex w-full items-center gap-1">
@@ -2335,9 +2399,13 @@ export function RequirementItemsGrid({
                     )}
                   </td>
                   <td style={cellStyle("acciones")} className="px-1.5 py-0.5">
-                    <button onClick={() => onRemoveRow(item.id)} className="rounded border border-stone-300 px-1.5 py-0.5 text-[10px] hover:bg-stone-100">
-                      Del
-                    </button>
+                    {editingMode ? (
+                      <button onClick={() => requestRemoveRow(item.id)} className="rounded border border-stone-300 px-1.5 py-0.5 text-[10px] hover:bg-stone-100">
+                        Del
+                      </button>
+                    ) : (
+                      <span className="text-[10px] font-semibold text-stone-300">-</span>
+                    )}
                   </td>
                 </tr>
               );
