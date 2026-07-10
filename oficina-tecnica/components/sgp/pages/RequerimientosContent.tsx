@@ -278,6 +278,8 @@ export default function RequerimientosPage() {
   const [requerimientos, setRequerimientos] = useState<Requerimiento[]>([]);
   const [cotizaciones, setCotizaciones] = useState<Cotizacion[]>([]);
   const [recursos] = useState(() => demoData.listRecursos());
+  // Los recursos inactivos se conservan para historicos, pero no se ofrecen para nuevas selecciones.
+  const selectableRecursos = useMemo(() => recursos.filter((recurso) => recurso.estado !== "Inactivo"), [recursos]);
   const [detalleItems, setDetalleItems] = useState<DetalleRequerimientoItem[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [draft, setDraft] = useState<Requerimiento | null>(null);
@@ -551,7 +553,7 @@ export default function RequerimientosPage() {
 
   function selectRecurso(rowId: string, recursoId: string) {
     const recurso = recursos.find((item) => item.id === recursoId);
-    if (!recurso) return;
+    if (!recurso || recurso.estado === "Inactivo") return;
     markWorkspaceDirty();
     setWorkspaceItems((prev) =>
       prev.map((row) => {
@@ -1086,7 +1088,7 @@ export default function RequerimientosPage() {
         cliente={selectedCotizacion?.cliente ?? "Sin definir"}
         unidadTrabajo={selectedCotizacion?.unidad_trabajo ?? "Sin definir"}
         cotizacionMoneda={cotizacionMoneda}
-        recursos={recursos}
+        recursos={selectableRecursos}
         draft={draft}
         items={workspaceItems}
         resourceTypeSummary={resourceTypeSummary}

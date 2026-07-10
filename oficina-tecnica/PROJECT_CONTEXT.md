@@ -234,3 +234,46 @@ Solo se considera recurso inactivo cuando estado === "Inactivo". Los recursos co
 ### Validación reportada
 - npm run lint: pasa sin errores, con 87 warnings conocidos.
 - npm run build: pasa correctamente con Next.js 16.2.7.
+
+## 2026-07-10 | Cotizaciones/Requerimientos | Autocomplete de recursos reales activos
+
+### Proyecto
+TRABAJO-MODELO02 | Oficina Técnica IA
+
+### Módulos
+- Cotizaciones
+- Requerimientos
+- Recursos
+
+### Problema detectado
+En /cotizaciones, dentro del modal de datos de cotización y detalle de requerimiento, al escribir en la columna Descripción no aparecían los recursos reales registrados en el módulo Recursos. La grilla usaba una lista demo o incompleta.
+
+### Causa identificada
+CotizacionesContent mantenía el estado de recursos inicializado con demoData.listRecursos() y no lo reemplazaba con recursos reales al cargar datos desde Supabase. La grilla de detalle de requerimiento usaba esa prop recursos para sugerencias.
+
+### Corrección implementada
+- CotizacionesContent carga recursos reales mediante listAllRecursos() en paralelo con loadCoreAppData().
+- El modal principal conserva la lista completa para cálculos e históricos.
+- El modal de edición de RQ recibe selectableRecursos para nuevas selecciones.
+- Se excluyen únicamente recursos con estado === "Inactivo".
+- Se agregó guard para impedir seleccionar recursos inactivos por rutas alternativas.
+- Recursos con estado null, undefined, vacío, "Activo", "Por revisar" u otro valor no se ocultan por error.
+
+### Archivos modificados
+- components/sgp/pages/CotizacionesContent.tsx
+- components/sgp/pages/RequerimientosContent.tsx
+- components/sgp/technical-proposal/ResourceAutocompleteInput.tsx
+
+### Restricciones respetadas
+- No se modificó Supabase SQL.
+- No se modificó schema.
+- No se modificó .env.local.
+- No se modificó Google Drive.
+- No se modificaron APIs.
+- No se alteraron IDs históricos.
+- No se alteró lógica de precios históricos.
+
+### Validación
+- npm run lint: pasa sin errores bloqueantes, con 87 warnings conocidos.
+- npm run build: pasa correctamente.
+- Validación manual: en /cotizaciones ya aparecen recursos reales activos en el detalle de requerimiento.

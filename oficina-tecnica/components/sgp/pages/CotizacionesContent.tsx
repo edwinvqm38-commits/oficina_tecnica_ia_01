@@ -41,6 +41,7 @@ import {
 } from "@/lib/sgp/requirementsRepository";
 import { saveRequirementItemsForRequirement } from "@/lib/sgp/requirementItemsRepository";
 import { createCotizacion, CreateCotizacionError, updateCotizacion, UpdateCotizacionError } from "@/lib/sgp/quotationsRepository";
+import { listAllRecursos } from "@/lib/sgp/recursosRepository";
 import {
   debugUiState,
   attachLifecycleDiagnostics,
@@ -508,7 +509,9 @@ export default function CotizacionesPage() {
   const [cotizaciones, setCotizaciones] = useState<Cotizacion[]>([]);
   const [requerimientos, setRequerimientos] = useState<Requerimiento[]>([]);
   const [detalleItems, setDetalleItems] = useState<DetalleRequerimientoItem[]>([]);
-  const [recursos] = useState<Recurso[]>(() => demoData.listRecursos());
+  const [recursos, setRecursos] = useState<Recurso[]>(() => demoData.listRecursos());
+  // Los recursos inactivos no se ofrecen para nuevas selecciones, pero se conserva la lista completa para historicos.
+  const selectableRecursos = useMemo(() => recursos.filter((recurso) => recurso.estado !== "Inactivo"), [recursos]);
   const [modulePermissions, setModulePermissions] = useState<ModulePermissions | null>(null);
   const [isPermissionsLoading, setIsPermissionsLoading] = useState(true);
   const [isDataLoading, setIsDataLoading] = useState(true);
@@ -686,17 +689,23 @@ export default function CotizacionesPage() {
     setIsDataLoading(true);
     debugUiState("cotizaciones", "manual-refresh-start", {});
     try {
-      const result = await loadCoreAppData({ module: "cotizaciones", reason: "manual-refresh", forceRefresh: true });
+      const [result, recursosResult] = await Promise.all([
+        loadCoreAppData({ module: "cotizaciones", reason: "manual-refresh", forceRefresh: true }),
+        listAllRecursos(),
+      ]);
       const { cotizaciones: cotizacionesResult, requerimientos: requerimientosResult } = result;
       setCotizaciones(cotizacionesResult.rows.map(normalizeCotizacionDraft));
       setFilteredRowsCount(cotizacionesResult.rows.length);
       setRequerimientos(requerimientosResult.rows);
+      setRecursos(recursosResult.rows);
       setDetalleItems([]);
       setDataSource(result.source);
-      setWarning(
+      const sourceMessage =
         result.source === "supabase"
           ? "Origen de datos: Supabase. Edición disponible según permisos; creación requiere can_create."
-          : result.warning,
+          : result.warning;
+      setWarning(
+        recursosResult.warning ? [sourceMessage, recursosResult.warning].filter(Boolean).join(" ") : sourceMessage,
       );
       debugUiState("cotizaciones", "manual-refresh-end", {
         cacheStatus: result.cacheStatus,
@@ -716,8 +725,8 @@ export default function CotizacionesPage() {
     setIsDataLoading(!cached);
     debugUiState("cotizaciones", "fetch-start", { reason, cacheAvailable: Boolean(cached) });
 
-    loadCoreAppData({ module: "cotizaciones", reason })
-      .then((result) => {
+    Promise.all([loadCoreAppData({ module: "cotizaciones", reason }), listAllRecursos()])
+      .then(([result, recursosResult]) => {
         if (!active) return;
 
         const { cotizaciones: cotizacionesResult, requerimientos: requerimientosResult } = result;
@@ -727,11 +736,14 @@ export default function CotizacionesPage() {
         setCotizaciones(cotizacionesResult.rows.map(normalizeCotizacionDraft));
         setFilteredRowsCount(cotizacionesResult.rows.length);
         setRequerimientos(requerimientosResult.rows);
+        setRecursos(recursosResult.rows);
         setDataSource(source);
-        setWarning(
+        const sourceMessage =
           source === "supabase"
             ? "Origen de datos: Supabase. Edición disponible según permisos; creación requiere can_create."
-            : warningMessage
+            : warningMessage;
+        setWarning(
+          recursosResult.warning ? [sourceMessage, recursosResult.warning].filter(Boolean).join(" ") : sourceMessage
         );
         publishDataSourceSnapshot({
           module: "cotizaciones",
@@ -1416,7 +1428,7 @@ export default function CotizacionesPage() {
 
   function selectRequirementRecurso(rowId: string, recursoId: string) {
     const recurso = recursos.find((item) => item.id === recursoId);
-    if (!recurso) return;
+    if (!recurso || recurso.estado === "Inactivo") return;
     setRequirementItems((prev) =>
       prev.map((row) => {
         if (row.id !== rowId) return row;
@@ -1977,7 +1989,7 @@ export default function CotizacionesPage() {
         cliente={selectedRequirementCotizacion?.cliente ?? "Sin definir"}
         unidadTrabajo={selectedRequirementCotizacion?.unidad_trabajo ?? "Sin definir"}
         cotizacionMoneda={requirementCotizacionMoneda}
-        recursos={recursos}
+        recursos={selectableRecursos}
         draft={requirementDraft}
         items={requirementItems}
         resourceTypeSummary={requirementResourceTypeSummary}

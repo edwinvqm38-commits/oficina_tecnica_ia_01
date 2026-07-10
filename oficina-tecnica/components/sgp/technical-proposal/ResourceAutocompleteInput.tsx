@@ -62,7 +62,8 @@ export function ResourceAutocompleteInput({
   const query = useMemo(() => normalizeSearch(value), [value]);
   const suggestions = useMemo(() => {
     if (!query || query.length < 2) return [];
-    return resources.filter((resource) => resourceMatches(resource, query)).slice(0, 10);
+    // Los recursos inactivos no se ofrecen para nuevas selecciones.
+    return resources.filter((resource) => resource.estado !== "Inactivo" && resourceMatches(resource, query)).slice(0, 10);
   }, [query, resources]);
 
   useEffect(() => {
