@@ -198,3 +198,39 @@ La galería intentaba mostrar primero la imagen mediante el proxy autenticado /a
 ### Validación reportada
 - npm run lint: pasa sin errores bloqueantes, con 87 warnings conocidos.
 - npm run build: pasa correctamente después de limpiar .next.
+
+## 2026-07-09 | Módulo Recursos | Normalización explícita de estado
+
+### Proyecto
+TRABAJO-MODELO02 | Oficina Técnica IA
+
+### Módulo
+Recursos
+
+### Decisión funcional
+Solo se considera recurso inactivo cuando estado === "Inactivo". Los recursos con estado null, undefined, vacío u otro valor deben tratarse como no inactivos para evitar que se oculten por error.
+
+### Lógica implementada
+- normalizeResourceStatus ahora acepta string, null o undefined.
+- Se normaliza el estado recibido desde Supabase antes de mapearlo al modelo Recurso.
+- Los valores "Inactivo" y "Por revisar" se conservan.
+- Los valores null, undefined, vacío, "Activo" u otros valores se tratan como "Activo".
+- Cuando el toggle "Mostrar inactivos" está apagado, el repository excluye estado = "Inactivo", pero conserva recursos con estado null.
+
+### Archivo modificado
+- lib/sgp/recursosRepository.ts
+
+### Restricciones respetadas
+- No se modificó Supabase SQL.
+- No se modificó schema.
+- No se usó deleted_at.
+- No se borraron recursos físicamente.
+- No se modificaron APIs.
+- No se tocó Google Drive.
+- No se tocó .env.local.
+- No se instalaron paquetes.
+- No se tocaron Requerimientos ni Cotizaciones.
+
+### Validación reportada
+- npm run lint: pasa sin errores, con 87 warnings conocidos.
+- npm run build: pasa correctamente con Next.js 16.2.7.

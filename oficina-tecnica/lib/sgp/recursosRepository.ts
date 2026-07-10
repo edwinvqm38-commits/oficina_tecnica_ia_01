@@ -301,8 +301,10 @@ function toNullableString(value: unknown): string | null {
   return normalized || null;
 }
 
-function normalizeResourceStatus(value: string): "Activo" | "Inactivo" | "Por revisar" {
-  if (value === "Inactivo" || value === "Por revisar") return value;
+function normalizeResourceStatus(value: string | null | undefined): "Activo" | "Inactivo" | "Por revisar" {
+  const normalized = normalizeString(value);
+  if (normalized === "Inactivo" || normalized === "Por revisar") return normalized;
+  // Los recursos sin estado se tratan como activos para no ocultarlos por error.
   return "Activo";
 }
 
@@ -539,7 +541,7 @@ function mapSupabaseRecurso(row: SupabaseRecurso): Recurso {
     ficha_tecnica: metadata.ficha_tecnica ?? "",
     imagen: metadata.imagen ?? "",
     archivos: Array.isArray(metadata.archivos) ? metadata.archivos.join(", ") : "",
-    estado: row.estado === "Inactivo" || row.estado === "Por revisar" ? row.estado : "Activo",
+    estado: normalizeResourceStatus(row.estado),
     fecha_actualizacion: row.fecha_actualizacion ?? row.updated_at?.slice(0, 10) ?? "",
     observaciones: row.observaciones ?? "",
     resourceFiles: {
@@ -760,7 +762,7 @@ export async function listRecursos(params: RecursosQueryParams = {}): Promise<Re
     .is("deleted_at", null);
 
   if (!query.showInactive) {
-    request = request.neq("estado", "Inactivo");
+    request = request.or("estado.neq.Inactivo,estado.is.null");
   }
 
   if (query.search?.trim()) {
