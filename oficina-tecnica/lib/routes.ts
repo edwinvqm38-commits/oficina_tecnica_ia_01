@@ -12,6 +12,7 @@ export type RouteId =
   | "requerimientos"
   | "recursos"
   | "datos"
+  | "piloto-licitaciones"
   | "administrador"
   | "report"
   | "costs"
@@ -68,6 +69,7 @@ export const ROUTE_GROUPS: SidebarGroup[] = [
           { id: "datos", label: "Datos", path: "/datos", icon: "memory" },
         ],
       },
+      { id: "piloto-licitaciones", label: "Piloto licitaciones", path: "/piloto-licitaciones", icon: "projects" },
       { id: "report", label: "Reporte ejecutivo", path: "/reporte", icon: "layers", disabled: true },
       { id: "costs", label: "Costos", path: "/costos", icon: "costs", disabled: true },
       { id: "engineering", label: "Ingeniería", path: "/ingenieria", icon: "engineering", disabled: true },
