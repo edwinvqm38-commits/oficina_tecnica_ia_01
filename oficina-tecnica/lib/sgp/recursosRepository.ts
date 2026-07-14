@@ -102,7 +102,9 @@ export type RecursoWritePayload = Pick<
   | "imagen"
   | "archivos"
   | "resourceFiles"
->;
+> & {
+  metadata?: RecursoMetadata | null;
+};
 
 export class RecursoWriteError extends Error {
   constructor(
@@ -461,14 +463,21 @@ function buildResourceMetadata(row: RecursoWritePayload, existingMetadata?: Recu
   const imageFiles = storedFilesFromMeta(imagenes, "image");
   const quotationFiles = storedFilesFromMeta(cotizaciones, "quotation");
   const attachmentFiles = storedFilesFromMeta(row.resourceFiles.archivos, "attachment");
+  const inputMetadata = row.metadata ?? {};
+  const inputResourceFiles =
+    inputMetadata.resource_files && typeof inputMetadata.resource_files === "object" && !Array.isArray(inputMetadata.resource_files)
+      ? inputMetadata.resource_files
+      : {};
 
   return {
     ...(existingMetadata ?? {}),
+    ...inputMetadata,
     ficha_tecnica: fichaTecnica,
     imagen,
     archivos: archivos.length > 0 ? archivos : splitStoredReferences(row.archivos),
     resource_files: {
       ...((existingMetadata?.resource_files ?? {}) as RecursoMetadata["resource_files"]),
+      ...inputResourceFiles,
       datasheet: datasheetFiles,
       image: imageFiles,
       quotations: quotationFiles,

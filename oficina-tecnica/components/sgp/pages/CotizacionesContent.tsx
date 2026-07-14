@@ -5,6 +5,7 @@ import { useAuth } from "@/components/sgp/auth/AuthContext";
 import { DataTable, type DataTableViewState } from "@/components/sgp/DataTable";
 import { QuotationWorkspaceModal } from "@/components/sgp/quotations/QuotationWorkspaceModal";
 import { RequirementWorkspaceModal } from "@/components/sgp/RequirementWorkspaceModal";
+import { ResourceFormModal } from "@/components/sgp/resources/ResourceFormModal";
 import type { EditableRequirementItem } from "@/components/sgp/RequirementItemsGrid";
 import { StatusBadge } from "@/components/sgp/StatusBadge";
 import { getModulePermissions, type ModulePermissions } from "@/lib/sgp/modulePermissionsRepository";
@@ -41,7 +42,16 @@ import {
 } from "@/lib/sgp/requirementsRepository";
 import { saveRequirementItemsForRequirement } from "@/lib/sgp/requirementItemsRepository";
 import { createCotizacion, CreateCotizacionError, updateCotizacion, UpdateCotizacionError } from "@/lib/sgp/quotationsRepository";
-import { listRecursosLookupOptions } from "@/lib/sgp/recursosRepository";
+import {
+  createRecurso,
+  createResourceFileSignedUrl,
+  getNextResourceDraftCode,
+  listRecursosLookupOptions,
+  RecursoWriteError,
+  uploadResourceFile,
+  type ResourceStorageFileCategory,
+  type RecursoWritePayload,
+} from "@/lib/sgp/recursosRepository";
 import {
   debugUiState,
   attachLifecycleDiagnostics,
@@ -496,6 +506,53 @@ function defaultRow(moneda: "PEN" | "USD"): EditableRequirementItem {
   return { ...base, ...computeCurrencyTcAndTotal(base, moneda) };
 }
 
+function emptyResourceFiles(): Recurso["resourceFiles"] {
+  return {
+    fichaTecnica: null,
+    imagen: null,
+    cotizacion: null,
+    fichasTecnicas: [],
+    imagenes: [],
+    cotizaciones: [],
+    archivos: [],
+  };
+}
+
+function buildRequirementResourceDraft(
+  code: string,
+  row: EditableRequirementItem | null,
+  moneda: "PEN" | "USD",
+): Recurso {
+  return {
+    id: `rec-${safeUuid()}`,
+    codigo_recurso: code,
+    codigo_eka: "",
+    codigo_fabricante: row?.codigo_fabricante ?? "",
+    tipo_recurso: row?.tipo_recurso ?? "",
+    descripcion: row?.descripcion || row?.recurso_a_suministrar || "",
+    unidad: row?.unidad || "und",
+    precio_unitario_ref: row && row.precio_unitario > 0 ? row.precio_unitario : 0,
+    moneda: (row?.moneda as "PEN" | "USD") || moneda,
+    proveedor: row?.proveedor || "Suministros Lima",
+    marca: row?.marca || "Genérico",
+    modelo: "",
+    tiempo_entrega_ref: row?.tiempo_entrega ?? "",
+    ficha_tecnica: "",
+    imagen: "",
+    archivos: "",
+    estado: "Por revisar",
+    fecha_actualizacion: new Date().toISOString().slice(0, 10),
+    observaciones: row?.observaciones_item ?? "",
+    resourceFiles: emptyResourceFiles(),
+  };
+}
+
+function upsertResource(rows: Recurso[], resource: Recurso): Recurso[] {
+  const exists = rows.some((item) => item.id === resource.id);
+  if (exists) return rows.map((item) => (item.id === resource.id ? resource : item));
+  return [resource, ...rows];
+}
+
 export default function CotizacionesPage() {
   const { profile, user } = useAuth();
   const initialUiStateRef = useRef<PersistedTableUiState | null>(null);
@@ -531,8 +588,31 @@ export default function CotizacionesPage() {
   const [selectedRequirementId, setSelectedRequirementId] = useState<string | null>(null);
   const [requirementDraft, setRequirementDraft] = useState<Requerimiento | null>(null);
   const [requirementItems, setRequirementItems] = useState<EditableRequirementItem[]>([]);
+  const [resourceModalOpen, setResourceModalOpen] = useState(false);
+  const [resourceDraft, setResourceDraft] = useState<Recurso | null>(null);
+  const [resourceTargetRowId, setResourceTargetRowId] = useState<string | null>(null);
+  const [resourceCreateMessage, setResourceCreateMessage] = useState<string | null>(null);
+  const [createdResourcePendingLink, setCreatedResourcePendingLink] = useState<Recurso | null>(null);
+  const [savingResource, setSavingResource] = useState(false);
+  const [resourcePermissionsLoading, setResourcePermissionsLoading] = useState(true);
+  const [resourceModulePermissions, setResourceModulePermissions] = useState<ModulePermissions | null>(null);
   const currentUserEmail = (profile.email ?? user.email ?? "").trim().toLowerCase();
   const [persistedCatalogs, setPersistedCatalogs] = useState<Partial<Record<CatalogKey, CatalogRecord[]>> | null>(null);
+  const resourceCatalogs = useMemo(() => demoData.listCatalogSummary(), []);
+  const isElevatedResourceUser =
+    profile.is_super_admin === true || profile.role === "admin" || currentUserEmail === "edwin.qm@outlook.com";
+  const canCreateResource =
+    dataSource === "supabase" &&
+    !resourcePermissionsLoading &&
+    !isDataLoading &&
+    (resourceModulePermissions?.can_create === true || isElevatedResourceUser);
+  const canManageResourceDocuments =
+    dataSource === "supabase" &&
+    !resourcePermissionsLoading &&
+    !isDataLoading &&
+    (resourceModulePermissions?.can_edit === true ||
+      resourceModulePermissions?.can_upload_files === true ||
+      isElevatedResourceUser);
 
   useEffect(() => {
     debugUiState("cotizaciones", "mounted", {});
@@ -678,6 +758,35 @@ export default function CotizacionesPage() {
       .finally(() => {
         if (!active) return;
         setIsPermissionsLoading(false);
+      });
+
+    return () => {
+      active = false;
+    };
+  }, [currentUserEmail]);
+
+  useEffect(() => {
+    let active = true;
+    setResourcePermissionsLoading(true);
+    if (!currentUserEmail) {
+      setResourceModulePermissions(null);
+      setResourcePermissionsLoading(false);
+      return () => {
+        active = false;
+      };
+    }
+
+    getModulePermissions("recursos", currentUserEmail)
+      .then((permissions) => {
+        if (!active) return;
+        setResourceModulePermissions(permissions);
+      })
+      .catch(() => {
+        if (!active) return;
+        setResourceModulePermissions(null);
+      })
+      .finally(() => {
+        if (active) setResourcePermissionsLoading(false);
       });
 
     return () => {
@@ -1426,12 +1535,9 @@ export default function CotizacionesPage() {
     );
   }
 
-  function selectRequirementRecurso(rowId: string, recursoId: string) {
-    const recurso = recursos.find((item) => item.id === recursoId);
-    if (!recurso || recurso.estado === "Inactivo") return;
-    setRequirementItems((prev) =>
-      prev.map((row) => {
-        if (row.id !== rowId) return row;
+  function applyRequirementRecursoToRows(rows: EditableRequirementItem[], rowId: string, recurso: Recurso): EditableRequirementItem[] {
+    return rows.map((row) => {
+      if (row.id !== rowId) return row;
         const proveedor = demoData
           .listCatalogProveedores()
           .find((item) => item.nombre === recurso.proveedor)?.nombre ?? recurso.proveedor;
@@ -1470,12 +1576,148 @@ export default function CotizacionesPage() {
           tiempo_entrega: recurso.tiempo_entrega_ref,
         };
         return { ...next, ...computeCurrencyTcAndTotal(next, requirementCotizacionMoneda) };
-      }),
-    );
+    });
   }
 
-  async function saveRequirementOverlay(itemsOverride?: EditableRequirementItem[]) {
-    if (!requirementDraft || !selectedRequirementId) return;
+  function selectRequirementRecurso(rowId: string, recursoId: string) {
+    const recurso = recursos.find((item) => item.id === recursoId);
+    if (!recurso || recurso.estado === "Inactivo") return;
+    setRequirementItems((prev) => applyRequirementRecursoToRows(prev, rowId, recurso));
+  }
+
+  async function openCreateResourceForRequirementRow(rowId: string | null) {
+    if (!canCreateResource) {
+      setWarning("Crear recursos requiere permiso can_create en el módulo Recursos.");
+      return;
+    }
+    const sourceRow = rowId ? requirementItems.find((item) => item.id === rowId) ?? null : null;
+    setResourceCreateMessage("Calculando siguiente código de recurso...");
+    setCreatedResourcePendingLink(null);
+    setResourceTargetRowId(sourceRow?.id ?? null);
+    try {
+      const code = await getNextResourceDraftCode();
+      setResourceDraft(buildRequirementResourceDraft(code, sourceRow, requirementCotizacionMoneda));
+      setResourceModalOpen(true);
+      setResourceCreateMessage(null);
+    } catch (error) {
+      setResourceCreateMessage(null);
+      setWarning(error instanceof Error ? error.message : "No se pudo preparar el formulario de recurso.");
+    }
+  }
+
+  async function linkCreatedResourceToRequirement(resource: Recurso, targetRowId: string | null): Promise<boolean> {
+    const nextResources = upsertResource(recursos, resource);
+    setRecursos(nextResources);
+    if (!targetRowId) {
+      setWarning("Recurso creado. No hay un ítem activo para vincularlo al requerimiento.");
+      return true;
+    }
+
+    const nextItems = applyRequirementRecursoToRows(requirementItems, targetRowId, resource);
+    setRequirementItems(nextItems);
+    const saved = await saveRequirementOverlay(nextItems, nextResources);
+    if (!saved) {
+      setWarning("El recurso fue creado, pero no pudo vincularse al requerimiento.");
+      setResourceCreateMessage("El recurso fue creado, pero no pudo vincularse al requerimiento. Puedes volver a guardar para reintentar la vinculación.");
+      setCreatedResourcePendingLink(resource);
+      setResourceDraft(resource);
+      return false;
+    }
+    return true;
+  }
+
+  async function saveCreatedResourceFromRequirement(value: Recurso) {
+    if (!canCreateResource) {
+      setResourceCreateMessage("Crear recursos requiere permiso can_create en el módulo Recursos.");
+      return;
+    }
+
+    setSavingResource(true);
+    setResourceCreateMessage(null);
+    try {
+      const resourceToLink = createdResourcePendingLink;
+      if (resourceToLink) {
+        const targetRowId = resourceTargetRowId;
+        const linked = await linkCreatedResourceToRequirement(resourceToLink, targetRowId);
+        if (!linked) return;
+        setResourceModalOpen(false);
+        setResourceDraft(null);
+        setCreatedResourcePendingLink(null);
+        setResourceTargetRowId(null);
+        setResourceCreateMessage(null);
+        setWarning(
+          targetRowId
+            ? `Recurso ${resourceToLink.codigo_recurso} vinculado al requerimiento.`
+            : `Recurso ${resourceToLink.codigo_recurso} creado. Selecciona un ítem para vincularlo al requerimiento.`,
+        );
+        return;
+      }
+
+      const payload: RecursoWritePayload = {
+        ...value,
+        estado: "Por revisar",
+        metadata: {
+          origen_registro: "cotizaciones_requerimiento",
+          ...(selectedRequirementId ? { requerimiento_id: selectedRequirementId } : {}),
+          ...(requirementDraft?.codigo ? { requerimiento_codigo: requirementDraft.codigo } : {}),
+          ...(selectedRequirementCotizacion?.id ? { cotizacion_id: selectedRequirementCotizacion.id } : {}),
+          ...(selectedRequirementCotizacion?.codigo ? { cotizacion_codigo: selectedRequirementCotizacion.codigo } : {}),
+          ...(resourceTargetRowId ? { requerimiento_item_id: resourceTargetRowId } : {}),
+        },
+      };
+      const savedResource = await createRecurso(payload);
+      const targetRowId = resourceTargetRowId;
+      const linked = await linkCreatedResourceToRequirement(savedResource, targetRowId);
+      if (!linked) return;
+      setResourceModalOpen(false);
+      setResourceDraft(null);
+      setCreatedResourcePendingLink(null);
+      setResourceTargetRowId(null);
+      setResourceCreateMessage(null);
+      setWarning(
+        targetRowId
+          ? `Recurso ${savedResource.codigo_recurso} creado y vinculado al requerimiento.`
+          : `Recurso ${savedResource.codigo_recurso} creado. Selecciona un ítem para vincularlo al requerimiento.`,
+      );
+    } catch (error) {
+      if (error instanceof RecursoWriteError) {
+        setResourceCreateMessage(error.code === "duplicate_code" ? "Código de recurso duplicado." : error.message);
+      } else {
+        setResourceCreateMessage(error instanceof Error ? error.message : "No se pudo crear el recurso.");
+      }
+    } finally {
+      setSavingResource(false);
+    }
+  }
+
+  async function handleUploadResourceFile(
+    resourceId: string,
+    category: ResourceStorageFileCategory,
+    file: File,
+  ): Promise<ResourceFileMeta> {
+    if (!canManageResourceDocuments) {
+      throw new Error("Subir archivos requiere permiso can_upload_files o can_edit en Recursos.");
+    }
+    if (!canCreateResource) {
+      throw new Error("Crear recursos con archivos requiere permiso can_create en Recursos.");
+    }
+    if (!resourceId.trim()) throw new Error("Completa el código del recurso antes de subir archivos.");
+    return uploadResourceFile(resourceId, category, file);
+  }
+
+  async function handleOpenResourceFile(file: ResourceFileMeta) {
+    const url = await createResourceFileSignedUrl(file);
+    if (!url) {
+      throw new Error("El archivo no tiene una URL o ruta de Storage disponible.");
+    }
+    window.open(url, "_blank", "noopener,noreferrer");
+  }
+
+  async function saveRequirementOverlay(
+    itemsOverride?: EditableRequirementItem[],
+    recursosOverride = recursos,
+  ): Promise<boolean> {
+    if (!requirementDraft || !selectedRequirementId) return false;
     const itemsToSave = itemsOverride ?? requirementItems;
     const normalizedDraft = normalizeRequirementDates(requirementDraft);
     const shouldPersistToSupabase = isUuid(selectedRequirementId);
@@ -1578,7 +1820,7 @@ export default function CotizacionesPage() {
           ? "Requerimiento guardado correctamente en datos demo/locales. No se actualizó Supabase."
           : "Datos del requerimiento guardados correctamente en datos demo/locales. No se actualizó Supabase.",
       );
-      return;
+      return true;
     }
 
     let persistedDraft = normalizedDraft;
@@ -1586,7 +1828,7 @@ export default function CotizacionesPage() {
       const draftSave = await updateRequirementSupabase(selectedRequirementId, normalizedDraft);
       if (!draftSave.ok) {
         setWarning(`Error al guardar datos del requerimiento: ${draftSave.message}`);
-        return;
+        return false;
       }
       persistedDraft = normalizeRequirementDates(draftSave.requerimiento);
       setRequirementDraft(persistedDraft);
@@ -1594,17 +1836,17 @@ export default function CotizacionesPage() {
       persistWorkspaceState({ rqCode: persistedDraft.codigo, quotationCode: draft?.codigo ?? null });
     } catch (error) {
       setWarning(`Error al guardar datos del requerimiento: ${formatSupabaseSaveError(error)}`);
-      return;
+      return false;
     }
 
     if (itemsToSave.length > 0 && normalized.length === 0) {
       setWarning("Error al guardar tabla: las filas visibles no tienen recurso o descripción para guardar.");
-      return;
+      return false;
     }
 
     if (normalized.length === 0) {
       setWarning("Datos del requerimiento guardados correctamente en Supabase.");
-      return;
+      return true;
     }
 
     try {
@@ -1656,15 +1898,17 @@ export default function CotizacionesPage() {
 
       setDetalleItems((prev) => [...readback.rows, ...prev.filter((it) => it.requerimiento_id !== selectedRequirementId)]);
       const list = readback.rows.map((item) =>
-        toEditableItem(item, recursos.find((recurso) => recurso.id === item.recurso_id), requirementCotizacionMoneda),
+        toEditableItem(item, recursosOverride.find((recurso) => recurso.id === item.recurso_id), requirementCotizacionMoneda),
       );
       setRequirementItems(list);
       setWarning("Tabla del requerimiento guardada correctamente en Supabase.");
+      return true;
     } catch (error) {
       if (process.env.NODE_ENV === "development") {
         console.error("[RQ_SAVE_DEBUG] CotizacionesPage error al guardar tabla", error);
       }
       setWarning(`Error al guardar tabla: ${formatSupabaseSaveError(error)}`);
+      return false;
     }
   }
 
@@ -2009,6 +2253,7 @@ export default function CotizacionesPage() {
         onAddRow={() => setRequirementItems((prev) => [...prev, defaultRow(requirementCotizacionMoneda)])}
         onRemoveRow={(id) => setRequirementItems((prev) => prev.filter((row) => row.id !== id))}
         onSelectRecurso={selectRequirementRecurso}
+        onCreateRecurso={(rowId) => void openCreateResourceForRequirementRow(rowId)}
         onPatchRow={patchRequirementRow}
         onCancel={() => {
           if (!selectedRequirement) return;
@@ -2016,8 +2261,40 @@ export default function CotizacionesPage() {
         }}
         onSave={saveRequirementOverlay}
         onSaveTable={(currentItems) => saveRequirementOverlay(currentItems)}
+        canCreateRecurso={canCreateResource}
+        isCreatingRecurso={savingResource}
         hiddenBusinessFields={hiddenBusinessFields}
         canViewPrices={effectiveCanViewPrices && canViewQuotationEconomicSummary}
+      />
+
+      <ResourceFormModal
+        open={resourceModalOpen}
+        initial={resourceDraft}
+        usedCodes={recursos.map((item) => item.codigo_recurso)}
+        catalogs={{
+          tipos: resourceCatalogs.tipoRecurso,
+          unidades: resourceCatalogs.unidades,
+          marcas: resourceCatalogs.marcas,
+          proveedores: resourceCatalogs.proveedores,
+          monedas: resourceCatalogs.monedas,
+          estados: resourceCatalogs.estadosRecurso,
+        }}
+        onClose={() => {
+          setResourceModalOpen(false);
+          setResourceDraft(null);
+          setResourceTargetRowId(null);
+          setCreatedResourcePendingLink(null);
+          setResourceCreateMessage(null);
+        }}
+        onSave={saveCreatedResourceFromRequirement}
+        allowFilePicker={dataSource === "supabase" && canManageResourceDocuments && canCreateResource}
+        filesReadOnly={!canManageResourceDocuments}
+        isSaving={savingResource}
+        message={resourceCreateMessage}
+        zIndexClassName="z-[90]"
+        onUploadFile={handleUploadResourceFile}
+        onOpenFile={handleOpenResourceFile}
+        onResolveFileUrl={createResourceFileSignedUrl}
       />
     </section>
   );

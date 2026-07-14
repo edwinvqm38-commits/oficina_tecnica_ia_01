@@ -46,11 +46,14 @@ type RequirementWorkspaceModalProps = {
   onAddRow: () => void;
   onRemoveRow: (id: string) => void;
   onSelectRecurso: (rowId: string, recursoId: string) => void;
+  onCreateRecurso?: (rowId: string | null) => void;
   onPatchRow: (rowId: string, patch: Partial<EditableRequirementItem>) => void;
   onCancel: () => void;
-  onSave: (itemsOverride?: EditableRequirementItem[]) => void | Promise<void>;
-  onSaveTable?: (itemsOverride?: EditableRequirementItem[]) => void | Promise<void>;
+  onSave: (itemsOverride?: EditableRequirementItem[]) => void | boolean | Promise<void | boolean>;
+  onSaveTable?: (itemsOverride?: EditableRequirementItem[]) => void | boolean | Promise<void | boolean>;
   isSaving?: boolean;
+  canCreateRecurso?: boolean;
+  isCreatingRecurso?: boolean;
   hiddenBusinessFields?: string[];
   canViewPrices?: boolean;
 };
@@ -221,11 +224,14 @@ export function RequirementWorkspaceModal({
   onAddRow,
   onRemoveRow,
   onSelectRecurso,
+  onCreateRecurso,
   onPatchRow,
   onCancel,
   onSave,
   onSaveTable,
   isSaving = false,
+  canCreateRecurso = false,
+  isCreatingRecurso = false,
   hiddenBusinessFields = [],
   canViewPrices = true,
 }: RequirementWorkspaceModalProps) {
@@ -660,9 +666,12 @@ export function RequirementWorkspaceModal({
               onAddRow={onAddRow}
               onRemoveRow={onRemoveRow}
               onSelectRecurso={onSelectRecurso}
+              onCreateRecurso={onCreateRecurso}
               onPatchRow={onPatchRow}
               onSaveTable={handleSaveTable}
               isSavingTable={isSaving}
+              canCreateRecurso={canCreateRecurso}
+              isCreatingRecurso={isCreatingRecurso}
               fullHeight
               maxHeightClassName="h-full"
             />

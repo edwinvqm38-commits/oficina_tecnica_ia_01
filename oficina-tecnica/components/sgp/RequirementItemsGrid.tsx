@@ -76,9 +76,12 @@ type RequirementItemsGridProps = {
   onAddRow: () => void;
   onRemoveRow: (id: string) => void;
   onSelectRecurso: (rowId: string, recursoId: string) => void;
+  onCreateRecurso?: (rowId: string | null) => void;
   onPatchRow: (rowId: string, patch: Partial<EditableRequirementItem>) => void;
-  onSaveTable?: (itemsOverride?: EditableRequirementItem[]) => void | Promise<void>;
+  onSaveTable?: (itemsOverride?: EditableRequirementItem[]) => void | boolean | Promise<void | boolean>;
   isSavingTable?: boolean;
+  canCreateRecurso?: boolean;
+  isCreatingRecurso?: boolean;
   titleLabel?: string;
   showAddRowButton?: boolean;
   hideIndexColumn?: boolean;
@@ -831,9 +834,12 @@ export function RequirementItemsGrid({
   onAddRow,
   onRemoveRow,
   onSelectRecurso,
+  onCreateRecurso,
   onPatchRow,
   onSaveTable,
   isSavingTable = false,
+  canCreateRecurso = false,
+  isCreatingRecurso = false,
   titleLabel = "Detalle de requerimiento",
   showAddRowButton = true,
   hideIndexColumn = false,
@@ -864,6 +870,7 @@ export function RequirementItemsGrid({
   const [editingMode, setEditingMode] = useState(false);
   const canUseGridActions = !isColumnHidden("acciones");
   const [preview, setPreview] = useState<PreviewState>(null);
+  const [activeRowId, setActiveRowId] = useState<string | null>(null);
   const [numericDrafts, setNumericDrafts] = useState<Record<string, string>>({});
   const [columnFilters, setColumnFilters] = useState<Partial<Record<ColumnKey, string>>>({});
   const [sortConfig, setSortConfig] = useState<SortConfig>({ key: null, direction: null });
@@ -881,6 +888,12 @@ export function RequirementItemsGrid({
         })),
     [recursos],
   );
+  const resourceById = useMemo(() => new Map(recursos.map((resource) => [resource.id, resource])), [recursos]);
+  const activeRowExists = useMemo(
+    () => Boolean(activeRowId && items.some((item) => item.id === activeRowId)),
+    [activeRowId, items],
+  );
+  const effectiveActiveRowId = editingMode && activeRowExists ? activeRowId : null;
   const [columnWidths, setColumnWidths] = useState<Record<ColumnKey, number>>(() =>
     readRequirementGridWidths(
       buildRequirementGridWidthStorageKey(pathname, widthContextKey),
@@ -1555,6 +1568,16 @@ export function RequirementItemsGrid({
     return "inline-flex h-6 min-h-6 items-center gap-1 rounded border border-border px-1.5 text-[11px] leading-none text-stone-600 hover:bg-stone-100";
   }
 
+  function regularizationBadge(item: EditableRequirementItem): React.ReactNode {
+    const resource = item.recurso_id ? resourceById.get(item.recurso_id) : null;
+    if (resource?.estado !== "Por revisar") return null;
+    return (
+      <span className="ml-1 inline-flex h-4 shrink-0 items-center rounded border border-amber-200 bg-amber-50 px-1 text-[9px] font-medium leading-none text-amber-700">
+        Por regularizar
+      </span>
+    );
+  }
+
   return (
     <div
       className={`flex min-h-0 flex-col rounded-xl border border-border bg-panel ${fullHeight ? "h-full" : ""} ${
@@ -1571,6 +1594,18 @@ export function RequirementItemsGrid({
               className={toolbarButtonClassName()}
             >
               + Agregar recurso
+            </button>
+          ) : null}
+          {editingMode && canUseGridActions && canCreateRecurso && onCreateRecurso ? (
+            <button
+              type="button"
+              onClick={() => onCreateRecurso(effectiveActiveRowId)}
+              disabled={isCreatingRecurso}
+              className={`${toolbarButtonClassName()} min-w-[92px] shrink-0 justify-center whitespace-nowrap text-stone-600 disabled:cursor-not-allowed disabled:opacity-60`}
+              title={effectiveActiveRowId ? "Crear recurso para la fila activa" : "Crear recurso"}
+              aria-label="Crear recurso"
+            >
+              <span className="inline-flex shrink-0 whitespace-nowrap text-stone-600">+ Crear recurso</span>
             </button>
           ) : null}
         </div>
@@ -1808,12 +1843,19 @@ export function RequirementItemsGrid({
                   key={item.id}
                   className={`border-t border-stone-200 align-middle ${
                     onRowClick && !editingMode ? "cursor-pointer hover:bg-stone-50" : ""
-                  }`}
+                  } ${effectiveActiveRowId === item.id ? "bg-amber-50/40" : ""}`}
                   style={{ height: `${dynamicRowHeight}px`, minHeight: `${dynamicRowHeight}px` }}
                   onClick={(event) => {
+                    if (editingMode) {
+                      setActiveRowId(item.id);
+                      return;
+                    }
                     if (!onRowClick || editingMode) return;
                     if (shouldIgnoreRowClick(event.target)) return;
                     onRowClick(item);
+                  }}
+                  onFocusCapture={() => {
+                    if (editingMode) setActiveRowId(item.id);
                   }}
                 >
                   {showIndexColumn ? (
@@ -2014,7 +2056,10 @@ export function RequirementItemsGrid({
                         renderSuggestion={(resource) => resource.descripcion}
                       />
                     ) : (
-                      <span className={readCellClassName()}>{item.descripcion || "-"}</span>
+                      <span className="inline-flex h-[var(--rq-grid-control-height)] w-full min-w-0 items-center overflow-hidden">
+                        <span className={`${readCellClassName()} min-w-0 flex-1 truncate`}>{item.descripcion || "-"}</span>
+                        {regularizationBadge(item)}
+                      </span>
                     )}
                   </td>
 

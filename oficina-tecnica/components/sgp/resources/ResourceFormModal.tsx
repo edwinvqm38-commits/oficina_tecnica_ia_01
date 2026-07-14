@@ -1,6 +1,7 @@
 "use client";
 
-import { useEffect, useMemo, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { createPortal } from "react-dom";
 import type {
   CatalogEstadoRecurso,
   CatalogMarca,
@@ -34,6 +35,9 @@ type ResourceFormModalProps = {
   filesReadOnly?: boolean;
   allowFilePicker?: boolean;
   isSaving?: boolean;
+  message?: string | null;
+  zIndexClassName?: string;
+  closeOnBackdrop?: boolean;
   onUploadFile?: (resourceId: string, category: "image" | "datasheet" | "attachment" | "quotation", file: File) => Promise<ResourceFiles["archivos"][number]>;
   onOpenFile?: (file: ResourceFiles["archivos"][number]) => Promise<void> | void;
   onResolveFileUrl?: (file: ResourceFiles["archivos"][number]) => Promise<string | null>;
@@ -124,12 +128,17 @@ export function ResourceFormModal({
   filesReadOnly = false,
   allowFilePicker = true,
   isSaving = false,
+  message = null,
+  zIndexClassName = "z-50",
+  closeOnBackdrop = false,
   onUploadFile,
   onOpenFile,
   onResolveFileUrl,
 }: ResourceFormModalProps) {
   const [form, setForm] = useState<Recurso | null>(initial);
   const [errors, setErrors] = useState<FormErrors>({});
+  const previousFocusRef = useRef<HTMLElement | null>(null);
+  const closeButtonRef = useRef<HTMLButtonElement | null>(null);
 
   useEffect(() => {
     setForm(initial);
@@ -207,7 +216,44 @@ export function ResourceFormModal({
     void onSave(normalized);
   }
 
-  if (!open || !form) return null;
+  useEffect(() => {
+    if (!open) return;
+    const prevOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    return () => {
+      document.body.style.overflow = prevOverflow;
+    };
+  }, [open]);
+
+  useEffect(() => {
+    if (!open) return;
+    previousFocusRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    const focusTimer = window.setTimeout(() => closeButtonRef.current?.focus(), 0);
+    return () => {
+      window.clearTimeout(focusTimer);
+      const previousFocus = previousFocusRef.current;
+      previousFocusRef.current = null;
+      if (previousFocus && document.contains(previousFocus)) {
+        window.setTimeout(() => previousFocus.focus(), 0);
+      }
+    };
+  }, [open]);
+
+  useEffect(() => {
+    if (!open) return;
+    function handleKeyDown(event: KeyboardEvent) {
+      if (event.key !== "Escape") return;
+      event.preventDefault();
+      event.stopPropagation();
+      onClose();
+    }
+    document.addEventListener("keydown", handleKeyDown, true);
+    return () => {
+      document.removeEventListener("keydown", handleKeyDown, true);
+    };
+  }, [onClose, open]);
+
+  if (!open || !form || typeof document === "undefined") return null;
 
   const tipoOptions = withCurrent(activeTipos, form.tipo_recurso);
   const unidadOptions = withCurrent(activeUnidades, form.unidad);
@@ -216,9 +262,18 @@ export function ResourceFormModal({
   const monedaOptions = withCurrent(activeMonedas as string[], form.moneda);
   const estadoOptions = withCurrent(activeEstados as string[], form.estado);
 
-  return (
-    <div className="fixed inset-0 z-50 bg-black/20 p-3 md:p-4">
-      <div className="mx-auto flex h-[90vh] w-[96vw] max-w-[1120px] min-w-0 flex-col overflow-hidden rounded-xl border border-border bg-panel shadow-lg">
+  const modal = (
+    <div
+      className={`fixed inset-0 ${zIndexClassName} bg-black/20 p-3 md:p-4`}
+      onClick={(event) => {
+        event.stopPropagation();
+        if (closeOnBackdrop) onClose();
+      }}
+    >
+      <div
+        className="mx-auto flex h-[90vh] w-[96vw] max-w-[1120px] min-w-0 flex-col overflow-hidden rounded-xl border border-border bg-panel shadow-lg"
+        onClick={(event) => event.stopPropagation()}
+      >
         <div className="sticky top-0 z-10 flex items-center justify-between border-b border-border bg-panel px-4 py-2">
           <FieldLabelIcon
             icon="package"
@@ -226,6 +281,7 @@ export function ResourceFormModal({
             className="text-sm font-semibold text-stone-800"
           />
           <button
+            ref={closeButtonRef}
             onClick={onClose}
             className="inline-flex h-7 min-h-7 items-center gap-1 rounded-md border border-border px-2.5 text-xs text-stone-700 transition hover:bg-stone-100"
           >
@@ -233,6 +289,12 @@ export function ResourceFormModal({
             <span>Cerrar</span>
           </button>
         </div>
+
+        {message ? (
+          <div className="border-b border-amber-200 bg-amber-50 px-4 py-2 text-xs text-amber-800">
+            {message}
+          </div>
+        ) : null}
 
         <div className="min-h-0 flex-1 overflow-y-auto p-3">
           <div className="grid min-h-0 grid-cols-1 gap-3 lg:grid-cols-[minmax(0,1fr)_310px]">
@@ -483,4 +545,6 @@ export function ResourceFormModal({
       </div>
     </div>
   );
+
+  return createPortal(modal, document.body);
 }

@@ -4,7 +4,9 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { DataTable, type DataTableViewState } from "@/components/sgp/DataTable";
 import { RequirementWorkspaceModal } from "@/components/sgp/RequirementWorkspaceModal";
 import { NewRequirementModal } from "@/components/sgp/requirements/NewRequirementModal";
+import { ResourceFormModal } from "@/components/sgp/resources/ResourceFormModal";
 import { StatusBadge } from "@/components/sgp/StatusBadge";
+import { useAuth } from "@/components/sgp/auth/AuthContext";
 import { debugDataSourceLoad, publishDataSourceSnapshot, type AppDataSource } from "@/lib/sgp/dataSourceDiagnostics";
 import {
   demoData,
@@ -23,7 +25,17 @@ import {
 } from "@/lib/sgp/clientDataCache";
 import { saveRequirementItemsForRequirement } from "@/lib/sgp/requirementItemsRepository";
 import { updateRequirementSupabase } from "@/lib/sgp/requirementsRepository";
-import { listRecursosLookupOptions } from "@/lib/sgp/recursosRepository";
+import { getModulePermissions, type ModulePermissions } from "@/lib/sgp/modulePermissionsRepository";
+import {
+  createRecurso,
+  createResourceFileSignedUrl,
+  getNextResourceDraftCode,
+  listRecursosLookupOptions,
+  RecursoWriteError,
+  uploadResourceFile,
+  type ResourceStorageFileCategory,
+  type RecursoWritePayload,
+} from "@/lib/sgp/recursosRepository";
 import { formatDate, normalizeDateForStorage } from "@/lib/sgp/utils";
 import {
   attachLifecycleDiagnostics,
@@ -264,7 +276,55 @@ function defaultRow(moneda: "PEN" | "USD"): EditableRequirementItem {
   return { ...base, ...computeCurrencyTcAndTotal(base, moneda) };
 }
 
+function emptyResourceFiles(): Recurso["resourceFiles"] {
+  return {
+    fichaTecnica: null,
+    imagen: null,
+    cotizacion: null,
+    fichasTecnicas: [],
+    imagenes: [],
+    cotizaciones: [],
+    archivos: [],
+  };
+}
+
+function buildRequirementResourceDraft(
+  code: string,
+  row: EditableRequirementItem | null,
+  moneda: "PEN" | "USD",
+): Recurso {
+  return {
+    id: `rec-${safeUuid()}`,
+    codigo_recurso: code,
+    codigo_eka: "",
+    codigo_fabricante: row?.codigo_fabricante ?? "",
+    tipo_recurso: row?.tipo_recurso ?? "",
+    descripcion: row?.descripcion || row?.recurso_a_suministrar || "",
+    unidad: row?.unidad || "und",
+    precio_unitario_ref: row && row.precio_unitario > 0 ? row.precio_unitario : 0,
+    moneda: (row?.moneda as "PEN" | "USD") || moneda,
+    proveedor: row?.proveedor || "Suministros Lima",
+    marca: row?.marca || "Genérico",
+    modelo: "",
+    tiempo_entrega_ref: row?.tiempo_entrega ?? "",
+    ficha_tecnica: "",
+    imagen: "",
+    archivos: "",
+    estado: "Por revisar",
+    fecha_actualizacion: new Date().toISOString().slice(0, 10),
+    observaciones: row?.observaciones_item ?? "",
+    resourceFiles: emptyResourceFiles(),
+  };
+}
+
+function upsertResource(rows: Recurso[], resource: Recurso): Recurso[] {
+  const exists = rows.some((item) => item.id === resource.id);
+  if (exists) return rows.map((item) => (item.id === resource.id ? resource : item));
+  return [resource, ...rows];
+}
+
 export default function RequerimientosPage() {
+  const { profile, user } = useAuth();
   const queryOpenedRef = useRef<string | null>(null);
   const restoredUiStateRef = useRef(false);
   const hasLoadedDataRef = useRef(false);
@@ -287,6 +347,14 @@ export default function RequerimientosPage() {
   const [workspaceItems, setWorkspaceItems] = useState<EditableRequirementItem[]>([]);
   const [newRequirementOpen, setNewRequirementOpen] = useState(false);
   const [newRequirementError, setNewRequirementError] = useState<string | null>(null);
+  const [resourceModalOpen, setResourceModalOpen] = useState(false);
+  const [resourceDraft, setResourceDraft] = useState<Recurso | null>(null);
+  const [resourceTargetRowId, setResourceTargetRowId] = useState<string | null>(null);
+  const [resourceCreateMessage, setResourceCreateMessage] = useState<string | null>(null);
+  const [createdResourcePendingLink, setCreatedResourcePendingLink] = useState<Recurso | null>(null);
+  const [savingResource, setSavingResource] = useState(false);
+  const [resourcePermissionsLoading, setResourcePermissionsLoading] = useState(true);
+  const [resourceModulePermissions, setResourceModulePermissions] = useState<ModulePermissions | null>(null);
   const [warning, setWarning] = useState<string | null>(null);
   const [dataSource, setDataSource] = useState<AppDataSource>("demo");
   const [loading, setLoading] = useState(true);
@@ -297,6 +365,22 @@ export default function RequerimientosPage() {
   );
   const [filteredRowsCount, setFilteredRowsCount] = useState<number | null>(null);
   const isSupabaseReadOnly = dataSource === "supabase";
+  const resourceCatalogs = useMemo(() => demoData.listCatalogSummary(), []);
+  const currentUserEmail = (profile.email ?? user.email ?? "").trim().toLowerCase();
+  const isElevatedResourceUser =
+    profile.is_super_admin === true || profile.role === "admin" || currentUserEmail === "edwin.qm@outlook.com";
+  const canCreateResource =
+    dataSource === "supabase" &&
+    !resourcePermissionsLoading &&
+    !loading &&
+    (resourceModulePermissions?.can_create === true || isElevatedResourceUser);
+  const canManageResourceDocuments =
+    dataSource === "supabase" &&
+    !resourcePermissionsLoading &&
+    !loading &&
+    (resourceModulePermissions?.can_edit === true ||
+      resourceModulePermissions?.can_upload_files === true ||
+      isElevatedResourceUser);
 
   useEffect(() => {
     debugUiState("requerimientos", "mounted", {});
@@ -306,6 +390,35 @@ export default function RequerimientosPage() {
       cleanupLifecycleDiagnostics();
     };
   }, []);
+
+  useEffect(() => {
+    let active = true;
+    setResourcePermissionsLoading(true);
+    if (!currentUserEmail) {
+      setResourceModulePermissions(null);
+      setResourcePermissionsLoading(false);
+      return () => {
+        active = false;
+      };
+    }
+
+    getModulePermissions("recursos", currentUserEmail)
+      .then((permissions) => {
+        if (!active) return;
+        setResourceModulePermissions(permissions);
+      })
+      .catch(() => {
+        if (!active) return;
+        setResourceModulePermissions(null);
+      })
+      .finally(() => {
+        if (active) setResourcePermissionsLoading(false);
+      });
+
+    return () => {
+      active = false;
+    };
+  }, [currentUserEmail]);
 
   useEffect(() => {
     let active = true;
@@ -574,13 +687,9 @@ export default function RequerimientosPage() {
     );
   }
 
-  function selectRecurso(rowId: string, recursoId: string) {
-    const recurso = recursos.find((item) => item.id === recursoId);
-    if (!recurso || recurso.estado === "Inactivo") return;
-    markWorkspaceDirty();
-    setWorkspaceItems((prev) =>
-      prev.map((row) => {
-        if (row.id !== rowId) return row;
+  function applyRecursoToRows(rows: EditableRequirementItem[], rowId: string, recurso: Recurso): EditableRequirementItem[] {
+    return rows.map((row) => {
+      if (row.id !== rowId) return row;
         const precio = row.precio_unitario > 0 ? row.precio_unitario : recurso.precio_unitario_ref;
         const proveedor = demoData
           .listCatalogProveedores()
@@ -620,8 +729,141 @@ export default function RequerimientosPage() {
           tiempo_entrega: recurso.tiempo_entrega_ref,
         };
         return { ...next, ...computeCurrencyTcAndTotal(next, cotizacionMoneda) };
-      }),
-    );
+    });
+  }
+
+  function selectRecurso(rowId: string, recursoId: string) {
+    const recurso = recursos.find((item) => item.id === recursoId);
+    if (!recurso || recurso.estado === "Inactivo") return;
+    markWorkspaceDirty();
+    setWorkspaceItems((prev) => applyRecursoToRows(prev, rowId, recurso));
+  }
+
+  async function openCreateResourceForRow(rowId: string | null) {
+    if (!canCreateResource) {
+      setWarning("Crear recursos requiere permiso can_create en el módulo Recursos.");
+      return;
+    }
+    const sourceRow = rowId ? workspaceItems.find((item) => item.id === rowId) ?? null : null;
+    setResourceCreateMessage("Calculando siguiente código de recurso...");
+    setCreatedResourcePendingLink(null);
+    setResourceTargetRowId(sourceRow?.id ?? null);
+    try {
+      const code = await getNextResourceDraftCode();
+      setResourceDraft(buildRequirementResourceDraft(code, sourceRow, cotizacionMoneda));
+      setResourceModalOpen(true);
+      setResourceCreateMessage(null);
+    } catch (error) {
+      setResourceCreateMessage(null);
+      setWarning(error instanceof Error ? error.message : "No se pudo preparar el formulario de recurso.");
+    }
+  }
+
+  async function linkCreatedResourceToRequirement(resource: Recurso, targetRowId: string | null): Promise<boolean> {
+    const nextResources = upsertResource(recursos, resource);
+    setRecursos(nextResources);
+    if (!targetRowId) {
+      setWarning("Recurso creado. No hay un ítem activo para vincularlo al requerimiento.");
+      return true;
+    }
+
+    const nextItems = applyRecursoToRows(workspaceItems, targetRowId, resource);
+    setWorkspaceItems(nextItems);
+    markWorkspaceDirty();
+    const saved = await saveWorkspace(nextItems, nextResources);
+    if (!saved) {
+      setWarning("El recurso fue creado, pero no pudo vincularse al requerimiento");
+      setResourceCreateMessage("El recurso fue creado, pero no pudo vincularse al requerimiento. Puedes volver a guardar para reintentar la vinculación.");
+      setCreatedResourcePendingLink(resource);
+      setResourceDraft(resource);
+      return false;
+    }
+    return true;
+  }
+
+  async function saveCreatedResourceFromRequirement(value: Recurso) {
+    if (!canCreateResource) {
+      setResourceCreateMessage("Crear recursos requiere permiso can_create en el módulo Recursos.");
+      return;
+    }
+
+    setSavingResource(true);
+    setResourceCreateMessage(null);
+    try {
+      const resourceToLink = createdResourcePendingLink;
+      if (resourceToLink) {
+        const targetRowId = resourceTargetRowId;
+        const linked = await linkCreatedResourceToRequirement(resourceToLink, targetRowId);
+        if (!linked) return;
+        setResourceModalOpen(false);
+        setResourceDraft(null);
+        setCreatedResourcePendingLink(null);
+        setResourceTargetRowId(null);
+        setResourceCreateMessage(null);
+        setWarning(
+          targetRowId
+            ? `Recurso ${resourceToLink.codigo_recurso} vinculado al requerimiento.`
+            : `Recurso ${resourceToLink.codigo_recurso} creado. Selecciona un ítem para vincularlo al requerimiento.`,
+        );
+        return;
+      }
+
+      const payload: RecursoWritePayload = {
+        ...value,
+        estado: "Por revisar",
+        metadata: {
+          origen_registro: "requerimiento",
+          ...(selectedId ? { requerimiento_id: selectedId } : {}),
+          ...(draft?.codigo ? { requerimiento_codigo: draft.codigo } : {}),
+          ...(resourceTargetRowId ? { requerimiento_item_id: resourceTargetRowId } : {}),
+        },
+      };
+      const savedResource = await createRecurso(payload);
+      const targetRowId = resourceTargetRowId;
+      const linked = await linkCreatedResourceToRequirement(savedResource, targetRowId);
+      if (!linked) return;
+      setResourceModalOpen(false);
+      setResourceDraft(null);
+      setCreatedResourcePendingLink(null);
+      setResourceTargetRowId(null);
+      setResourceCreateMessage(null);
+      setWarning(
+        targetRowId
+          ? `Recurso ${savedResource.codigo_recurso} creado y vinculado al requerimiento.`
+          : `Recurso ${savedResource.codigo_recurso} creado. Selecciona un ítem para vincularlo al requerimiento.`,
+      );
+    } catch (error) {
+      if (error instanceof RecursoWriteError) {
+        setResourceCreateMessage(error.code === "duplicate_code" ? "Código de recurso duplicado." : error.message);
+      } else {
+        setResourceCreateMessage(error instanceof Error ? error.message : "No se pudo crear el recurso.");
+      }
+    } finally {
+      setSavingResource(false);
+    }
+  }
+
+  async function handleUploadResourceFile(
+    resourceId: string,
+    category: ResourceStorageFileCategory,
+    file: File,
+  ): Promise<ResourceFileMeta> {
+    if (!canManageResourceDocuments) {
+      throw new Error("Subir archivos requiere permiso can_upload_files o can_edit en Recursos.");
+    }
+    if (!canCreateResource) {
+      throw new Error("Crear recursos con archivos requiere permiso can_create en Recursos.");
+    }
+    if (!resourceId.trim()) throw new Error("Completa el código del recurso antes de subir archivos.");
+    return uploadResourceFile(resourceId, category, file);
+  }
+
+  async function handleOpenResourceFile(file: ResourceFileMeta) {
+    const url = await createResourceFileSignedUrl(file);
+    if (!url) {
+      throw new Error("El archivo no tiene una URL o ruta de Storage disponible.");
+    }
+    window.open(url, "_blank", "noopener,noreferrer");
   }
 
   function addRow() {
@@ -639,8 +881,8 @@ export default function RequerimientosPage() {
     openWorkspace(selected);
   }
 
-  async function saveWorkspace(itemsOverride?: EditableRequirementItem[]) {
-    if (!draft || !selectedId) return;
+  async function saveWorkspace(itemsOverride?: EditableRequirementItem[], recursosOverride = recursos): Promise<boolean> {
+    if (!draft || !selectedId) return false;
     const itemsToSave = itemsOverride ?? workspaceItems;
     const shouldPersistToSupabase = isUuid(selectedId);
     if (process.env.NODE_ENV === "development") {
@@ -736,7 +978,7 @@ export default function RequerimientosPage() {
           ? "Requerimiento guardado correctamente en datos demo/locales. No se actualizó Supabase."
           : "Datos del requerimiento guardados correctamente en datos demo/locales. No se actualizó Supabase.",
       );
-      return;
+      return true;
     }
 
     let persistedDraft = normalizedDraft;
@@ -744,7 +986,7 @@ export default function RequerimientosPage() {
       const draftSave = await updateRequirementSupabase(selectedId, normalizedDraft);
       if (!draftSave.ok) {
         setWarning(`Error al guardar datos del requerimiento: ${draftSave.message}`);
-        return;
+        return false;
       }
       persistedDraft = normalizeRequirementDates(draftSave.requerimiento);
       setDraft(persistedDraft);
@@ -752,7 +994,7 @@ export default function RequerimientosPage() {
       updateUrlState({ page, rqCode: persistedDraft.codigo, rqId: persistedDraft.id });
     } catch (error) {
       setWarning(`Error al guardar datos del requerimiento: ${formatSupabaseSaveError(error)}`);
-      return;
+      return false;
     }
 
     if (itemsToSave.length > 0 && normalized.length === 0) {
@@ -761,13 +1003,13 @@ export default function RequerimientosPage() {
           ? "Error al guardar tabla: había cambios locales, pero las filas llegaron sin recurso o descripción. No se guardó en Supabase."
           : "Error al guardar tabla: las filas visibles no tienen recurso o descripción para guardar.",
       );
-      return;
+      return false;
     }
 
     if (normalized.length === 0) {
       workspaceDirtyRef.current = false;
       setWarning("Datos del requerimiento guardados correctamente en Supabase.");
-      return;
+      return true;
     }
 
     try {
@@ -820,16 +1062,18 @@ export default function RequerimientosPage() {
       setDetalleItems((prev) => [...readback.rows, ...prev.filter((it) => it.requerimiento_id !== selectedId)]);
       setWorkspaceItems(
         readback.rows.map((item) =>
-          toEditableItem(item, recursos.find((recurso) => recurso.id === item.recurso_id), cotizacionMoneda),
+          toEditableItem(item, recursosOverride.find((recurso) => recurso.id === item.recurso_id), cotizacionMoneda),
         ),
       );
       workspaceDirtyRef.current = false;
       setWarning("Tabla del requerimiento guardada correctamente en Supabase.");
+      return true;
     } catch (error) {
       if (process.env.NODE_ENV === "development") {
         console.error("[RQ_SAVE_DEBUG] RequerimientosPage error al guardar tabla", error);
       }
       setWarning(`Error al guardar tabla: ${formatSupabaseSaveError(error)}`);
+      return false;
     }
   }
 
@@ -1131,10 +1375,43 @@ export default function RequerimientosPage() {
         onAddRow={addRow}
         onRemoveRow={removeRow}
         onSelectRecurso={selectRecurso}
+        onCreateRecurso={(rowId) => void openCreateResourceForRow(rowId)}
         onPatchRow={patchRow}
         onCancel={cancelWorkspace}
         onSave={saveWorkspace}
         onSaveTable={(currentItems) => saveWorkspace(currentItems)}
+        canCreateRecurso={canCreateResource}
+        isCreatingRecurso={savingResource}
+      />
+
+      <ResourceFormModal
+        open={resourceModalOpen}
+        initial={resourceDraft}
+        usedCodes={recursos.map((item) => item.codigo_recurso)}
+        catalogs={{
+          tipos: resourceCatalogs.tipoRecurso,
+          unidades: resourceCatalogs.unidades,
+          marcas: resourceCatalogs.marcas,
+          proveedores: resourceCatalogs.proveedores,
+          monedas: resourceCatalogs.monedas,
+          estados: resourceCatalogs.estadosRecurso,
+        }}
+        onClose={() => {
+          setResourceModalOpen(false);
+          setResourceDraft(null);
+          setResourceTargetRowId(null);
+          setCreatedResourcePendingLink(null);
+          setResourceCreateMessage(null);
+        }}
+        onSave={saveCreatedResourceFromRequirement}
+        allowFilePicker={dataSource === "supabase" && canManageResourceDocuments && canCreateResource}
+        filesReadOnly={!canManageResourceDocuments}
+        isSaving={savingResource}
+        message={resourceCreateMessage}
+        zIndexClassName="z-[80]"
+        onUploadFile={handleUploadResourceFile}
+        onOpenFile={handleOpenResourceFile}
+        onResolveFileUrl={createResourceFileSignedUrl}
       />
 
       <NewRequirementModal
