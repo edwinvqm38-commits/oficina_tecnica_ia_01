@@ -1585,6 +1585,23 @@ export default function CotizacionesPage() {
     setRequirementItems((prev) => applyRequirementRecursoToRows(prev, rowId, recurso));
   }
 
+  function addRequirementRow(): string {
+    const row = defaultRow(requirementCotizacionMoneda);
+    setRequirementItems((prev) => [...prev, row]);
+    return row.id;
+  }
+
+  function addCatalogResourceToRequirement(recursoId: string): string | null {
+    const recurso = recursos.find((item) => item.id === recursoId);
+    if (!recurso || recurso.estado === "Inactivo") return null;
+    const newRow = defaultRow(requirementCotizacionMoneda);
+
+    setRequirementItems((prev) =>
+      applyRequirementRecursoToRows([...prev, newRow], newRow.id, recurso),
+    );
+    return newRow.id;
+  }
+
   async function openCreateResourceForRequirementRow(rowId: string | null) {
     if (!canCreateResource) {
       setWarning("Crear recursos requiere permiso can_create en el módulo Recursos.");
@@ -2250,9 +2267,10 @@ export default function CotizacionesPage() {
         hbOptions={demoData.listCatalogHb().map((item) => item.nombre)}
         logisticaCompraOptions={demoData.listCatalogLogisticaCompra().map((item) => item.nombre)}
         onDraftChange={(patch) => setRequirementDraft((prev) => (prev ? { ...prev, ...patch } : prev))}
-        onAddRow={() => setRequirementItems((prev) => [...prev, defaultRow(requirementCotizacionMoneda)])}
+        onAddRow={addRequirementRow}
         onRemoveRow={(id) => setRequirementItems((prev) => prev.filter((row) => row.id !== id))}
         onSelectRecurso={selectRequirementRecurso}
+        onAssignCatalogRecurso={addCatalogResourceToRequirement}
         onCreateRecurso={(rowId) => void openCreateResourceForRequirementRow(rowId)}
         onPatchRow={patchRequirementRow}
         onCancel={() => {

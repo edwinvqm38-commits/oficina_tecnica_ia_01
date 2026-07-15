@@ -474,9 +474,9 @@ export default function RequerimientosPage() {
     [],
   );
 
-  function markWorkspaceDirty() {
+  const markWorkspaceDirty = useCallback(() => {
     workspaceDirtyRef.current = true;
-  }
+  }, []);
 
   const openWorkspace = useCallback((row: Requerimiento) => {
     const requestId = workspaceLoadRequestRef.current + 1;
@@ -687,7 +687,7 @@ export default function RequerimientosPage() {
     );
   }
 
-  function applyRecursoToRows(rows: EditableRequirementItem[], rowId: string, recurso: Recurso): EditableRequirementItem[] {
+  const applyRecursoToRows = useCallback((rows: EditableRequirementItem[], rowId: string, recurso: Recurso): EditableRequirementItem[] => {
     return rows.map((row) => {
       if (row.id !== rowId) return row;
         const precio = row.precio_unitario > 0 ? row.precio_unitario : recurso.precio_unitario_ref;
@@ -730,14 +730,26 @@ export default function RequerimientosPage() {
         };
         return { ...next, ...computeCurrencyTcAndTotal(next, cotizacionMoneda) };
     });
-  }
+  }, [cotizacionMoneda]);
 
-  function selectRecurso(rowId: string, recursoId: string) {
+  const selectRecurso = useCallback((rowId: string, recursoId: string) => {
     const recurso = recursos.find((item) => item.id === recursoId);
     if (!recurso || recurso.estado === "Inactivo") return;
     markWorkspaceDirty();
     setWorkspaceItems((prev) => applyRecursoToRows(prev, rowId, recurso));
-  }
+  }, [applyRecursoToRows, markWorkspaceDirty, recursos]);
+
+  const addCatalogResourceToRequirement = useCallback((recursoId: string): string | null => {
+    const recurso = recursos.find((item) => item.id === recursoId);
+    if (!recurso || recurso.estado === "Inactivo") return null;
+    const newRow = defaultRow(cotizacionMoneda);
+
+    markWorkspaceDirty();
+    setWorkspaceItems((prev) =>
+      applyRecursoToRows([...prev, newRow], newRow.id, recurso),
+    );
+    return newRow.id;
+  }, [applyRecursoToRows, cotizacionMoneda, markWorkspaceDirty, recursos]);
 
   async function openCreateResourceForRow(rowId: string | null) {
     if (!canCreateResource) {
@@ -866,9 +878,11 @@ export default function RequerimientosPage() {
     window.open(url, "_blank", "noopener,noreferrer");
   }
 
-  function addRow() {
+  function addRow(): string {
     markWorkspaceDirty();
-    setWorkspaceItems((prev) => [...prev, defaultRow(cotizacionMoneda)]);
+    const row = defaultRow(cotizacionMoneda);
+    setWorkspaceItems((prev) => [...prev, row]);
+    return row.id;
   }
 
   function removeRow(id: string) {
@@ -1375,6 +1389,7 @@ export default function RequerimientosPage() {
         onAddRow={addRow}
         onRemoveRow={removeRow}
         onSelectRecurso={selectRecurso}
+        onAssignCatalogRecurso={addCatalogResourceToRequirement}
         onCreateRecurso={(rowId) => void openCreateResourceForRow(rowId)}
         onPatchRow={patchRow}
         onCancel={cancelWorkspace}

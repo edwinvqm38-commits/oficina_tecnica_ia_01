@@ -73,10 +73,13 @@ type RequirementItemsGridProps = {
   llOptions: string[];
   hbOptions: string[];
   logisticaCompraOptions: string[];
-  onAddRow: () => void;
+  onAddRow: () => string | void;
+  onOpenResourceCatalog?: () => void;
   onRemoveRow: (id: string) => void;
   onSelectRecurso: (rowId: string, recursoId: string) => void;
   onCreateRecurso?: (rowId: string | null) => void;
+  onActiveRowChange?: (rowId: string | null) => void;
+  onEditingModeChange?: (editing: boolean) => void;
   onPatchRow: (rowId: string, patch: Partial<EditableRequirementItem>) => void;
   onSaveTable?: (itemsOverride?: EditableRequirementItem[]) => void | boolean | Promise<void | boolean>;
   isSavingTable?: boolean;
@@ -832,9 +835,12 @@ export function RequirementItemsGrid({
   hbOptions,
   logisticaCompraOptions,
   onAddRow,
+  onOpenResourceCatalog,
   onRemoveRow,
   onSelectRecurso,
   onCreateRecurso,
+  onActiveRowChange,
+  onEditingModeChange,
   onPatchRow,
   onSaveTable,
   isSavingTable = false,
@@ -922,6 +928,10 @@ export function RequirementItemsGrid({
   useEffect(() => {
     if (!canUseGridActions) setEditingMode(false);
   }, [canUseGridActions]);
+
+  useEffect(() => {
+    onActiveRowChange?.(effectiveActiveRowId);
+  }, [effectiveActiveRowId, onActiveRowChange]);
 
   useEffect(() => {
     setIsWidthsReady(false);
@@ -1286,6 +1296,7 @@ export function RequirementItemsGrid({
         onAddRow();
       }
       setEditingMode(true);
+      onEditingModeChange?.(true);
       return;
     }
     const current = serializeRows(items);
@@ -1312,7 +1323,9 @@ export function RequirementItemsGrid({
       initialSnapshotRef.current = current;
     }
     setNumericDrafts({});
+    setActiveRowId(null);
     setEditingMode(false);
+    onEditingModeChange?.(false);
   }
 
   function clearTableView() {
@@ -1590,7 +1603,8 @@ export function RequirementItemsGrid({
           <FieldLabelIcon icon="clipboard-list" label={titleLabel} className="text-xs font-medium" />
           {editingMode && showAddRowButton && canUseGridActions ? (
             <button
-              onClick={onAddRow}
+              type="button"
+              onClick={onOpenResourceCatalog ?? onAddRow}
               className={toolbarButtonClassName()}
             >
               + Agregar recurso

@@ -1,12 +1,13 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { RequirementItemsGrid, type EditableRequirementItem } from "@/components/sgp/RequirementItemsGrid";
 import { StatusBadge } from "@/components/sgp/StatusBadge";
 import { FieldLabelIcon, type IconName } from "@/components/sgp/ui/FieldLabelIcon";
 import { FieldLockButton } from "@/components/sgp/ui/FieldLockButton";
 import { DateTextInput } from "@/components/sgp/ui/DateTextInput";
 import { EmailThreadButton } from "@/components/sgp/EmailThreadButton";
+import { ResourceCatalogPanel } from "@/components/sgp/resources/ResourceCatalogPanel";
 import type { EstadoRequerimiento, Recurso, Requerimiento } from "@/lib/sgp/demoData";
 import { formatCurrencyNumber, formatDate } from "@/lib/sgp/utils";
 
@@ -43,9 +44,10 @@ type RequirementWorkspaceModalProps = {
   hbOptions: string[];
   logisticaCompraOptions: string[];
   onDraftChange: (patch: Partial<Requerimiento>) => void;
-  onAddRow: () => void;
+  onAddRow: () => string | void;
   onRemoveRow: (id: string) => void;
   onSelectRecurso: (rowId: string, recursoId: string) => void;
+  onAssignCatalogRecurso?: (recursoId: string) => string | null;
   onCreateRecurso?: (rowId: string | null) => void;
   onPatchRow: (rowId: string, patch: Partial<EditableRequirementItem>) => void;
   onCancel: () => void;
@@ -64,6 +66,7 @@ type LabelValueRowProps = {
   value: ReactNode;
   noBorder?: boolean;
   hidden?: boolean;
+  valueClassName?: string;
 };
 
 type WorkspaceActionIconName = "cancel" | "save" | "close";
@@ -72,11 +75,11 @@ function compactInfoRowClassName(): string {
   return "flex h-7 min-h-7 items-center justify-between gap-2 border-b border-stone-200 py-0 leading-none last:border-b-0";
 }
 
-function LabelValueRow({ icon, label, value, noBorder = false, hidden = false }: LabelValueRowProps) {
+function LabelValueRow({ icon, label, value, noBorder = false, hidden = false, valueClassName = "" }: LabelValueRowProps) {
   return (
     <div className={`${compactInfoRowClassName()} ${noBorder ? "!border-b-0" : ""}`}>
       {hidden ? <span className="block h-6" /> : <FieldLabelIcon icon={icon} label={label} className="whitespace-nowrap" />}
-      <div className="min-w-0 text-[11px] font-medium leading-none text-stone-700">{hidden ? null : value}</div>
+      <div className={`min-w-0 text-[11px] font-medium leading-none text-stone-700 ${valueClassName}`}>{hidden ? null : value}</div>
     </div>
   );
 }
@@ -107,6 +110,10 @@ function generalInfoDateReadClassName(): string {
 
 function generalInfoReadValueClassName(): string {
   return "inline-flex h-6 min-h-6 w-[150px] items-center justify-end px-1.5 text-[11px] font-semibold leading-6 text-stone-700";
+}
+
+function generalInfoCodeReadValueClassName(): string {
+  return "inline-flex h-6 min-h-6 max-w-full items-center justify-end whitespace-nowrap px-1.5 text-[11px] font-semibold leading-6 text-stone-700";
 }
 
 function formatTotalsByCurrency(totals: Record<string, number>): string {
@@ -224,6 +231,7 @@ export function RequirementWorkspaceModal({
   onAddRow,
   onRemoveRow,
   onSelectRecurso,
+  onAssignCatalogRecurso,
   onCreateRecurso,
   onPatchRow,
   onCancel,
@@ -236,6 +244,7 @@ export function RequirementWorkspaceModal({
   canViewPrices = true,
 }: RequirementWorkspaceModalProps) {
   const [isGeneralInfoEditing, setIsGeneralInfoEditing] = useState(false);
+  const [catalogPanelOpen, setCatalogPanelOpen] = useState(false);
   const generalSnapshotRef = useRef("");
   const hiddenBusinessFieldSet = useMemo(
     () => new Set(hiddenBusinessFields.map((field) => normalizeBusinessFieldKey(field))),
@@ -303,13 +312,6 @@ export function RequirementWorkspaceModal({
       withGuia,
     };
   }, [items]);
-
-  if (!open || !requerimiento || !draft) return null;
-
-  if (!generalSnapshotRef.current) {
-    generalSnapshotRef.current = generalComparable;
-  }
-
   function toggleGeneralInfoEdition() {
     if (!isGeneralInfoEditing) {
       generalSnapshotRef.current = generalComparable;
@@ -346,6 +348,36 @@ export function RequirementWorkspaceModal({
     return await (onSaveTable ?? onSave)(itemsOverride);
   }
 
+  const closeResourceCatalog = useCallback(() => {
+    setCatalogPanelOpen(false);
+  }, []);
+
+  const openResourceCatalog = useCallback(() => {
+    setCatalogPanelOpen(true);
+  }, []);
+
+  const handleTableEditingModeChange = useCallback((editing: boolean) => {
+    if (!editing) {
+      setCatalogPanelOpen(false);
+    }
+  }, []);
+
+  const handleCatalogResourceSelect = useCallback((resourceId: string) => {
+    const targetRowId = onAssignCatalogRecurso
+      ? onAssignCatalogRecurso(resourceId)
+      : onAddRow();
+    if (!targetRowId) return;
+    if (!onAssignCatalogRecurso) {
+      onSelectRecurso(targetRowId, resourceId);
+    }
+  }, [onAddRow, onAssignCatalogRecurso, onSelectRecurso]);
+
+  if (!open || !requerimiento || !draft) return null;
+
+  if (!generalSnapshotRef.current) {
+    generalSnapshotRef.current = generalComparable;
+  }
+
   const requirementEmailSubject = [
     cotizacionCodigo,
     cotizacionOc || "SIN OC",
@@ -363,21 +395,73 @@ export function RequirementWorkspaceModal({
     { label: "Fecha requerida", value: formatDate(draft.fecha_requerida) || "-" },
     { label: "Total RQ", value: `${cotizacionMoneda} ${formatCurrencyNumber(draft.total_rq ?? 0)}` },
   ];
+  const workspaceActions = (
+    <div className="flex min-w-0 flex-wrap items-center justify-end gap-1.5">
+      <EmailThreadButton
+        kind="requirement"
+        entityCode={draft.codigo}
+        subject={requirementEmailSubject}
+        title={`Requerimiento ${draft.codigo}`}
+        linkPath={`/requerimientos?rqCode=${encodeURIComponent(draft.codigo)}`}
+        summaryRows={requirementEmailRows}
+        className={workspaceActionButtonClassName()}
+        buttonLabel="Correo"
+      />
+      <button onClick={onCancel} className={workspaceActionButtonClassName()}>
+        <WorkspaceActionIcon name="cancel" />
+        <span>Cancelar</span>
+      </button>
+      <button onClick={() => void handleSaveTable(items)} disabled={isSaving} className={workspaceActionButtonClassName()}>
+        <WorkspaceActionIcon name="save" />
+        <span>{isSaving ? "Guardando..." : "Guardar"}</span>
+      </button>
+      <button
+        onClick={onClose}
+        title="Cerrar"
+        aria-label="Cerrar"
+        className={workspaceActionButtonClassName(true)}
+      >
+        <WorkspaceActionIcon name="close" />
+      </button>
+    </div>
+  );
 
   return (
     <div className={`fixed inset-0 ${zIndexClassName} bg-black/20 p-3 md:p-4`}>
       <div className="mx-auto flex h-[calc(100vh-24px)] max-h-[calc(100vh-24px)] w-[92vw] max-w-[1600px] flex-col overflow-hidden rounded-xl border border-border bg-panel shadow-lg">
         <div className="flex min-h-0 flex-1 flex-col overflow-hidden p-3">
+          <div className="mb-2 flex flex-none items-center justify-end lg:hidden">
+            <button
+              type="button"
+              onClick={() => setCatalogPanelOpen((current) => !current)}
+              className="inline-flex h-7 items-center rounded border border-border bg-white px-2 text-[11px] font-medium text-stone-600"
+            >
+              {catalogPanelOpen ? "Ocultar catálogo" : "Catálogo de recursos"}
+            </button>
+          </div>
+          <div
+            className={`grid min-h-0 flex-1 grid-cols-1 gap-2 overflow-hidden ${
+              catalogPanelOpen ? "lg:grid-cols-[minmax(0,1fr)_minmax(340px,390px)]" : "lg:grid-cols-1"
+            }`}
+          >
+            <div className="flex min-h-0 flex-col overflow-hidden">
           <section className="mb-2 flex-none">
-            <div className="grid grid-cols-1 items-stretch gap-2 xl:grid-cols-[1.35fr_1fr]">
-              <div className="flex flex-col">
+            <div
+              className={`grid grid-cols-1 items-stretch gap-2 ${
+                catalogPanelOpen ? "" : "xl:grid-cols-[1.35fr_1fr]"
+              }`}
+            >
+              <div className="flex min-w-0 flex-col">
                 <div className="mb-1 flex min-h-6 items-center justify-between gap-2">
                   <FieldLabelIcon icon="file-text" label="Datos generales" className="text-[11px] font-medium" />
-                  <FieldLockButton
-                    locked={!isGeneralInfoEditing}
-                    label={isGeneralInfoEditing ? "Guardar datos" : "Editar datos"}
-                    onToggle={toggleGeneralInfoEdition}
-                  />
+                  <div className="flex min-w-0 flex-wrap items-center justify-end gap-1.5">
+                    {catalogPanelOpen ? workspaceActions : null}
+                    <FieldLockButton
+                      locked={!isGeneralInfoEditing}
+                      label={isGeneralInfoEditing ? "Guardar datos" : "Editar datos"}
+                      onToggle={toggleGeneralInfoEdition}
+                    />
+                  </div>
                 </div>
                 <div className="rounded border border-border bg-white px-2 pt-2 pb-2">
                   <div className="relative grid grid-cols-1 gap-x-3 gap-y-0 border-t border-stone-200 md:grid-cols-3 after:pointer-events-none after:absolute after:inset-x-0 after:bottom-0 after:border-b after:border-stone-200 after:content-['']">
@@ -390,22 +474,25 @@ export function RequirementWorkspaceModal({
                         hidden={isBusinessFieldHidden("proyecto")}
                       />
                     </div>
-                    <LabelValueRow
-                      icon="clipboard-list"
-                      label="Requerimiento"
-                      value={
-                        isGeneralInfoEditing ? (
-                          <input
-                            value={draft.codigo}
-                            onChange={(event) => onDraftChange({ codigo: event.target.value })}
-                            className={generalInfoTextInputClassName()}
-                            placeholder="Código RQ"
-                          />
-                        ) : (
-                          <span className={generalInfoReadValueClassName()}>{draft.codigo}</span>
-                        )
-                      }
-                    />
+                    <div className="min-w-0 md:col-span-2">
+                      <LabelValueRow
+                        icon="clipboard-list"
+                        label="Requerimiento"
+                        value={
+                          isGeneralInfoEditing ? (
+                            <input
+                              value={draft.codigo}
+                              onChange={(event) => onDraftChange({ codigo: event.target.value })}
+                              className={`${generalInfoTextInputClassName()} w-full min-w-0 whitespace-nowrap`}
+                              placeholder="Código RQ"
+                            />
+                          ) : (
+                            <span className={generalInfoCodeReadValueClassName()}>{draft.codigo}</span>
+                          )
+                        }
+                        valueClassName="flex-1 text-right"
+                      />
+                    </div>
                     <LabelValueRow icon="file-text" label="Cotización" value={cotizacionCodigo} />
                     <LabelValueRow icon="file-text" label="OC" value={cotizacionOc || "-"} hidden={isBusinessFieldHidden("oc")} />
                     <LabelValueRow icon="building" label="Cliente" value={cliente} hidden={isBusinessFieldHidden("cliente")} />
@@ -580,42 +667,15 @@ export function RequirementWorkspaceModal({
                 </div>
               </div>
 
-              <div className="flex h-full flex-col">
+              {!catalogPanelOpen ? (
+              <div className="flex h-full min-w-0 flex-col">
                 <div className="mb-1 flex min-h-6 items-center justify-between gap-2">
                   <FieldLabelIcon
                     icon="pie-chart"
                     label="Resumen por tipo de recurso"
                     className="text-[11px] font-medium"
                   />
-                  <div className="flex items-center gap-1.5">
-                    <EmailThreadButton
-                      kind="requirement"
-                      entityCode={draft.codigo}
-                      subject={requirementEmailSubject}
-                      title={`Requerimiento ${draft.codigo}`}
-                      linkPath={`/requerimientos?rqCode=${encodeURIComponent(draft.codigo)}`}
-                      summaryRows={requirementEmailRows}
-                      className={workspaceActionButtonClassName()}
-                      buttonLabel="Correo"
-                    />
-                    <button onClick={onCancel} className={workspaceActionButtonClassName()}>
-                      <WorkspaceActionIcon name="cancel" />
-                      <span>Cancelar</span>
-                    </button>
-                    <button onClick={() => void handleSaveTable(items)} disabled={isSaving} className={workspaceActionButtonClassName()}>
-                      <WorkspaceActionIcon name="save" />
-                      <span>{isSaving ? "Guardando..." : "Guardar"}</span>
-                    </button>
-                    <button
-                      onClick={onClose}
-                      title="Cerrar"
-                      aria-label="Cerrar"
-                      className={workspaceActionButtonClassName(true)}
-                    >
-                      <WorkspaceActionIcon name="close" />
-
-                    </button>
-                  </div>
+                  {workspaceActions}
                 </div>
                 <div className="rounded border border-border bg-white px-2 pt-2 pb-[7px]">
                   <div className="relative mt-px grid grid-cols-1 gap-1.5 border-t border-stone-200 sm:grid-cols-2 xl:grid-cols-2 after:pointer-events-none after:absolute after:inset-x-0 after:bottom-0 after:border-b after:border-stone-200 after:content-['']">
@@ -647,6 +707,7 @@ export function RequirementWorkspaceModal({
                   </div>
                 </div>
               </div>
+              ) : null}
             </div>
           </section>
 
@@ -664,9 +725,11 @@ export function RequirementWorkspaceModal({
               hbOptions={hbOptions}
               logisticaCompraOptions={logisticaCompraOptions}
               onAddRow={onAddRow}
+              onOpenResourceCatalog={openResourceCatalog}
               onRemoveRow={onRemoveRow}
               onSelectRecurso={onSelectRecurso}
               onCreateRecurso={onCreateRecurso}
+              onEditingModeChange={handleTableEditingModeChange}
               onPatchRow={onPatchRow}
               onSaveTable={handleSaveTable}
               isSavingTable={isSaving}
@@ -675,6 +738,16 @@ export function RequirementWorkspaceModal({
               fullHeight
               maxHeightClassName="h-full"
             />
+          </div>
+            </div>
+            <div className={`${catalogPanelOpen ? "flex min-h-[320px]" : "hidden"} min-h-0 lg:min-h-0`}>
+              <ResourceCatalogPanel
+                resources={recursos}
+                onSelectResource={handleCatalogResourceSelect}
+                onClose={closeResourceCatalog}
+                className="h-full"
+              />
+            </div>
           </div>
         </div>
       </div>
