@@ -32,6 +32,10 @@ export type SensitivePermissionKey =
   | "can_delete_associated_requirements"
   | "can_view_oc"
   | "can_view_variance"
+  | "can_edit_requirement_detail"
+  | "can_save_requirement_detail"
+  | "can_open_resource_catalog"
+  | "can_add_resource_to_requirement"
   | "can_edit_catalogs"
   | "can_import_export";
 
@@ -247,6 +251,8 @@ export const MODULE_PERMISSIONS_CATALOG: ModulePermissionCatalogItem[] = [
       { key: "can_view_supplier", label: "Ver proveedor", persistedColumn: "can_view_supplier" },
       { key: "can_view_oc", label: "Ver OC/OS" },
       { key: "can_view_variance", label: "Ver desviaciones" },
+      { key: "can_edit_requirement_detail", label: "Editar detalle de RQ" },
+      { key: "can_save_requirement_detail", label: "Guardar detalle de RQ" },
     ],
     viewGroups: [
       {
@@ -341,6 +347,8 @@ export const MODULE_PERMISSIONS_CATALOG: ModulePermissionCatalogItem[] = [
     sensitivePermissions: [
       { key: "can_view_prices", label: "Ver precios", persistedColumn: "can_view_prices" },
       { key: "can_view_supplier", label: "Ver proveedor/marca", persistedColumn: "can_view_supplier" },
+      { key: "can_open_resource_catalog", label: "Ver catálogo desde RQ" },
+      { key: "can_add_resource_to_requirement", label: "Agregar recurso a RQ" },
     ],
     viewGroups: [
       {

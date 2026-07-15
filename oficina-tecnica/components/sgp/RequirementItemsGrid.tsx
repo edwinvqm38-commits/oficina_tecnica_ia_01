@@ -84,6 +84,9 @@ type RequirementItemsGridProps = {
   onSaveTable?: (itemsOverride?: EditableRequirementItem[]) => void | boolean | Promise<void | boolean>;
   isSavingTable?: boolean;
   canCreateRecurso?: boolean;
+  canEditItems?: boolean;
+  canSaveItems?: boolean;
+  canUseResourceCatalog?: boolean;
   isCreatingRecurso?: boolean;
   titleLabel?: string;
   showAddRowButton?: boolean;
@@ -845,6 +848,9 @@ export function RequirementItemsGrid({
   onSaveTable,
   isSavingTable = false,
   canCreateRecurso = false,
+  canEditItems = true,
+  canSaveItems = true,
+  canUseResourceCatalog = true,
   isCreatingRecurso = false,
   titleLabel = "Detalle de requerimiento",
   showAddRowButton = true,
@@ -875,6 +881,8 @@ export function RequirementItemsGrid({
   const isColumnHidden = useCallback((key: ColumnKey) => hiddenColumnSet.has(key), [hiddenColumnSet]);
   const [editingMode, setEditingMode] = useState(false);
   const canUseGridActions = !isColumnHidden("acciones");
+  const canEditGridItems = canUseGridActions && canEditItems && canSaveItems;
+  const canOpenCatalogFromGrid = Boolean(onOpenResourceCatalog && canUseResourceCatalog);
   const [preview, setPreview] = useState<PreviewState>(null);
   const [activeRowId, setActiveRowId] = useState<string | null>(null);
   const [numericDrafts, setNumericDrafts] = useState<Record<string, string>>({});
@@ -926,8 +934,8 @@ export function RequirementItemsGrid({
   }, []);
 
   useEffect(() => {
-    if (!canUseGridActions) setEditingMode(false);
-  }, [canUseGridActions]);
+    if (!canEditGridItems) setEditingMode(false);
+  }, [canEditGridItems]);
 
   useEffect(() => {
     onActiveRowChange?.(effectiveActiveRowId);
@@ -1289,6 +1297,7 @@ export function RequirementItemsGrid({
   }
 
   async function toggleTableEdit() {
+    if (!canEditGridItems) return;
     if (!editingMode) {
       initialSnapshotRef.current = serializeRows(items);
       setNumericDrafts({});
@@ -1601,16 +1610,16 @@ export function RequirementItemsGrid({
       <div className="flex flex-none items-center justify-between border-b border-border px-2 py-1.5">
         <div className="flex items-center gap-2">
           <FieldLabelIcon icon="clipboard-list" label={titleLabel} className="text-xs font-medium" />
-          {editingMode && showAddRowButton && canUseGridActions ? (
+          {editingMode && showAddRowButton && canUseGridActions && (canOpenCatalogFromGrid || !onOpenResourceCatalog) ? (
             <button
               type="button"
-              onClick={onOpenResourceCatalog ?? onAddRow}
+              onClick={canOpenCatalogFromGrid ? onOpenResourceCatalog : onAddRow}
               className={toolbarButtonClassName()}
             >
               + Agregar recurso
             </button>
           ) : null}
-          {editingMode && canUseGridActions && canCreateRecurso && onCreateRecurso ? (
+          {editingMode && canUseGridActions && canEditGridItems && canCreateRecurso && onCreateRecurso ? (
             <button
               type="button"
               onClick={() => onCreateRecurso(effectiveActiveRowId)}
@@ -1634,11 +1643,13 @@ export function RequirementItemsGrid({
           >
             <FieldLabelIcon icon="sliders-horizontal" label="Limpiar filtros" className="text-xs text-stone-600" />
           </button>
-          <FieldLockButton
-            locked={!editingMode}
-            label={editingMode ? (isSavingTable ? "Guardando..." : "Guardar tabla") : "Editar tabla"}
-            onToggle={() => void toggleTableEdit()}
-          />
+          {canEditGridItems ? (
+            <FieldLockButton
+              locked={!editingMode}
+              label={editingMode ? (isSavingTable ? "Guardando..." : "Guardar tabla") : "Editar tabla"}
+              onToggle={() => void toggleTableEdit()}
+            />
+          ) : null}
           </>
           ) : null}
         </div>

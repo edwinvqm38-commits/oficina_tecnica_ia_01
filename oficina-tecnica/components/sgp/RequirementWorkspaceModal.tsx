@@ -55,7 +55,12 @@ type RequirementWorkspaceModalProps = {
   onSaveTable?: (itemsOverride?: EditableRequirementItem[]) => void | boolean | Promise<void | boolean>;
   isSaving?: boolean;
   canCreateRecurso?: boolean;
+  canEditItems?: boolean;
+  canSaveItems?: boolean;
+  canUseResourceCatalog?: boolean;
+  canAddCatalogResource?: boolean;
   isCreatingRecurso?: boolean;
+  hiddenItemColumnKeys?: string[];
   hiddenBusinessFields?: string[];
   canViewPrices?: boolean;
 };
@@ -239,7 +244,12 @@ export function RequirementWorkspaceModal({
   onSaveTable,
   isSaving = false,
   canCreateRecurso = false,
+  canEditItems = true,
+  canSaveItems = true,
+  canUseResourceCatalog = true,
+  canAddCatalogResource = true,
   isCreatingRecurso = false,
+  hiddenItemColumnKeys = [],
   hiddenBusinessFields = [],
   canViewPrices = true,
 }: RequirementWorkspaceModalProps) {
@@ -353,8 +363,9 @@ export function RequirementWorkspaceModal({
   }, []);
 
   const openResourceCatalog = useCallback(() => {
+    if (!canUseResourceCatalog) return;
     setCatalogPanelOpen(true);
-  }, []);
+  }, [canUseResourceCatalog]);
 
   const handleTableEditingModeChange = useCallback((editing: boolean) => {
     if (!editing) {
@@ -363,6 +374,7 @@ export function RequirementWorkspaceModal({
   }, []);
 
   const handleCatalogResourceSelect = useCallback((resourceId: string) => {
+    if (!canAddCatalogResource) return;
     const targetRowId = onAssignCatalogRecurso
       ? onAssignCatalogRecurso(resourceId)
       : onAddRow();
@@ -370,7 +382,7 @@ export function RequirementWorkspaceModal({
     if (!onAssignCatalogRecurso) {
       onSelectRecurso(targetRowId, resourceId);
     }
-  }, [onAddRow, onAssignCatalogRecurso, onSelectRecurso]);
+  }, [canAddCatalogResource, onAddRow, onAssignCatalogRecurso, onSelectRecurso]);
 
   if (!open || !requerimiento || !draft) return null;
 
@@ -395,6 +407,7 @@ export function RequirementWorkspaceModal({
     { label: "Fecha requerida", value: formatDate(draft.fecha_requerida) || "-" },
     { label: "Total RQ", value: `${cotizacionMoneda} ${formatCurrencyNumber(draft.total_rq ?? 0)}` },
   ];
+  const isResourceCatalogVisible = catalogPanelOpen && canUseResourceCatalog && canEditItems;
   const workspaceActions = (
     <div className="flex min-w-0 flex-wrap items-center justify-end gap-1.5">
       <EmailThreadButton
@@ -734,17 +747,22 @@ export function RequirementWorkspaceModal({
               onSaveTable={handleSaveTable}
               isSavingTable={isSaving}
               canCreateRecurso={canCreateRecurso}
+              canEditItems={canEditItems}
+              canSaveItems={canSaveItems}
+              canUseResourceCatalog={canUseResourceCatalog}
               isCreatingRecurso={isCreatingRecurso}
+              hiddenColumnKeys={hiddenItemColumnKeys}
               fullHeight
               maxHeightClassName="h-full"
             />
           </div>
             </div>
-            <div className={`${catalogPanelOpen ? "flex min-h-[320px]" : "hidden"} min-h-0 lg:min-h-0`}>
+            <div className={`${isResourceCatalogVisible ? "flex min-h-[320px]" : "hidden"} min-h-0 lg:min-h-0`}>
               <ResourceCatalogPanel
                 resources={recursos}
                 onSelectResource={handleCatalogResourceSelect}
                 onClose={closeResourceCatalog}
+                canAddResource={canAddCatalogResource}
                 className="h-full"
               />
             </div>

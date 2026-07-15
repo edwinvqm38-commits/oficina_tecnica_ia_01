@@ -9,6 +9,7 @@ import { ResourceFormModal } from "@/components/sgp/resources/ResourceFormModal"
 import type { EditableRequirementItem } from "@/components/sgp/RequirementItemsGrid";
 import { StatusBadge } from "@/components/sgp/StatusBadge";
 import { getModulePermissions, type ModulePermissions } from "@/lib/sgp/modulePermissionsRepository";
+import { resolveSensitivePermission, resolveViewGroupPermission } from "@/lib/sgp/modulePermissionGuards";
 import {
   demoData,
   type CatalogCodigoCliente,
@@ -594,6 +595,8 @@ export default function CotizacionesPage() {
   const [resourceCreateMessage, setResourceCreateMessage] = useState<string | null>(null);
   const [createdResourcePendingLink, setCreatedResourcePendingLink] = useState<Recurso | null>(null);
   const [savingResource, setSavingResource] = useState(false);
+  const [detailRqPermissionsLoading, setDetailRqPermissionsLoading] = useState(true);
+  const [detailRqModulePermissions, setDetailRqModulePermissions] = useState<ModulePermissions | null>(null);
   const [resourcePermissionsLoading, setResourcePermissionsLoading] = useState(true);
   const [resourceModulePermissions, setResourceModulePermissions] = useState<ModulePermissions | null>(null);
   const currentUserEmail = (profile.email ?? user.email ?? "").trim().toLowerCase();
@@ -601,6 +604,32 @@ export default function CotizacionesPage() {
   const resourceCatalogs = useMemo(() => demoData.listCatalogSummary(), []);
   const isElevatedResourceUser =
     profile.is_super_admin === true || profile.role === "admin" || currentUserEmail === "edwin.qm@outlook.com";
+  const legacyCanEditRequirementDetail = modulePermissions?.can_edit === true || isElevatedResourceUser;
+  const requirementDetailPermissionsReady = !detailRqPermissionsLoading && !isDataLoading && !isPermissionsLoading;
+  const canEditRequirementDetail =
+    dataSource === "demo" ||
+    (dataSource === "supabase" &&
+      requirementDetailPermissionsReady &&
+      resolveSensitivePermission(
+        detailRqModulePermissions,
+        "detalle_rq",
+        "can_edit_requirement_detail",
+        detailRqModulePermissions?.can_edit === true || legacyCanEditRequirementDetail,
+      ));
+  const canSaveRequirementDetail =
+    dataSource === "demo" ||
+    (dataSource === "supabase" &&
+      requirementDetailPermissionsReady &&
+      resolveSensitivePermission(
+        detailRqModulePermissions,
+        "detalle_rq",
+        "can_save_requirement_detail",
+        detailRqModulePermissions?.can_edit === true || legacyCanEditRequirementDetail,
+      ));
+  const canViewRequirementDetailActions =
+    dataSource === "demo" ||
+    resolveViewGroupPermission(detailRqModulePermissions, "detalle_rq", "detail_rq_actions", true);
+  const canViewResourceCatalogByPermission = resourceModulePermissions?.can_view === true || isElevatedResourceUser;
   const canCreateResource =
     dataSource === "supabase" &&
     !resourcePermissionsLoading &&
@@ -613,6 +642,38 @@ export default function CotizacionesPage() {
     (resourceModulePermissions?.can_edit === true ||
       resourceModulePermissions?.can_upload_files === true ||
       isElevatedResourceUser);
+  const canOpenResourceCatalog =
+    dataSource === "demo" ||
+    (dataSource === "supabase" &&
+      !resourcePermissionsLoading &&
+      requirementDetailPermissionsReady &&
+      canViewRequirementDetailActions &&
+      canViewResourceCatalogByPermission &&
+      resolveSensitivePermission(
+        resourceModulePermissions,
+        "recursos",
+        "can_open_resource_catalog",
+        canViewResourceCatalogByPermission,
+      ));
+  const canAddCatalogResourceToRequirement =
+    canOpenResourceCatalog &&
+    canEditRequirementDetail &&
+    canSaveRequirementDetail &&
+    resolveSensitivePermission(
+      resourceModulePermissions,
+      "recursos",
+      "can_add_resource_to_requirement",
+      canViewResourceCatalogByPermission,
+    );
+  const hiddenRequirementItemColumnKeys = useMemo(() => {
+    const hidden = new Set<string>();
+    if (dataSource === "supabase" && detailRqModulePermissions) {
+      const allowedColumns = new Set(detailRqModulePermissions.visible_columns);
+      if (allowedColumns.size > 0 && !allowedColumns.has("acciones")) hidden.add("acciones");
+      if (!canViewRequirementDetailActions) hidden.add("acciones");
+    }
+    return Array.from(hidden);
+  }, [canViewRequirementDetailActions, dataSource, detailRqModulePermissions]);
 
   useEffect(() => {
     debugUiState("cotizaciones", "mounted", {});
@@ -758,6 +819,35 @@ export default function CotizacionesPage() {
       .finally(() => {
         if (!active) return;
         setIsPermissionsLoading(false);
+      });
+
+    return () => {
+      active = false;
+    };
+  }, [currentUserEmail]);
+
+  useEffect(() => {
+    let active = true;
+    setDetailRqPermissionsLoading(true);
+    if (!currentUserEmail) {
+      setDetailRqModulePermissions(null);
+      setDetailRqPermissionsLoading(false);
+      return () => {
+        active = false;
+      };
+    }
+
+    getModulePermissions("detalle_rq", currentUserEmail)
+      .then((permissions) => {
+        if (!active) return;
+        setDetailRqModulePermissions(permissions);
+      })
+      .catch(() => {
+        if (!active) return;
+        setDetailRqModulePermissions(null);
+      })
+      .finally(() => {
+        if (active) setDetailRqPermissionsLoading(false);
       });
 
     return () => {
@@ -1521,6 +1611,10 @@ export default function CotizacionesPage() {
   }
 
   function patchRequirementRow(rowId: string, patch: Partial<EditableRequirementItem>) {
+    if (!canEditRequirementDetail) {
+      setWarning("Editar filas requiere permiso de edición del detalle de requerimiento.");
+      return;
+    }
     setRequirementItems((prev) =>
       prev.map((row) => {
         if (row.id !== rowId) return row;
@@ -1580,18 +1674,30 @@ export default function CotizacionesPage() {
   }
 
   function selectRequirementRecurso(rowId: string, recursoId: string) {
+    if (!canEditRequirementDetail || !canSaveRequirementDetail) {
+      setWarning("Editar el detalle de requerimiento requiere permisos de edición y guardado del detalle.");
+      return;
+    }
     const recurso = recursos.find((item) => item.id === recursoId);
     if (!recurso || recurso.estado === "Inactivo") return;
     setRequirementItems((prev) => applyRequirementRecursoToRows(prev, rowId, recurso));
   }
 
   function addRequirementRow(): string {
+    if (!canEditRequirementDetail || !canSaveRequirementDetail) {
+      setWarning("Agregar filas requiere permisos de edición y guardado del detalle de requerimiento.");
+      return "";
+    }
     const row = defaultRow(requirementCotizacionMoneda);
     setRequirementItems((prev) => [...prev, row]);
     return row.id;
   }
 
   function addCatalogResourceToRequirement(recursoId: string): string | null {
+    if (!canAddCatalogResourceToRequirement) {
+      setWarning("Agregar recursos al requerimiento requiere permiso para editar/guardar el detalle y agregar recursos desde el catálogo.");
+      return null;
+    }
     const recurso = recursos.find((item) => item.id === recursoId);
     if (!recurso || recurso.estado === "Inactivo") return null;
     const newRow = defaultRow(requirementCotizacionMoneda);
@@ -1600,6 +1706,14 @@ export default function CotizacionesPage() {
       applyRequirementRecursoToRows([...prev, newRow], newRow.id, recurso),
     );
     return newRow.id;
+  }
+
+  function removeRequirementRow(id: string) {
+    if (!canEditRequirementDetail || !canSaveRequirementDetail) {
+      setWarning("Eliminar filas requiere permisos de edición y guardado del detalle de requerimiento.");
+      return;
+    }
+    setRequirementItems((prev) => prev.filter((row) => row.id !== id));
   }
 
   async function openCreateResourceForRequirementRow(rowId: string | null) {
@@ -1734,6 +1848,10 @@ export default function CotizacionesPage() {
     itemsOverride?: EditableRequirementItem[],
     recursosOverride = recursos,
   ): Promise<boolean> {
+    if (!canSaveRequirementDetail) {
+      setWarning("Guardar el detalle requiere permiso de guardado del detalle de requerimiento.");
+      return false;
+    }
     if (!requirementDraft || !selectedRequirementId) return false;
     const itemsToSave = itemsOverride ?? requirementItems;
     const normalizedDraft = normalizeRequirementDates(requirementDraft);
@@ -2268,7 +2386,7 @@ export default function CotizacionesPage() {
         logisticaCompraOptions={demoData.listCatalogLogisticaCompra().map((item) => item.nombre)}
         onDraftChange={(patch) => setRequirementDraft((prev) => (prev ? { ...prev, ...patch } : prev))}
         onAddRow={addRequirementRow}
-        onRemoveRow={(id) => setRequirementItems((prev) => prev.filter((row) => row.id !== id))}
+        onRemoveRow={removeRequirementRow}
         onSelectRecurso={selectRequirementRecurso}
         onAssignCatalogRecurso={addCatalogResourceToRequirement}
         onCreateRecurso={(rowId) => void openCreateResourceForRequirementRow(rowId)}
@@ -2280,7 +2398,12 @@ export default function CotizacionesPage() {
         onSave={saveRequirementOverlay}
         onSaveTable={(currentItems) => saveRequirementOverlay(currentItems)}
         canCreateRecurso={canCreateResource}
+        canEditItems={canEditRequirementDetail}
+        canSaveItems={canSaveRequirementDetail}
+        canUseResourceCatalog={canOpenResourceCatalog}
+        canAddCatalogResource={canAddCatalogResourceToRequirement}
         isCreatingRecurso={savingResource}
+        hiddenItemColumnKeys={hiddenRequirementItemColumnKeys}
         hiddenBusinessFields={hiddenBusinessFields}
         canViewPrices={effectiveCanViewPrices && canViewQuotationEconomicSummary}
       />

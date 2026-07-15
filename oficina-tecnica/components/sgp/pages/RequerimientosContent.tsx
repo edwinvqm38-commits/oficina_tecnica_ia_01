@@ -25,6 +25,7 @@ import {
 } from "@/lib/sgp/clientDataCache";
 import { saveRequirementItemsForRequirement } from "@/lib/sgp/requirementItemsRepository";
 import { updateRequirementSupabase } from "@/lib/sgp/requirementsRepository";
+import { resolveSensitivePermission, resolveViewGroupPermission } from "@/lib/sgp/modulePermissionGuards";
 import { getModulePermissions, type ModulePermissions } from "@/lib/sgp/modulePermissionsRepository";
 import {
   createRecurso,
@@ -353,6 +354,9 @@ export default function RequerimientosPage() {
   const [resourceCreateMessage, setResourceCreateMessage] = useState<string | null>(null);
   const [createdResourcePendingLink, setCreatedResourcePendingLink] = useState<Recurso | null>(null);
   const [savingResource, setSavingResource] = useState(false);
+  const [requirementPermissionsLoading, setRequirementPermissionsLoading] = useState(true);
+  const [requirementModulePermissions, setRequirementModulePermissions] = useState<ModulePermissions | null>(null);
+  const [detailRqModulePermissions, setDetailRqModulePermissions] = useState<ModulePermissions | null>(null);
   const [resourcePermissionsLoading, setResourcePermissionsLoading] = useState(true);
   const [resourceModulePermissions, setResourceModulePermissions] = useState<ModulePermissions | null>(null);
   const [warning, setWarning] = useState<string | null>(null);
@@ -369,6 +373,33 @@ export default function RequerimientosPage() {
   const currentUserEmail = (profile.email ?? user.email ?? "").trim().toLowerCase();
   const isElevatedResourceUser =
     profile.is_super_admin === true || profile.role === "admin" || currentUserEmail === "edwin.qm@outlook.com";
+  const isElevatedRequirementUser = isElevatedResourceUser;
+  const requirementPermissionsReady = !requirementPermissionsLoading && !loading;
+  const legacyCanEditRequirementDetail = requirementModulePermissions?.can_edit === true || isElevatedRequirementUser;
+  const canEditRequirementDetail =
+    dataSource === "demo" ||
+    (dataSource === "supabase" &&
+      requirementPermissionsReady &&
+      resolveSensitivePermission(
+        detailRqModulePermissions,
+        "detalle_rq",
+        "can_edit_requirement_detail",
+        detailRqModulePermissions?.can_edit === true || legacyCanEditRequirementDetail,
+      ));
+  const canSaveRequirementDetail =
+    dataSource === "demo" ||
+    (dataSource === "supabase" &&
+      requirementPermissionsReady &&
+      resolveSensitivePermission(
+        detailRqModulePermissions,
+        "detalle_rq",
+        "can_save_requirement_detail",
+        detailRqModulePermissions?.can_edit === true || legacyCanEditRequirementDetail,
+      ));
+  const canViewRequirementDetailActions =
+    dataSource === "demo" ||
+    resolveViewGroupPermission(detailRqModulePermissions, "detalle_rq", "detail_rq_actions", true);
+  const canViewResourceCatalogByPermission = resourceModulePermissions?.can_view === true || isElevatedResourceUser;
   const canCreateResource =
     dataSource === "supabase" &&
     !resourcePermissionsLoading &&
@@ -381,6 +412,38 @@ export default function RequerimientosPage() {
     (resourceModulePermissions?.can_edit === true ||
       resourceModulePermissions?.can_upload_files === true ||
       isElevatedResourceUser);
+  const canOpenResourceCatalog =
+    dataSource === "demo" ||
+    (dataSource === "supabase" &&
+      !resourcePermissionsLoading &&
+      requirementPermissionsReady &&
+      canViewRequirementDetailActions &&
+      canViewResourceCatalogByPermission &&
+      resolveSensitivePermission(
+        resourceModulePermissions,
+        "recursos",
+        "can_open_resource_catalog",
+        canViewResourceCatalogByPermission,
+      ));
+  const canAddCatalogResourceToRequirement =
+    canOpenResourceCatalog &&
+    canEditRequirementDetail &&
+    canSaveRequirementDetail &&
+    resolveSensitivePermission(
+      resourceModulePermissions,
+      "recursos",
+      "can_add_resource_to_requirement",
+      canViewResourceCatalogByPermission,
+    );
+  const hiddenRequirementItemColumnKeys = useMemo(() => {
+    const hidden = new Set<string>();
+    if (dataSource === "supabase" && detailRqModulePermissions) {
+      const allowedColumns = new Set(detailRqModulePermissions.visible_columns);
+      if (allowedColumns.size > 0 && !allowedColumns.has("acciones")) hidden.add("acciones");
+      if (!canViewRequirementDetailActions) hidden.add("acciones");
+    }
+    return Array.from(hidden);
+  }, [canViewRequirementDetailActions, dataSource, detailRqModulePermissions]);
 
   useEffect(() => {
     debugUiState("requerimientos", "mounted", {});
@@ -390,6 +453,41 @@ export default function RequerimientosPage() {
       cleanupLifecycleDiagnostics();
     };
   }, []);
+
+  useEffect(() => {
+    let active = true;
+    setRequirementPermissionsLoading(true);
+    if (!currentUserEmail) {
+      setRequirementModulePermissions(null);
+      setDetailRqModulePermissions(null);
+      setRequirementPermissionsLoading(false);
+      return () => {
+        active = false;
+      };
+    }
+
+    Promise.all([
+      getModulePermissions("requerimientos", currentUserEmail),
+      getModulePermissions("detalle_rq", currentUserEmail),
+    ])
+      .then(([requirementPermissions, detailPermissions]) => {
+        if (!active) return;
+        setRequirementModulePermissions(requirementPermissions);
+        setDetailRqModulePermissions(detailPermissions);
+      })
+      .catch(() => {
+        if (!active) return;
+        setRequirementModulePermissions(null);
+        setDetailRqModulePermissions(null);
+      })
+      .finally(() => {
+        if (active) setRequirementPermissionsLoading(false);
+      });
+
+    return () => {
+      active = false;
+    };
+  }, [currentUserEmail]);
 
   useEffect(() => {
     let active = true;
@@ -672,6 +770,10 @@ export default function RequerimientosPage() {
   }, [draft?.codigo, initialUiState.rqCode, page, pageSize, tableViewState]);
 
   function patchRow(rowId: string, patch: Partial<EditableRequirementItem>) {
+    if (!canEditRequirementDetail) {
+      setWarning("Editar filas requiere permiso de edición del detalle de requerimiento.");
+      return;
+    }
     markWorkspaceDirty();
     setWorkspaceItems((prev) =>
       prev.map((row) => {
@@ -733,13 +835,21 @@ export default function RequerimientosPage() {
   }, [cotizacionMoneda]);
 
   const selectRecurso = useCallback((rowId: string, recursoId: string) => {
+    if (!canEditRequirementDetail || !canSaveRequirementDetail) {
+      setWarning("Editar el detalle de requerimiento requiere permisos de edición y guardado del detalle.");
+      return;
+    }
     const recurso = recursos.find((item) => item.id === recursoId);
     if (!recurso || recurso.estado === "Inactivo") return;
     markWorkspaceDirty();
     setWorkspaceItems((prev) => applyRecursoToRows(prev, rowId, recurso));
-  }, [applyRecursoToRows, markWorkspaceDirty, recursos]);
+  }, [applyRecursoToRows, canEditRequirementDetail, canSaveRequirementDetail, markWorkspaceDirty, recursos]);
 
   const addCatalogResourceToRequirement = useCallback((recursoId: string): string | null => {
+    if (!canAddCatalogResourceToRequirement) {
+      setWarning("Agregar recursos al requerimiento requiere permiso para editar/guardar el detalle y agregar recursos desde el catálogo.");
+      return null;
+    }
     const recurso = recursos.find((item) => item.id === recursoId);
     if (!recurso || recurso.estado === "Inactivo") return null;
     const newRow = defaultRow(cotizacionMoneda);
@@ -749,7 +859,7 @@ export default function RequerimientosPage() {
       applyRecursoToRows([...prev, newRow], newRow.id, recurso),
     );
     return newRow.id;
-  }, [applyRecursoToRows, cotizacionMoneda, markWorkspaceDirty, recursos]);
+  }, [applyRecursoToRows, canAddCatalogResourceToRequirement, cotizacionMoneda, markWorkspaceDirty, recursos]);
 
   async function openCreateResourceForRow(rowId: string | null) {
     if (!canCreateResource) {
@@ -879,6 +989,10 @@ export default function RequerimientosPage() {
   }
 
   function addRow(): string {
+    if (!canEditRequirementDetail || !canSaveRequirementDetail) {
+      setWarning("Agregar filas requiere permisos de edición y guardado del detalle de requerimiento.");
+      return "";
+    }
     markWorkspaceDirty();
     const row = defaultRow(cotizacionMoneda);
     setWorkspaceItems((prev) => [...prev, row]);
@@ -886,6 +1000,10 @@ export default function RequerimientosPage() {
   }
 
   function removeRow(id: string) {
+    if (!canEditRequirementDetail || !canSaveRequirementDetail) {
+      setWarning("Eliminar filas requiere permisos de edición y guardado del detalle de requerimiento.");
+      return;
+    }
     markWorkspaceDirty();
     setWorkspaceItems((prev) => prev.filter((row) => row.id !== id));
   }
@@ -896,6 +1014,10 @@ export default function RequerimientosPage() {
   }
 
   async function saveWorkspace(itemsOverride?: EditableRequirementItem[], recursosOverride = recursos): Promise<boolean> {
+    if (!canSaveRequirementDetail) {
+      setWarning("Guardar el detalle requiere permiso de guardado del detalle de requerimiento.");
+      return false;
+    }
     if (!draft || !selectedId) return false;
     const itemsToSave = itemsOverride ?? workspaceItems;
     const shouldPersistToSupabase = isUuid(selectedId);
@@ -1396,7 +1518,12 @@ export default function RequerimientosPage() {
         onSave={saveWorkspace}
         onSaveTable={(currentItems) => saveWorkspace(currentItems)}
         canCreateRecurso={canCreateResource}
+        canEditItems={canEditRequirementDetail}
+        canSaveItems={canSaveRequirementDetail}
+        canUseResourceCatalog={canOpenResourceCatalog}
+        canAddCatalogResource={canAddCatalogResourceToRequirement}
         isCreatingRecurso={savingResource}
+        hiddenItemColumnKeys={hiddenRequirementItemColumnKeys}
       />
 
       <ResourceFormModal

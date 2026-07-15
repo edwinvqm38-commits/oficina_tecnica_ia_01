@@ -20,6 +20,7 @@ type ResourceCatalogPanelProps = {
   resources: Recurso[];
   onSelectResource: (resourceId: string) => void;
   onClose: () => void;
+  canAddResource?: boolean;
   className?: string;
 };
 
@@ -381,6 +382,7 @@ export const ResourceCatalogPanel = memo(function ResourceCatalogPanel({
   resources,
   onSelectResource,
   onClose,
+  canAddResource = true,
   className = "",
 }: ResourceCatalogPanelProps) {
   const [query, setQuery] = useState("");
@@ -523,6 +525,10 @@ export const ResourceCatalogPanel = memo(function ResourceCatalogPanel({
   }, [activeResource?.id, filteredResources, selectByIndex]);
 
   const handleAddSelectedResource = useCallback((resourceId?: string) => {
+    if (!canAddResource) {
+      setMessage("No tienes permiso para agregar recursos al requerimiento.");
+      return;
+    }
     const resource = resourceId
       ? catalogResourceById.get(resourceId)
       : activeResource;
@@ -534,7 +540,7 @@ export const ResourceCatalogPanel = memo(function ResourceCatalogPanel({
     setSelectedResourceId(resource.id);
     onSelectResource(resource.id);
     setMessage("");
-  }, [activeResource, catalogResourceById, onSelectResource]);
+  }, [activeResource, canAddResource, catalogResourceById, onSelectResource]);
 
   const handleSearchKeyDown = useCallback((event: React.KeyboardEvent<HTMLInputElement>) => {
     if (event.key === "ArrowDown") {
@@ -676,7 +682,7 @@ export const ResourceCatalogPanel = memo(function ResourceCatalogPanel({
         <button
           type="button"
           onClick={() => handleAddSelectedResource()}
-          disabled={!activeResource}
+          disabled={!activeResource || !canAddResource}
           className="inline-flex h-8 items-center justify-center rounded border border-stone-800 bg-stone-800 px-2 text-[11px] font-semibold text-white hover:bg-stone-700 disabled:cursor-not-allowed disabled:border-stone-200 disabled:bg-stone-100 disabled:text-stone-400"
         >
           Agregar
