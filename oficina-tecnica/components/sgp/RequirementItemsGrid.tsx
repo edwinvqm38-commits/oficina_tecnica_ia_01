@@ -1620,10 +1620,10 @@ export function RequirementItemsGrid({
               + Agregar recurso
             </button>
           ) : null}
-          {editingMode && canCreateResourceFromGrid && onCreateRecurso ? (
+          {canCreateResourceFromGrid && onCreateRecurso ? (
             <button
               type="button"
-              onClick={() => onCreateRecurso(effectiveActiveRowId)}
+              onClick={() => onCreateRecurso(editingMode ? effectiveActiveRowId : null)}
               disabled={isCreatingRecurso}
               className={`${toolbarButtonClassName()} min-w-[92px] shrink-0 justify-center whitespace-nowrap text-stone-600 disabled:cursor-not-allowed disabled:opacity-60`}
               title={effectiveActiveRowId ? "Crear recurso para la fila activa" : "Crear recurso"}
