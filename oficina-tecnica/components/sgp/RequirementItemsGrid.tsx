@@ -882,6 +882,7 @@ export function RequirementItemsGrid({
   const [editingMode, setEditingMode] = useState(false);
   const canUseGridActions = !isColumnHidden("acciones");
   const canEditGridItems = canUseGridActions && canEditItems && canSaveItems;
+  const canCreateResourceFromGrid = canUseGridActions && canCreateRecurso && Boolean(onCreateRecurso);
   const canOpenCatalogFromGrid = Boolean(onOpenResourceCatalog && canUseResourceCatalog);
   const [preview, setPreview] = useState<PreviewState>(null);
   const [activeRowId, setActiveRowId] = useState<string | null>(null);
@@ -1619,7 +1620,7 @@ export function RequirementItemsGrid({
               + Agregar recurso
             </button>
           ) : null}
-          {editingMode && canUseGridActions && canEditGridItems && canCreateRecurso && onCreateRecurso ? (
+          {editingMode && canCreateResourceFromGrid && onCreateRecurso ? (
             <button
               type="button"
               onClick={() => onCreateRecurso(effectiveActiveRowId)}
