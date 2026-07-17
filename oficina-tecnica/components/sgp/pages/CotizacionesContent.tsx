@@ -1,10 +1,10 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
+import dynamic from "next/dynamic";
 import { useAuth } from "@/components/sgp/auth/AuthContext";
 import { DataTable, type DataTableViewState } from "@/components/sgp/DataTable";
 import { QuotationWorkspaceModal } from "@/components/sgp/quotations/QuotationWorkspaceModal";
-import { RequirementWorkspaceModal } from "@/components/sgp/RequirementWorkspaceModal";
 import { ResourceFormModal } from "@/components/sgp/resources/ResourceFormModal";
 import type { EditableRequirementItem } from "@/components/sgp/RequirementItemsGrid";
 import { StatusBadge } from "@/components/sgp/StatusBadge";
@@ -68,6 +68,10 @@ const DEFAULT_PAGE_SIZE = 12;
 const COTIZACIONES_UI_STATE_KEY = "opsia:cotizaciones:ui-state";
 const COTIZACION_CODE_PREFIX = "COT-EKA";
 const ROWS_PER_PAGE_OPTIONS = [12, 20, 40, 60, 80, 100] as const;
+const RequirementWorkspaceModal = dynamic(
+  () => import("@/components/sgp/RequirementWorkspaceModal").then((mod) => mod.RequirementWorkspaceModal),
+  { ssr: false },
+);
 const categoricalBadgePalette = [
   "bg-sky-100 text-sky-700",
   "bg-emerald-100 text-emerald-700",

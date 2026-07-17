@@ -1,8 +1,8 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import dynamic from "next/dynamic";
 import { DataTable, type DataTableViewState } from "@/components/sgp/DataTable";
-import { RequirementWorkspaceModal } from "@/components/sgp/RequirementWorkspaceModal";
 import { NewRequirementModal } from "@/components/sgp/requirements/NewRequirementModal";
 import { ResourceFormModal } from "@/components/sgp/resources/ResourceFormModal";
 import { StatusBadge } from "@/components/sgp/StatusBadge";
@@ -57,6 +57,10 @@ type ResourceTypeSummary = {
 const DEFAULT_PAGE_SIZE = 12;
 const REQUERIMIENTOS_UI_STATE_KEY = "opsia:requerimientos:ui-state";
 const ROWS_PER_PAGE_OPTIONS = [12, 20, 40, 60, 80, 100] as const;
+const RequirementWorkspaceModal = dynamic(
+  () => import("@/components/sgp/RequirementWorkspaceModal").then((mod) => mod.RequirementWorkspaceModal),
+  { ssr: false },
+);
 
 function safeUuid(): string {
   try {

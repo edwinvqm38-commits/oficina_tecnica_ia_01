@@ -87,6 +87,7 @@ type RequirementItemsGridProps = {
   canEditItems?: boolean;
   canSaveItems?: boolean;
   canUseResourceCatalog?: boolean;
+  canAddCatalogResource?: boolean;
   isCreatingRecurso?: boolean;
   titleLabel?: string;
   showAddRowButton?: boolean;
@@ -837,7 +838,6 @@ export function RequirementItemsGrid({
   llOptions,
   hbOptions,
   logisticaCompraOptions,
-  onAddRow,
   onOpenResourceCatalog,
   onRemoveRow,
   onSelectRecurso,
@@ -851,6 +851,7 @@ export function RequirementItemsGrid({
   canEditItems = true,
   canSaveItems = true,
   canUseResourceCatalog = true,
+  canAddCatalogResource = true,
   isCreatingRecurso = false,
   titleLabel = "Detalle de requerimiento",
   showAddRowButton = true,
@@ -883,7 +884,10 @@ export function RequirementItemsGrid({
   const canUseGridActions = !isColumnHidden("acciones");
   const canEditGridItems = canUseGridActions && canEditItems && canSaveItems;
   const canCreateResourceFromGrid = canUseGridActions && canCreateRecurso && Boolean(onCreateRecurso);
-  const canOpenCatalogFromGrid = Boolean(onOpenResourceCatalog && canUseResourceCatalog);
+  const canOpenCatalogFromGrid = Boolean(onOpenResourceCatalog && canUseResourceCatalog && canAddCatalogResource);
+  const showAddResourceButton =
+    editingMode && showAddRowButton && canUseGridActions && canOpenCatalogFromGrid;
+  const showCreateResourceButton = editingMode && canCreateResourceFromGrid;
   const [preview, setPreview] = useState<PreviewState>(null);
   const [activeRowId, setActiveRowId] = useState<string | null>(null);
   const [numericDrafts, setNumericDrafts] = useState<Record<string, string>>({});
@@ -1302,9 +1306,6 @@ export function RequirementItemsGrid({
     if (!editingMode) {
       initialSnapshotRef.current = serializeRows(items);
       setNumericDrafts({});
-      if (showAddRowButton && items.length === 0) {
-        onAddRow();
-      }
       setEditingMode(true);
       onEditingModeChange?.(true);
       return;
@@ -1611,19 +1612,21 @@ export function RequirementItemsGrid({
       <div className="flex flex-none items-center justify-between border-b border-border px-2 py-1.5">
         <div className="flex items-center gap-2">
           <FieldLabelIcon icon="clipboard-list" label={titleLabel} className="text-xs font-medium" />
-          {editingMode && showAddRowButton && canUseGridActions && (canOpenCatalogFromGrid || !onOpenResourceCatalog) ? (
+          {showAddResourceButton && onOpenResourceCatalog ? (
             <button
               type="button"
-              onClick={canOpenCatalogFromGrid ? onOpenResourceCatalog : onAddRow}
+              onClick={onOpenResourceCatalog}
               className={toolbarButtonClassName()}
             >
               + Agregar recurso
             </button>
           ) : null}
-          {canCreateResourceFromGrid && onCreateRecurso ? (
+          {showCreateResourceButton && onCreateRecurso ? (
             <button
               type="button"
-              onClick={() => onCreateRecurso(editingMode ? effectiveActiveRowId : null)}
+              onClick={() =>
+  onCreateRecurso(editingMode ? effectiveActiveRowId : null)
+}
               disabled={isCreatingRecurso}
               className={`${toolbarButtonClassName()} min-w-[92px] shrink-0 justify-center whitespace-nowrap text-stone-600 disabled:cursor-not-allowed disabled:opacity-60`}
               title={effectiveActiveRowId ? "Crear recurso para la fila activa" : "Crear recurso"}

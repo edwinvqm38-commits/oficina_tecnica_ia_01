@@ -1,13 +1,13 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import dynamic from "next/dynamic";
 import { RequirementItemsGrid, type EditableRequirementItem } from "@/components/sgp/RequirementItemsGrid";
 import { StatusBadge } from "@/components/sgp/StatusBadge";
 import { FieldLabelIcon, type IconName } from "@/components/sgp/ui/FieldLabelIcon";
 import { FieldLockButton } from "@/components/sgp/ui/FieldLockButton";
 import { DateTextInput } from "@/components/sgp/ui/DateTextInput";
 import { EmailThreadButton } from "@/components/sgp/EmailThreadButton";
-import { ResourceCatalogPanel } from "@/components/sgp/resources/ResourceCatalogPanel";
 import type { EstadoRequerimiento, Recurso, Requerimiento } from "@/lib/sgp/demoData";
 import { formatCurrencyNumber, formatDate } from "@/lib/sgp/utils";
 
@@ -75,6 +75,11 @@ type LabelValueRowProps = {
 };
 
 type WorkspaceActionIconName = "cancel" | "save" | "close";
+
+const ResourceCatalogPanel = dynamic(
+  () => import("@/components/sgp/resources/ResourceCatalogPanel").then((mod) => mod.ResourceCatalogPanel),
+  { ssr: false },
+);
 
 function compactInfoRowClassName(): string {
   return "flex h-7 min-h-7 items-center justify-between gap-2 border-b border-stone-200 py-0 leading-none last:border-b-0";
@@ -750,6 +755,7 @@ export function RequirementWorkspaceModal({
               canEditItems={canEditItems}
               canSaveItems={canSaveItems}
               canUseResourceCatalog={canUseResourceCatalog}
+              canAddCatalogResource={canAddCatalogResource}
               isCreatingRecurso={isCreatingRecurso}
               hiddenColumnKeys={hiddenItemColumnKeys}
               fullHeight
@@ -758,13 +764,15 @@ export function RequirementWorkspaceModal({
           </div>
             </div>
             <div className={`${isResourceCatalogVisible ? "flex min-h-[320px]" : "hidden"} min-h-0 lg:min-h-0`}>
-              <ResourceCatalogPanel
-                resources={recursos}
-                onSelectResource={handleCatalogResourceSelect}
-                onClose={closeResourceCatalog}
-                canAddResource={canAddCatalogResource}
-                className="h-full"
-              />
+              {isResourceCatalogVisible ? (
+                <ResourceCatalogPanel
+                  resources={recursos}
+                  onSelectResource={handleCatalogResourceSelect}
+                  onClose={closeResourceCatalog}
+                  canAddResource={canAddCatalogResource}
+                  className="h-full"
+                />
+              ) : null}
             </div>
           </div>
         </div>
