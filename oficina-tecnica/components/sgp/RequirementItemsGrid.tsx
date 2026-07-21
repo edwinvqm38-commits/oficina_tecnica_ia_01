@@ -10,6 +10,8 @@ import { FieldLockButton } from "@/components/sgp/ui/FieldLockButton";
 import { FilePreviewModal } from "@/components/sgp/ui/FilePreviewModal";
 import { DateTextInput } from "@/components/sgp/ui/DateTextInput";
 
+export type RequirementObservationStatus = "Sin observación" | "Observado" | "En seguimiento" | "Levantado";
+
 export type EditableRequirementItem = {
   id: string;
   recurso_id: string;
@@ -98,6 +100,12 @@ type RequirementItemsGridProps = {
   requirementContextByItemId?: Record<string, RequirementItemContext>;
   onOpenRequirementFromContext?: (requirementId: string) => void;
   onRowClick?: (item: EditableRequirementItem) => void;
+  selectedObservationItemId?: string | null;
+  selectedObservationItemIds?: string[];
+  observationStatusByItemId?: Record<string, RequirementObservationStatus>;
+  onToggleObservationItemSelection?: (itemId: string) => void;
+  onToggleFilteredObservationItems?: (itemIds: string[], selected: boolean) => void;
+  onFilteredObservationItemsChange?: (items: EditableRequirementItem[]) => void;
   hiddenColumnKeys?: string[];
 };
 
@@ -146,6 +154,7 @@ type PreviewState = {
 
 type ColumnKey =
   | "idx"
+  | "seleccion_observacion"
   | "proyecto"
   | "requerimiento"
   | "codigo_rq"
@@ -176,6 +185,7 @@ type ColumnKey =
   | "descripcion"
   | "informacion_adicional"
   | "observaciones_item"
+  | "estado_observacion"
   | "ficha"
   | "imagen"
   | "archivos"
@@ -236,6 +246,7 @@ type NumericField =
 
 const COLUMN_DEFS: ColumnDef[] = [
   { key: "idx", width: 44, minWidth: 40, sticky: true },
+  { key: "seleccion_observacion", width: 58, minWidth: 52 },
   { key: "proyecto", width: 180, minWidth: 150 },
   { key: "requerimiento", width: 130, minWidth: 120 },
   { key: "codigo_rq", width: 130, minWidth: 120 },
@@ -266,6 +277,7 @@ const COLUMN_DEFS: ColumnDef[] = [
   { key: "descripcion", width: 220, minWidth: 180 },
   { key: "informacion_adicional", width: 220, minWidth: 170 },
   { key: "observaciones_item", width: 220, minWidth: 170 },
+  { key: "estado_observacion", width: 150, minWidth: 130 },
   { key: "ficha", width: 150, minWidth: 130 },
   { key: "imagen", width: 150, minWidth: 130 },
   { key: "archivos", width: 150, minWidth: 130 },
@@ -299,13 +311,13 @@ const COLUMN_DEFS: ColumnDef[] = [
   { key: "fecha_entrega", width: 120, minWidth: 100 },
   { key: "guia_remision", width: 150, minWidth: 110 },
   { key: "archivo_guia", width: 150, minWidth: 130 },
-  { key: "acciones", width: 100, minWidth: 80 },
+  { key: "acciones", width: 70, minWidth: 60 },
 ];
 const REQUIREMENT_GRID_WIDTH_SIGNATURE = COLUMN_DEFS.map((col) => `${col.key}:${col.minWidth}`).join("|");
 const requirementGridWidthMemory = new Map<string, Record<ColumnKey, number>>();
 
-const NON_SORTABLE_COLUMNS = new Set<ColumnKey>(["idx", "acciones"]);
-const NON_FILTERABLE_COLUMNS = new Set<ColumnKey>(["idx", "acciones"]);
+const NON_SORTABLE_COLUMNS = new Set<ColumnKey>(["idx", "seleccion_observacion", "acciones"]);
+const NON_FILTERABLE_COLUMNS = new Set<ColumnKey>(["idx", "seleccion_observacion", "acciones"]);
 
 const NUMERIC_SORT_COLUMNS = new Set<ColumnKey>([
   "cantidad",
@@ -560,6 +572,13 @@ function fileIconByExtension(extension: string, multiple = false): IconName {
   if (["zip", "rar"].includes(extension)) return "archive";
   if (["dwg", "dxf", "cad"].includes(extension)) return "file-cog";
   return "paperclip";
+}
+
+function observationBadgeClassName(status: RequirementObservationStatus): string {
+  if (status === "Levantado") return "border-emerald-200 bg-emerald-50 text-emerald-700";
+  if (status === "En seguimiento") return "border-amber-200 bg-amber-50 text-amber-700";
+  if (status === "Observado") return "border-rose-200 bg-rose-50 text-rose-700";
+  return "border-stone-200 bg-stone-50 text-stone-500";
 }
 
 function MiniPlusIcon() {
@@ -862,6 +881,12 @@ export function RequirementItemsGrid({
   requirementContextByItemId,
   onOpenRequirementFromContext,
   onRowClick,
+  selectedObservationItemId = null,
+  selectedObservationItemIds = [],
+  observationStatusByItemId,
+  onToggleObservationItemSelection,
+  onToggleFilteredObservationItems,
+  onFilteredObservationItemsChange,
   hiddenColumnKeys = [],
 }: RequirementItemsGridProps) {
   const pathname = usePathname() || "/";
@@ -885,6 +910,8 @@ export function RequirementItemsGrid({
   const canEditGridItems = canUseGridActions && canEditItems && canSaveItems;
   const canCreateResourceFromGrid = canUseGridActions && canCreateRecurso && Boolean(onCreateRecurso);
   const canOpenCatalogFromGrid = Boolean(onOpenResourceCatalog && canUseResourceCatalog && canAddCatalogResource);
+  const canSelectObservationItems = Boolean(onToggleObservationItemSelection);
+  const selectedObservationItemSet = useMemo(() => new Set(selectedObservationItemIds), [selectedObservationItemIds]);
   const showAddResourceButton =
     editingMode && showAddRowButton && canUseGridActions && canOpenCatalogFromGrid;
   const showCreateResourceButton = editingMode && canCreateResourceFromGrid;
@@ -1076,6 +1103,8 @@ export function RequirementItemsGrid({
         return item.informacion_adicional;
       case "observaciones_item":
         return item.observaciones_item;
+      case "estado_observacion":
+        return observationStatusByItemId?.[item.id] ?? "Sin observación";
       case "ficha":
         return item.recurso_ficha_tecnica?.name ?? "";
       case "imagen":
@@ -1130,7 +1159,7 @@ export function RequirementItemsGrid({
       default:
         return "";
     }
-  }, [getItemContext]);
+  }, [getItemContext, observationStatusByItemId]);
 
   const getColumnSortValue = useCallback((item: EditableRequirementItem, key: ColumnKey): string | number => {
     const context = getItemContext(item.id);
@@ -1195,6 +1224,8 @@ export function RequirementItemsGrid({
         return item.informacion_adicional || "";
       case "observaciones_item":
         return item.observaciones_item || "";
+      case "estado_observacion":
+        return observationStatusByItemId?.[item.id] ?? "Sin observación";
       case "ficha":
         return item.recurso_ficha_tecnica?.name || "";
       case "imagen":
@@ -1249,7 +1280,7 @@ export function RequirementItemsGrid({
       default:
         return "";
     }
-  }, [getItemContext]);
+  }, [getItemContext, observationStatusByItemId]);
 
   const filteredSortedItems = useMemo(() => {
     const getOriginalOrder = (id: string) => originalOrderRef.current[id] ?? Number.MAX_SAFE_INTEGER;
@@ -1295,6 +1326,20 @@ export function RequirementItemsGrid({
     });
     return sorted;
   }, [items, columnFilters, sortConfig, getColumnFilterValue, getColumnSortValue]);
+  const filteredObservedItems = useMemo(
+    () =>
+      filteredSortedItems.filter(
+        (item) => (observationStatusByItemId?.[item.id] ?? "Sin observación") !== "Sin observación",
+      ),
+    [filteredSortedItems, observationStatusByItemId],
+  );
+  const filteredObservedItemIds = useMemo(() => filteredObservedItems.map((item) => item.id), [filteredObservedItems]);
+  const allFilteredObservedItemsSelected =
+    filteredObservedItemIds.length > 0 && filteredObservedItemIds.every((itemId) => selectedObservationItemSet.has(itemId));
+
+  useEffect(() => {
+    onFilteredObservationItemsChange?.(filteredSortedItems);
+  }, [filteredSortedItems, onFilteredObservationItemsChange]);
 
   function requestRemoveRow(rowId: string) {
     if (!editingMode) return;
@@ -1667,6 +1712,23 @@ export function RequirementItemsGrid({
           <thead className="sticky top-0 z-20 bg-stone-50 text-muted">
             <tr className="filters-row h-[var(--rq-grid-row-height)] max-h-[var(--rq-grid-row-height)]">
               {showIndexColumn ? headerCell("idx", headerContent("idx", "hash", "#"), "", true) : null}
+              {canSelectObservationItems
+                ? headerCell(
+                    "seleccion_observacion",
+                    <div className="flex items-center justify-center" title="Seleccionar recursos observados visibles">
+                      <input
+                        type="checkbox"
+                        data-no-row-open="true"
+                        checked={allFilteredObservedItemsSelected}
+                        disabled={filteredObservedItemIds.length === 0 || !onToggleFilteredObservationItems}
+                        onChange={(event) =>
+                          onToggleFilteredObservationItems?.(filteredObservedItemIds, event.target.checked)
+                        }
+                        className="h-3.5 w-3.5 rounded border-stone-300 text-teal-700"
+                      />
+                    </div>,
+                  )
+                : null}
               {hasContextColumns
                 ? headerCell("proyecto", headerContent("proyecto", "file-text", "Proyecto"))
                 : null}
@@ -1755,6 +1817,7 @@ export function RequirementItemsGrid({
               {headerCell("descripcion", headerContent("descripcion", "align-left", "Descripción"))}
               {headerCell("informacion_adicional", headerContent("informacion_adicional", "file-text", "Información adicional"))}
               {headerCell("observaciones_item", headerContent("observaciones_item", "clipboard-list", "Observaciones"))}
+              {headerCell("estado_observacion", headerContent("estado_observacion", "circle-dot", "Estado observación"))}
               {headerCell("ficha", headerContent("ficha", "file-up", "Ficha técnica"))}
               {headerCell("imagen", headerContent("imagen", "image", "Imagen referencial"))}
               {headerCell("archivos", headerContent("archivos", "files", "Archivos"))}
@@ -1792,6 +1855,14 @@ export function RequirementItemsGrid({
             </tr>
             <tr>
               {showIndexColumn ? filterCell("idx", filterInputFor("idx"), "", true) : null}
+              {canSelectObservationItems
+                ? filterCell(
+                    "seleccion_observacion",
+                    <span className="block text-center text-[9px] font-semibold text-stone-400">
+                      {filteredObservedItemIds.length}
+                    </span>,
+                  )
+                : null}
               {hasContextColumns ? filterCell("proyecto", filterInputFor("proyecto")) : null}
               {hasContextColumns ? filterCell("requerimiento", filterInputFor("requerimiento")) : null}
               {hasContextColumns ? filterCell("codigo_rq", filterInputFor("codigo_rq")) : null}
@@ -1822,6 +1893,7 @@ export function RequirementItemsGrid({
               {filterCell("descripcion", filterInputFor("descripcion"))}
               {filterCell("informacion_adicional", filterInputFor("informacion_adicional"))}
               {filterCell("observaciones_item", filterInputFor("observaciones_item"))}
+              {filterCell("estado_observacion", filterInputFor("estado_observacion"))}
               {filterCell("ficha", filterInputFor("ficha"))}
               {filterCell("imagen", filterInputFor("imagen"))}
               {filterCell("archivos", filterInputFor("archivos"))}
@@ -1872,7 +1944,13 @@ export function RequirementItemsGrid({
                   key={item.id}
                   className={`border-t border-stone-200 align-middle ${
                     onRowClick && !editingMode ? "cursor-pointer hover:bg-stone-50" : ""
-                  } ${effectiveActiveRowId === item.id ? "bg-amber-50/40" : ""}`}
+                  } ${
+                    effectiveActiveRowId === item.id ||
+                    selectedObservationItemId === item.id ||
+                    selectedObservationItemSet.has(item.id)
+                      ? "bg-amber-50/40"
+                      : ""
+                  }`}
                   style={{ height: `${dynamicRowHeight}px`, minHeight: `${dynamicRowHeight}px` }}
                   onClick={(event) => {
                     if (editingMode) {
@@ -1890,6 +1968,24 @@ export function RequirementItemsGrid({
                   {showIndexColumn ? (
                     <td style={cellStyle("idx", true)} className="px-1.5 py-0.5">
                       {index + 1}
+                    </td>
+                  ) : null}
+                  {canSelectObservationItems ? (
+                    <td style={cellStyle("seleccion_observacion")} className="px-1.5 py-0.5 text-center">
+                      <input
+                        type="checkbox"
+                        data-no-row-open="true"
+                        checked={selectedObservationItemSet.has(item.id)}
+                        disabled={(observationStatusByItemId?.[item.id] ?? "Sin observación") === "Sin observación"}
+                        onChange={() => onToggleObservationItemSelection?.(item.id)}
+                        onClick={(event) => event.stopPropagation()}
+                        className="h-3.5 w-3.5 rounded border-stone-300 text-teal-700 disabled:cursor-not-allowed disabled:opacity-40"
+                        title={
+                          (observationStatusByItemId?.[item.id] ?? "Sin observación") === "Sin observación"
+                            ? "Registra una observación antes de seleccionar"
+                            : "Seleccionar para correo"
+                        }
+                      />
                     </td>
                   ) : null}
                   {hasContextColumns ? (
@@ -2129,6 +2225,17 @@ export function RequirementItemsGrid({
                         </span>
                       )}
                     </div>
+                  </td>
+
+                  <td style={cellStyle("estado_observacion")} className="px-1.5 py-0.5">
+                    <span
+                      className={`inline-flex h-5 max-w-full items-center rounded border px-1.5 text-[10px] font-semibold leading-none ${observationBadgeClassName(
+                        observationStatusByItemId?.[item.id] ?? "Sin observación",
+                      )}`}
+                      title="Selecciona el recurso para gestionar observaciones"
+                    >
+                      {observationStatusByItemId?.[item.id] ?? "Sin observación"}
+                    </span>
                   </td>
 
                   <td style={cellStyle("ficha")} className="px-1.5 py-0.5">

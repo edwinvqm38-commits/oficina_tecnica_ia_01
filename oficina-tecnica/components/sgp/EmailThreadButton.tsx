@@ -12,8 +12,20 @@ type EmailThreadButtonProps = {
   title: string;
   linkPath: string;
   summaryRows: Array<{ label: string; value: string | number | null | undefined }>;
+  buildPlainBody?: (context: EmailBodyBuilderContext) => string;
+  buildHtmlBody?: (context: EmailBodyBuilderContext) => string;
+  showHtmlPreview?: boolean;
+  previewOnly?: boolean;
+  disabled?: boolean;
+  attachments?: Array<{ name: string; size?: number; type?: string; url?: string | null }>;
   className?: string;
   buttonLabel?: string;
+};
+
+type EmailBodyBuilderContext = {
+  title: string;
+  link: string;
+  summaryRows: EmailThreadButtonProps["summaryRows"];
 };
 
 type GmailAccount = {
@@ -159,6 +171,12 @@ export function EmailThreadButton({
   title,
   linkPath,
   summaryRows,
+  buildPlainBody: buildCustomPlainBody,
+  buildHtmlBody: buildCustomHtmlBody,
+  showHtmlPreview = false,
+  previewOnly = false,
+  disabled = false,
+  attachments = [],
   className,
   buttonLabel = "Correo",
 }: EmailThreadButtonProps) {
@@ -172,8 +190,15 @@ export function EmailThreadButton({
   const [isLoading, setIsLoading] = useState(false);
   const [isSending, setIsSending] = useState(false);
   const link = useMemo(() => absoluteLink(linkPath), [linkPath]);
-  const plainBody = useMemo(() => buildPlainBody(title, link, summaryRows), [title, link, summaryRows]);
-  const htmlBody = useMemo(() => buildHtmlBody(title, link, summaryRows), [title, link, summaryRows]);
+  const bodyContext = useMemo(() => ({ title, link, summaryRows }), [title, link, summaryRows]);
+  const plainBody = useMemo(
+    () => buildCustomPlainBody?.(bodyContext) ?? buildPlainBody(title, link, summaryRows),
+    [bodyContext, buildCustomPlainBody, link, summaryRows, title],
+  );
+  const htmlBody = useMemo(
+    () => buildCustomHtmlBody?.(bodyContext) ?? buildHtmlBody(title, link, summaryRows),
+    [bodyContext, buildCustomHtmlBody, link, summaryRows, title],
+  );
   const contactListId = useMemo(() => `email-contacts-${kind}-${entityCode}`, [kind, entityCode]);
 
   async function loadGmailData() {
@@ -202,9 +227,10 @@ export function EmailThreadButton({
   }
 
   useEffect(() => {
+    if (previewOnly) return;
     if (open) void loadGmailData();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open]);
+  }, [open, previewOnly]);
 
   async function connectGmail() {
     setStatus("");
@@ -268,7 +294,13 @@ export function EmailThreadButton({
 
   return (
     <>
-      <button type="button" onClick={() => setOpen(true)} className={className} title="Enviar correo en hilo">
+      <button
+        type="button"
+        onClick={() => setOpen(true)}
+        disabled={disabled}
+        className={className}
+        title={disabled ? "No hay recursos observados para preparar correo" : "Enviar correo en hilo"}
+      >
         <span aria-hidden>✉</span>
         <span>{buttonLabel}</span>
       </button>
@@ -277,8 +309,14 @@ export function EmailThreadButton({
           <div className="w-full max-w-[600px] rounded-lg border border-border bg-panel p-3 shadow-xl">
             <div className="mb-3 flex items-center justify-between gap-2">
               <div>
-                <p className="text-[12px] font-semibold text-stone-800">Enviar correo por Gmail</p>
-                <p className="text-[10.5px] text-stone-500">El asunto e hilo Gmail se mantienen por cotización o requerimiento.</p>
+                <p className="text-[12px] font-semibold text-stone-800">
+                  {previewOnly ? "Vista previa de correo HTML" : "Enviar correo por Gmail"}
+                </p>
+                <p className="text-[10.5px] text-stone-500">
+                  {previewOnly
+                    ? "Modo preview: no se consultan cuentas, contactos ni se envia Gmail real."
+                    : "El asunto e hilo Gmail se mantienen por cotización o requerimiento."}
+                </p>
               </div>
               <button
                 type="button"
@@ -289,60 +327,64 @@ export function EmailThreadButton({
               </button>
             </div>
             <div className="space-y-2">
-              <label className="block text-[11px] font-medium text-stone-600">
-                Correo origen
-                <div className="mt-1 flex gap-2">
-                  <select
-                    value={selectedAccountId}
-                    onChange={(event) => setSelectedAccountId(event.target.value)}
-                    className="h-8 min-w-0 flex-1 rounded border border-stone-200 bg-white px-2 text-[12px] outline-none focus:border-teal-500"
-                  >
-                    {accounts.length ? (
-                      accounts.map((account) => (
-                        <option key={account.id} value={account.id}>
-                          {account.display_name || account.google_email} · {account.google_email}
-                        </option>
-                      ))
-                    ) : (
-                      <option value="">Sin Gmail conectado</option>
-                    )}
-                  </select>
-                  <button
-                    type="button"
-                    onClick={() => void connectGmail()}
-                    className="rounded border border-teal-700 bg-white px-3 text-[11px] font-semibold text-teal-700 hover:bg-teal-50"
-                  >
-                    {accounts.length ? "Cambiar" : "Conectar Gmail"}
-                  </button>
-                </div>
-              </label>
-              <label className="block text-[11px] font-medium text-stone-600">
-                Destinatarios
-                <input
-                  value={to}
-                  onChange={(event) => setTo(event.target.value)}
-                  placeholder="correo@empresa.com, otro@empresa.com"
-                  list={contactListId}
-                  className="mt-1 h-8 w-full rounded border border-stone-200 px-2 text-[12px] outline-none focus:border-teal-500"
-                />
-              </label>
-              <label className="block text-[11px] font-medium text-stone-600">
-                CC
-                <input
-                  value={cc}
-                  onChange={(event) => setCc(event.target.value)}
-                  placeholder="opcional"
-                  list={contactListId}
-                  className="mt-1 h-8 w-full rounded border border-stone-200 px-2 text-[12px] outline-none focus:border-teal-500"
-                />
-              </label>
-              <datalist id={contactListId}>
-                {contacts.map((contact) => (
-                  <option key={contact.id} value={contact.email}>
-                    {contact.name || contact.email}
-                  </option>
-                ))}
-              </datalist>
+              {!previewOnly ? (
+                <>
+                  <label className="block text-[11px] font-medium text-stone-600">
+                    Correo origen
+                    <div className="mt-1 flex gap-2">
+                      <select
+                        value={selectedAccountId}
+                        onChange={(event) => setSelectedAccountId(event.target.value)}
+                        className="h-8 min-w-0 flex-1 rounded border border-stone-200 bg-white px-2 text-[12px] outline-none focus:border-teal-500"
+                      >
+                        {accounts.length ? (
+                          accounts.map((account) => (
+                            <option key={account.id} value={account.id}>
+                              {account.display_name || account.google_email} · {account.google_email}
+                            </option>
+                          ))
+                        ) : (
+                          <option value="">Sin Gmail conectado</option>
+                        )}
+                      </select>
+                      <button
+                        type="button"
+                        onClick={() => void connectGmail()}
+                        className="rounded border border-teal-700 bg-white px-3 text-[11px] font-semibold text-teal-700 hover:bg-teal-50"
+                      >
+                        {accounts.length ? "Cambiar" : "Conectar Gmail"}
+                      </button>
+                    </div>
+                  </label>
+                  <label className="block text-[11px] font-medium text-stone-600">
+                    Destinatarios
+                    <input
+                      value={to}
+                      onChange={(event) => setTo(event.target.value)}
+                      placeholder="correo@empresa.com, otro@empresa.com"
+                      list={contactListId}
+                      className="mt-1 h-8 w-full rounded border border-stone-200 px-2 text-[12px] outline-none focus:border-teal-500"
+                    />
+                  </label>
+                  <label className="block text-[11px] font-medium text-stone-600">
+                    CC
+                    <input
+                      value={cc}
+                      onChange={(event) => setCc(event.target.value)}
+                      placeholder="opcional"
+                      list={contactListId}
+                      className="mt-1 h-8 w-full rounded border border-stone-200 px-2 text-[12px] outline-none focus:border-teal-500"
+                    />
+                  </label>
+                  <datalist id={contactListId}>
+                    {contacts.map((contact) => (
+                      <option key={contact.id} value={contact.email}>
+                        {contact.name || contact.email}
+                      </option>
+                    ))}
+                  </datalist>
+                </>
+              ) : null}
               <label className="block text-[11px] font-medium text-stone-600">
                 Asunto
                 <input value={subject} readOnly className="mt-1 h-8 w-full rounded border border-stone-200 bg-stone-50 px-2 text-[12px]" />
@@ -351,8 +393,35 @@ export function EmailThreadButton({
                 Link
                 <input value={link} readOnly className="mt-1 h-8 w-full rounded border border-stone-200 bg-stone-50 px-2 text-[12px]" />
               </label>
+              {showHtmlPreview ? (
+                <div className="block text-[11px] font-medium text-stone-600">
+                  Vista previa HTML
+                  <div className="mt-1 max-h-[240px] overflow-auto rounded border border-stone-200 bg-stone-50 p-2">
+                    <div dangerouslySetInnerHTML={{ __html: htmlBody }} />
+                  </div>
+                </div>
+              ) : null}
+              {attachments.length ? (
+                <div className="block text-[11px] font-medium text-stone-600">
+                  Adjuntos preparados
+                  <div className="mt-1 max-h-[110px] overflow-auto rounded border border-stone-200 bg-white">
+                    {attachments.map((attachment, index) => (
+                      <div key={`${attachment.name}-${index}`} className="border-b border-stone-100 px-2 py-1.5 last:border-b-0">
+                        <p className="truncate text-[11px] font-semibold text-stone-700" title={attachment.name}>
+                          {attachment.name}
+                        </p>
+                        <p className="mt-0.5 text-[10px] text-stone-500">
+                          {attachment.type || "archivo"}
+                          {attachment.size ? ` · ${Math.ceil(attachment.size / 1024)} KB` : ""}
+                          {attachment.url ? " · Drive" : ""}
+                        </p>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              ) : null}
             </div>
-            {!accounts.length && !isLoading ? (
+            {!previewOnly && !accounts.length && !isLoading ? (
               <div className="mt-3 rounded border border-blue-200 bg-blue-50 px-3 py-2 text-[11px] leading-relaxed text-blue-800">
                 Conecta tu Gmail una vez. Después podrás elegirlo como origen y enviar desde la app.
               </div>
@@ -370,14 +439,16 @@ export function EmailThreadButton({
               >
                 Copiar HTML
               </button>
-              <button
-                type="button"
-                onClick={() => void sendGmail()}
-                disabled={isSending || isLoading || !selectedAccountId}
-                className="rounded border border-teal-700 bg-teal-700 px-3 py-1.5 text-[11px] font-semibold text-white hover:bg-teal-800 disabled:cursor-not-allowed disabled:opacity-50"
-              >
-                {isSending ? "Enviando..." : "Enviar Gmail"}
-              </button>
+              {!previewOnly ? (
+                <button
+                  type="button"
+                  onClick={() => void sendGmail()}
+                  disabled={isSending || isLoading || !selectedAccountId}
+                  className="rounded border border-teal-700 bg-teal-700 px-3 py-1.5 text-[11px] font-semibold text-white hover:bg-teal-800 disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  {isSending ? "Enviando..." : "Enviar Gmail"}
+                </button>
+              ) : null}
             </div>
           </div>
         </div>
