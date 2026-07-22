@@ -7,7 +7,9 @@ import { DataTable, type DataTableViewState } from "@/components/sgp/DataTable";
 import { QuotationWorkspaceModal } from "@/components/sgp/quotations/QuotationWorkspaceModal";
 import { ResourceFormModal } from "@/components/sgp/resources/ResourceFormModal";
 import type { EditableRequirementItem } from "@/components/sgp/RequirementItemsGrid";
+import type { ObservationUser } from "@/components/sgp/RequirementObservationPanel";
 import { StatusBadge } from "@/components/sgp/StatusBadge";
+import { useApprovedUsersState } from "@/lib/presence/useApprovedUsers";
 import { getModulePermissions, type ModulePermissions } from "@/lib/sgp/modulePermissionsRepository";
 import { resolveSensitivePermission, resolveViewGroupPermission } from "@/lib/sgp/modulePermissionGuards";
 import {
@@ -560,6 +562,12 @@ function upsertResource(rows: Recurso[], resource: Recurso): Recurso[] {
 
 export default function CotizacionesPage() {
   const { profile, user } = useAuth();
+  const {
+    users: approvedUsers,
+    loading: loadingObservationUsers,
+    error: observationUsersLoadError,
+    reload: reloadObservationUsers,
+  } = useApprovedUsersState();
   const initialUiStateRef = useRef<PersistedTableUiState | null>(null);
   const restoredUiStateRef = useRef(false);
   const restoredWorkspaceKeyRef = useRef<string | null>(null);
@@ -604,6 +612,31 @@ export default function CotizacionesPage() {
   const [resourcePermissionsLoading, setResourcePermissionsLoading] = useState(true);
   const [resourceModulePermissions, setResourceModulePermissions] = useState<ModulePermissions | null>(null);
   const currentUserEmail = (profile.email ?? user.email ?? "").trim().toLowerCase();
+  const currentObservationUser = useMemo<ObservationUser | null>(() => {
+    if (!user.id) return null;
+    return {
+      id: profile.id || user.id,
+      email: profile.email || user.email,
+      displayName: profile.full_name || profile.email || user.email || "Usuario",
+      role: profile.role ?? null,
+      isSuperAdmin: profile.is_super_admin,
+    };
+  }, [profile.email, profile.full_name, profile.id, profile.is_super_admin, profile.role, user.email, user.id]);
+  const observationUserDirectory = useMemo<ObservationUser[]>(() => {
+    const byId = new Map<string, ObservationUser>();
+    approvedUsers.forEach((approvedUser) => {
+      if (!approvedUser.id) return;
+      byId.set(approvedUser.id, {
+        id: approvedUser.id,
+        email: approvedUser.email,
+        displayName: approvedUser.fullName || approvedUser.email || approvedUser.id,
+        role: approvedUser.role,
+        isSuperAdmin: approvedUser.isSuperAdmin,
+      });
+    });
+    if (currentObservationUser?.id) byId.set(currentObservationUser.id, currentObservationUser);
+    return Array.from(byId.values());
+  }, [approvedUsers, currentObservationUser]);
   const [persistedCatalogs, setPersistedCatalogs] = useState<Partial<Record<CatalogKey, CatalogRecord[]>> | null>(null);
   const resourceCatalogs = useMemo(() => demoData.listCatalogSummary(), []);
   const isElevatedResourceUser =
@@ -2410,6 +2443,11 @@ export default function CotizacionesPage() {
         hiddenItemColumnKeys={hiddenRequirementItemColumnKeys}
         hiddenBusinessFields={hiddenBusinessFields}
         canViewPrices={effectiveCanViewPrices && canViewQuotationEconomicSummary}
+        currentUser={currentObservationUser}
+        userDirectory={observationUserDirectory}
+        loadingUsers={loadingObservationUsers}
+        usersLoadError={observationUsersLoadError}
+        onRetryUsers={() => void reloadObservationUsers()}
       />
 
       <ResourceFormModal

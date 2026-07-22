@@ -7,7 +7,9 @@ import { NewRequirementModal } from "@/components/sgp/requirements/NewRequiremen
 import { ResourceFormModal } from "@/components/sgp/resources/ResourceFormModal";
 import { StatusBadge } from "@/components/sgp/StatusBadge";
 import { useAuth } from "@/components/sgp/auth/AuthContext";
+import type { ObservationUser } from "@/components/sgp/RequirementObservationPanel";
 import { debugDataSourceLoad, publishDataSourceSnapshot, type AppDataSource } from "@/lib/sgp/dataSourceDiagnostics";
+import { useApprovedUsersState } from "@/lib/presence/useApprovedUsers";
 import {
   demoData,
   type Cotizacion,
@@ -330,6 +332,12 @@ function upsertResource(rows: Recurso[], resource: Recurso): Recurso[] {
 
 export default function RequerimientosPage() {
   const { profile, user } = useAuth();
+  const {
+    users: approvedUsers,
+    loading: loadingObservationUsers,
+    error: observationUsersLoadError,
+    reload: reloadObservationUsers,
+  } = useApprovedUsersState();
   const queryOpenedRef = useRef<string | null>(null);
   const restoredUiStateRef = useRef(false);
   const hasLoadedDataRef = useRef(false);
@@ -375,6 +383,31 @@ export default function RequerimientosPage() {
   const isSupabaseReadOnly = dataSource === "supabase";
   const resourceCatalogs = useMemo(() => demoData.listCatalogSummary(), []);
   const currentUserEmail = (profile.email ?? user.email ?? "").trim().toLowerCase();
+  const currentObservationUser = useMemo<ObservationUser | null>(() => {
+    if (!user.id) return null;
+    return {
+      id: profile.id || user.id,
+      email: profile.email || user.email,
+      displayName: profile.full_name || profile.email || user.email || "Usuario",
+      role: profile.role ?? null,
+      isSuperAdmin: profile.is_super_admin,
+    };
+  }, [profile.email, profile.full_name, profile.id, profile.is_super_admin, profile.role, user.email, user.id]);
+  const observationUserDirectory = useMemo<ObservationUser[]>(() => {
+    const byId = new Map<string, ObservationUser>();
+    approvedUsers.forEach((approvedUser) => {
+      if (!approvedUser.id) return;
+      byId.set(approvedUser.id, {
+        id: approvedUser.id,
+        email: approvedUser.email,
+        displayName: approvedUser.fullName || approvedUser.email || approvedUser.id,
+        role: approvedUser.role,
+        isSuperAdmin: approvedUser.isSuperAdmin,
+      });
+    });
+    if (currentObservationUser?.id) byId.set(currentObservationUser.id, currentObservationUser);
+    return Array.from(byId.values());
+  }, [approvedUsers, currentObservationUser]);
   const isElevatedResourceUser =
     profile.is_super_admin === true || profile.role === "admin" || currentUserEmail === "edwin.qm@outlook.com";
   const isElevatedRequirementUser = isElevatedResourceUser;
@@ -1528,6 +1561,11 @@ export default function RequerimientosPage() {
         canAddCatalogResource={canAddCatalogResourceToRequirement}
         isCreatingRecurso={savingResource}
         hiddenItemColumnKeys={hiddenRequirementItemColumnKeys}
+        currentUser={currentObservationUser}
+        userDirectory={observationUserDirectory}
+        loadingUsers={loadingObservationUsers}
+        usersLoadError={observationUsersLoadError}
+        onRetryUsers={() => void reloadObservationUsers()}
       />
 
       <ResourceFormModal

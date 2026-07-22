@@ -25,6 +25,7 @@ import {
   resolveObservationUser,
   resolveObservationUserId,
   type ObservationEvidence,
+  type ObservationAssignmentSource,
   type ObservationPriority,
   type ObservationUser,
   type ObservationWorkflowStatus,
@@ -87,6 +88,9 @@ type RequirementWorkspaceModalProps = {
   canViewPrices?: boolean;
   currentUser?: ObservationUser | null;
   userDirectory?: ObservationUser[];
+  loadingUsers?: boolean;
+  usersLoadError?: string;
+  onRetryUsers?: () => void;
 };
 
 type LabelValueRowProps = {
@@ -641,6 +645,9 @@ export function RequirementWorkspaceModal({
   canViewPrices = true,
   currentUser = null,
   userDirectory = [],
+  loadingUsers = false,
+  usersLoadError = "",
+  onRetryUsers,
 }: RequirementWorkspaceModalProps) {
   const [isGeneralInfoEditing, setIsGeneralInfoEditing] = useState(false);
   const [catalogPanelOpen, setCatalogPanelOpen] = useState(false);
@@ -666,12 +673,27 @@ export function RequirementWorkspaceModal({
         displayName: user.displayName || user.email || user.id,
       });
     });
-    return Array.from(byId.values());
+    return Array.from(byId.values()).sort((a, b) => {
+      const byName = a.displayName.localeCompare(b.displayName, "es", { sensitivity: "base" });
+      if (byName !== 0) return byName;
+      return (a.email ?? "").localeCompare(b.email ?? "", "es", { sensitivity: "base" });
+    });
   }, [currentUser, userDirectory]);
-  const defaultAssignedObservationUserId = useMemo(
-    () => resolveObservationUserId(observationUserDirectory, draft?.responsable) ?? currentUser?.id ?? "",
-    [currentUser?.id, draft?.responsable, observationUserDirectory],
+  const requesterObservationUserId = useMemo(
+    () => resolveObservationUserId(observationUserDirectory, draft?.solicitante_rq),
+    [draft?.solicitante_rq, observationUserDirectory],
   );
+  const requirementResponsibleObservationUserId = useMemo(
+    () => resolveObservationUserId(observationUserDirectory, draft?.responsable),
+    [draft?.responsable, observationUserDirectory],
+  );
+  const defaultAssignedObservationUserId = requesterObservationUserId ?? requirementResponsibleObservationUserId ?? "";
+  const defaultAssignedObservationSource: ObservationAssignmentSource = requesterObservationUserId
+    ? "rq_requester"
+    : requirementResponsibleObservationUserId
+      ? "requirement_responsible"
+      : "manual";
+  const requesterIsRegistered = Boolean(!draft?.solicitante_rq || requesterObservationUserId);
   const currentObservationUser = currentUser?.id ? currentUser : null;
 
   const revokeAllLocalEvidenceUrls = useCallback(() => {
@@ -943,6 +965,7 @@ export function RequirementWorkspaceModal({
       priority: ObservationPriority;
       requiresEvidence: boolean;
       assignedUserId: string;
+      participantUserIds: string[];
       delegatedReviewerUserId?: string;
       files: File[];
     }) => {
@@ -964,6 +987,7 @@ export function RequirementWorkspaceModal({
         status: "pending",
         observerUserId: currentObservationUser.id,
         assignedUserId: input.assignedUserId,
+        participantUserIds: Array.from(new Set(input.participantUserIds)).filter((userId) => userId && userId !== input.assignedUserId),
         delegatedReviewerUserId: input.delegatedReviewerUserId,
         createdAt,
         initialEvidence,
@@ -1124,6 +1148,7 @@ export function RequirementWorkspaceModal({
           return {
             ...observation,
             assignedUserId,
+            participantUserIds: observation.participantUserIds.filter((userId) => userId !== assignedUserId),
             statusHistory: [
               makeStatusHistoryEntry(
                 observation.status,
@@ -1407,6 +1432,12 @@ export function RequirementWorkspaceModal({
       currentUser={currentObservationUser}
       userDirectory={observationUserDirectory}
       defaultAssignedUserId={defaultAssignedObservationUserId}
+      defaultAssignedSource={defaultAssignedObservationSource}
+      requesterLabel={draft.solicitante_rq}
+      requesterIsRegistered={requesterIsRegistered}
+      loadingUsers={loadingUsers}
+      usersLoadError={usersLoadError}
+      onRetryUsers={onRetryUsers}
       footer={resourceObservationPanelFooter}
       onClose={() => setSelectedItemId(null)}
       onSelectObservation={setSelectedObservationId}

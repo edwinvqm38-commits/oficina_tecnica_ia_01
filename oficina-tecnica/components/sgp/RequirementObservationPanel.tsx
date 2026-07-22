@@ -14,6 +14,7 @@ export type ObservationWorkflowStatus =
   | "reopened"
   | "answered";
 export type ObservationEvidenceAssociation = "observation" | "response";
+export type ObservationAssignmentSource = "rq_requester" | "requirement_responsible" | "manual";
 
 export type ObservationUser = {
   id: string;
@@ -67,6 +68,7 @@ export type RequirementObservation = {
   status: ObservationWorkflowStatus;
   observerUserId: string;
   assignedUserId: string;
+  participantUserIds: string[];
   delegatedReviewerUserId?: string;
   createdAt: string;
   initialEvidence: ObservationEvidence[];
@@ -83,6 +85,12 @@ type RequirementObservationPanelProps = {
   currentUser: ObservationUser | null;
   userDirectory: ObservationUser[];
   defaultAssignedUserId: string;
+  defaultAssignedSource: ObservationAssignmentSource;
+  requesterLabel: string;
+  requesterIsRegistered: boolean;
+  loadingUsers: boolean;
+  usersLoadError: string;
+  onRetryUsers?: () => void;
   footer?: ReactNode;
   onClose: () => void;
   onSelectObservation: (observationId: string) => void;
@@ -91,6 +99,7 @@ type RequirementObservationPanelProps = {
     priority: ObservationPriority;
     requiresEvidence: boolean;
     assignedUserId: string;
+    participantUserIds: string[];
     delegatedReviewerUserId?: string;
     files: File[];
   }) => void;
@@ -147,7 +156,7 @@ export function observationCanResolveReason(observation: RequirementObservation)
 export function canRespondToObservation(observation: RequirementObservation, currentUser: ObservationUser | null): boolean {
   if (!currentUser?.id) return false;
   if (observation.status === "resolved") return false;
-  return observation.assignedUserId === currentUser.id;
+  return observation.assignedUserId === currentUser.id || observation.participantUserIds.includes(currentUser.id);
 }
 
 export function canReviewObservation(observation: RequirementObservation, currentUser: ObservationUser | null): boolean {
@@ -225,7 +234,82 @@ function userRoleLabel(observation: RequirementObservation, userId: string): str
   if (observation.assignedUserId === userId) return "Responsable";
   if (observation.observerUserId === userId) return "Observador";
   if (observation.delegatedReviewerUserId === userId) return "Revisor";
+  if (observation.participantUserIds.includes(userId)) return "Participante";
   return "Participante";
+}
+
+function assignmentSourceLabel(source: ObservationAssignmentSource): string {
+  if (source === "rq_requester") return "Asignado automáticamente porque emitió el RQ.";
+  if (source === "requirement_responsible") return "Asignado desde el responsable del requerimiento.";
+  return "Asignado manualmente.";
+}
+
+function userOptionText(user: ObservationUser, currentUserId?: string): string {
+  const currentMark = currentUserId && user.id === currentUserId ? " · Tú" : "";
+  return `${user.displayName || user.email || user.id}${user.email ? ` · ${user.email}` : ""}${user.role ? ` · ${user.role}` : ""}${currentMark}`;
+}
+
+function SearchableUserSelect({
+  label,
+  value,
+  users,
+  currentUserId,
+  onChange,
+  disabled = false,
+  placeholder = "Seleccione usuario",
+}: {
+  label: string;
+  value: string;
+  users: ObservationUser[];
+  currentUserId?: string;
+  onChange: (userId: string) => void;
+  disabled?: boolean;
+  placeholder?: string;
+}) {
+  const [search, setSearch] = useState("");
+  const normalizedSearch = search.trim().toLowerCase();
+  const filteredUsers = useMemo(
+    () =>
+      users.filter((user) => {
+        if (!normalizedSearch) return true;
+        return `${user.displayName} ${user.email ?? ""} ${user.role ?? ""}`.toLowerCase().includes(normalizedSearch);
+      }),
+    [normalizedSearch, users],
+  );
+  const selectedUser = resolveObservationUser(users, value);
+
+  return (
+    <label className="block text-[10.5px] font-semibold text-stone-500">
+      {label}
+      <input
+        type="search"
+        value={search}
+        onChange={(event) => setSearch(event.target.value)}
+        disabled={disabled}
+        className="mt-1 h-7 w-full rounded border border-stone-200 bg-white px-2 text-[11px] text-stone-700 outline-none focus:border-teal-500 focus:ring-2 focus:ring-teal-100 disabled:bg-stone-50"
+        placeholder="Buscar por nombre o correo"
+      />
+      <select
+        value={value}
+        onChange={(event) => onChange(event.target.value)}
+        disabled={disabled}
+        className="mt-1 h-8 w-full rounded border border-stone-200 bg-white px-2 text-[11px] text-stone-700 outline-none focus:border-teal-500 focus:ring-2 focus:ring-teal-100 disabled:bg-stone-50"
+      >
+        <option value="">{placeholder}</option>
+        {filteredUsers.map((user) => (
+          <option key={user.id} value={user.id}>
+            {userOptionText(user, currentUserId)}
+          </option>
+        ))}
+      </select>
+      {selectedUser ? (
+        <span className="mt-1 block rounded border border-stone-200 bg-stone-50 px-2 py-1 text-[10px] font-medium text-stone-600">
+          {selectedUser.displayName}
+          {selectedUser.email ? <span className="block font-normal text-stone-500">{selectedUser.email} · {selectedUser.role || "sin rol"}</span> : null}
+        </span>
+      ) : null}
+    </label>
+  );
 }
 
 function EvidenceChips({ files, userDirectory }: { files: ObservationEvidence[]; userDirectory: ObservationUser[] }) {
@@ -264,6 +348,12 @@ export function RequirementObservationPanel({
   currentUser,
   userDirectory,
   defaultAssignedUserId,
+  defaultAssignedSource,
+  requesterLabel,
+  requesterIsRegistered,
+  loadingUsers,
+  usersLoadError,
+  onRetryUsers,
   footer,
   onClose,
   onSelectObservation,
@@ -277,7 +367,8 @@ export function RequirementObservationPanel({
   const [description, setDescription] = useState("");
   const [priority, setPriority] = useState<ObservationPriority>("medium");
   const [requiresEvidence, setRequiresEvidence] = useState(true);
-  const [assignedUserId, setAssignedUserId] = useState(defaultAssignedUserId);
+  const [manualAssignedUserId, setManualAssignedUserId] = useState("");
+  const [participantUserIds, setParticipantUserIds] = useState<string[]>([]);
   const [delegatedReviewerUserId, setDelegatedReviewerUserId] = useState("");
   const [initialFiles, setInitialFiles] = useState<File[]>([]);
   const [responseText, setResponseText] = useState("");
@@ -290,7 +381,12 @@ export function RequirementObservationPanel({
   const [reassignUserId, setReassignUserId] = useState("");
 
   const assignableUsers = useMemo(() => userDirectory.filter((user) => user.id), [userDirectory]);
-  const effectiveAssignedUserId = assignedUserId || defaultAssignedUserId || currentUser?.id || "";
+  const effectiveAssignedUserId = manualAssignedUserId || defaultAssignedUserId || "";
+  const effectiveAssignmentSource: ObservationAssignmentSource = manualAssignedUserId ? "manual" : defaultAssignedSource;
+  const filteredParticipantUserIds = useMemo(
+    () => participantUserIds.filter((userId, index, all) => userId !== effectiveAssignedUserId && all.indexOf(userId) === index),
+    [effectiveAssignedUserId, participantUserIds],
+  );
   const pendingCount = useMemo(
     () => observations.filter((observation) => observation.status !== "resolved").length,
     [observations],
@@ -307,7 +403,19 @@ export function RequirementObservationPanel({
   const resolveDisabledReason = selectedObservation ? observationCanResolveReason(selectedObservation) : "Seleccione una observación";
   const responseRequiresEvidence = selectedObservation?.requiresEvidence === true && responseFiles.length === 0;
   const canSubmitResponse = Boolean(selectedObservation && selectedCanRespond && responseText.trim() && !responseRequiresEvidence);
-  const canCreateObservation = Boolean(selectedItem && currentUser?.id && description.trim() && effectiveAssignedUserId);
+  const createDisabledReason =
+    !currentUser?.id
+      ? "No se detectó una sesión activa."
+      : !description.trim()
+        ? "Escriba la observación."
+        : loadingUsers
+          ? "Espere mientras se cargan los usuarios."
+          : usersLoadError
+            ? "No se pudo cargar el directorio de usuarios."
+            : !effectiveAssignedUserId
+              ? "Seleccione un responsable principal."
+              : "";
+  const canCreateObservation = Boolean(selectedItem && currentUser?.id && description.trim() && effectiveAssignedUserId && !loadingUsers && !usersLoadError);
   const shouldShowListHeader = observations.length !== 1;
 
   function submitObservation() {
@@ -318,13 +426,15 @@ export function RequirementObservationPanel({
       priority,
       requiresEvidence,
       assignedUserId: effectiveAssignedUserId,
+      participantUserIds: filteredParticipantUserIds,
       delegatedReviewerUserId: delegatedReviewerUserId || undefined,
       files: initialFiles,
     });
     setDescription("");
     setPriority("medium");
     setRequiresEvidence(true);
-    setAssignedUserId(defaultAssignedUserId);
+    setManualAssignedUserId("");
+    setParticipantUserIds([]);
     setDelegatedReviewerUserId("");
     setInitialFiles([]);
   }
@@ -361,6 +471,16 @@ export function RequirementObservationPanel({
     onReassignObservation(selectedObservation.id, reassignUserId);
     setReassignUserId("");
     setShowMoreOptions(false);
+  }
+
+  function selectAssignedUser(userId: string) {
+    setManualAssignedUserId(userId === defaultAssignedUserId ? "" : userId);
+    setParticipantUserIds((current) => current.filter((participantUserId) => participantUserId !== userId));
+  }
+
+  function addParticipant(userId: string) {
+    if (!userId || userId === effectiveAssignedUserId) return;
+    setParticipantUserIds((current) => (current.includes(userId) ? current : [...current, userId]));
   }
 
   return (
@@ -454,23 +574,6 @@ export function RequirementObservationPanel({
                   ))}
                 </select>
               </label>
-              <label className="block text-[10.5px] font-semibold text-stone-500">
-                Responsable
-                <select
-                  value={effectiveAssignedUserId}
-                  onChange={(event) => setAssignedUserId(event.target.value)}
-                  className="mt-1 h-7 w-full rounded border border-stone-200 bg-white px-2 text-[11px] text-stone-700 outline-none focus:border-teal-500 focus:ring-2 focus:ring-teal-100"
-                >
-                  {!effectiveAssignedUserId ? <option value="">Sin responsable</option> : null}
-                  {assignableUsers.map((user) => (
-                    <option key={user.id} value={user.id}>
-                      {user.displayName || user.email || user.id}
-                    </option>
-                  ))}
-                </select>
-              </label>
-            </div>
-            <div className="mt-2 grid grid-cols-1 gap-2 sm:grid-cols-2">
               <label className="flex items-center gap-2 rounded border border-stone-200 bg-stone-50 px-2 py-1 text-[10.5px] font-semibold text-stone-600">
                 <input
                   type="checkbox"
@@ -480,22 +583,90 @@ export function RequirementObservationPanel({
                 />
                 Requiere evidencia para responder
               </label>
-              <label className="block text-[10.5px] font-semibold text-stone-500">
-                Revisor delegado
-                <select
-                  value={delegatedReviewerUserId}
-                  onChange={(event) => setDelegatedReviewerUserId(event.target.value)}
-                  className="mt-1 h-7 w-full rounded border border-stone-200 bg-white px-2 text-[11px] text-stone-700 outline-none focus:border-teal-500 focus:ring-2 focus:ring-teal-100"
-                >
-                  <option value="">Sin delegado</option>
-                  {assignableUsers.map((user) => (
-                    <option key={user.id} value={user.id}>
-                      {user.displayName || user.email || user.id}
-                    </option>
-                  ))}
-                </select>
-              </label>
             </div>
+            <div className="mt-2 rounded border border-stone-200 bg-stone-50 px-2 py-1.5 text-[10.5px] text-stone-600">
+              <span className="block font-semibold text-stone-500">Solicitante del RQ</span>
+              <span className="block truncate font-medium text-stone-800" title={requesterLabel || "Sin solicitante"}>
+                {requesterLabel || "Sin solicitante"}
+              </span>
+              {!requesterIsRegistered && requesterLabel ? (
+                <span className="mt-1 block text-amber-700">Solicitante del RQ no registrado. Seleccione un responsable interno.</span>
+              ) : null}
+            </div>
+            <div className="mt-2">
+              <SearchableUserSelect
+                label="Responsable principal"
+                value={effectiveAssignedUserId}
+                users={assignableUsers}
+                currentUserId={currentUser?.id}
+                onChange={selectAssignedUser}
+                disabled={loadingUsers || Boolean(usersLoadError)}
+                placeholder="Seleccione responsable principal"
+              />
+              <p className="mt-1 text-[10px] text-stone-500">{assignmentSourceLabel(effectiveAssignmentSource)}</p>
+            </div>
+            <details className="mt-2 rounded border border-stone-200 bg-white">
+              <summary className="cursor-pointer px-2 py-1.5 text-[11px] font-semibold text-stone-700 focus:outline-none focus:ring-2 focus:ring-stone-300">
+                Opciones adicionales
+              </summary>
+              <div className="space-y-2 border-t border-stone-200 p-2">
+                <SearchableUserSelect
+                  label="Participantes opcionales"
+                  value=""
+                  users={assignableUsers.filter((user) => user.id !== effectiveAssignedUserId && !filteredParticipantUserIds.includes(user.id))}
+                  currentUserId={currentUser?.id}
+                  onChange={addParticipant}
+                  disabled={loadingUsers || Boolean(usersLoadError)}
+                  placeholder="Agregar participante"
+                />
+                {filteredParticipantUserIds.length ? (
+                  <div className="flex flex-wrap gap-1.5">
+                    {filteredParticipantUserIds.map((userId) => (
+                      <span key={userId} className="inline-flex max-w-full items-center gap-1 rounded border border-stone-200 bg-stone-50 px-2 py-1 text-[10px] text-stone-600">
+                        <span className="truncate">{userLabel(userDirectory, userId)}</span>
+                        <button
+                          type="button"
+                          onClick={() => setParticipantUserIds((current) => current.filter((participantUserId) => participantUserId !== userId))}
+                          className="rounded px-1 font-semibold text-stone-500 hover:bg-stone-200 focus:outline-none focus:ring-2 focus:ring-stone-300"
+                          aria-label={`Retirar participante ${userLabel(userDirectory, userId)}`}
+                        >
+                          x
+                        </button>
+                      </span>
+                    ))}
+                  </div>
+                ) : null}
+                <SearchableUserSelect
+                  label="Revisor delegado"
+                  value={delegatedReviewerUserId}
+                  users={assignableUsers}
+                  currentUserId={currentUser?.id}
+                  onChange={setDelegatedReviewerUserId}
+                  disabled={loadingUsers || Boolean(usersLoadError)}
+                  placeholder="Sin delegado"
+                />
+              </div>
+            </details>
+            {loadingUsers ? (
+              <p className="mt-2 rounded border border-stone-200 bg-stone-50 px-2 py-1 text-[10.5px] text-stone-600">
+                Cargando usuarios disponibles...
+              </p>
+            ) : null}
+            {usersLoadError ? (
+              <div className="mt-2 flex flex-wrap items-center justify-between gap-2 rounded border border-amber-200 bg-amber-50 px-2 py-1 text-[10.5px] text-amber-800">
+                <span>No se pudo cargar el directorio de usuarios.</span>
+                {onRetryUsers ? (
+                  <button type="button" onClick={onRetryUsers} className={panelButtonClassName()}>
+                    Reintentar
+                  </button>
+                ) : null}
+              </div>
+            ) : null}
+            {!loadingUsers && !usersLoadError && assignableUsers.length === 0 ? (
+              <p className="mt-2 rounded border border-amber-200 bg-amber-50 px-2 py-1 text-[10.5px] text-amber-800">
+                No hay usuarios aprobados disponibles.
+              </p>
+            ) : null}
             <div className="mt-2">
               <LocalEvidencePicker
                 files={initialFiles}
@@ -509,6 +680,9 @@ export function RequirementObservationPanel({
               <p className="mt-2 rounded border border-amber-200 bg-amber-50 px-2 py-1 text-[10.5px] text-amber-800">
                 No se detectó usuario activo para registrar trazabilidad.
               </p>
+            ) : null}
+            {createDisabledReason ? (
+              <p className="mt-2 text-[10.5px] font-medium text-amber-700">{createDisabledReason}</p>
             ) : null}
             <div className="mt-2 flex justify-end">
               <button type="button" onClick={submitObservation} disabled={!canCreateObservation} className={panelButtonClassName("primary")}>
@@ -573,6 +747,9 @@ export function RequirementObservationPanel({
                   <div className="mt-2 grid grid-cols-1 gap-1 text-[10.5px] text-stone-500">
                     <span>Observó: <strong className="text-stone-700">{userLabel(userDirectory, selectedObservation.observerUserId)}</strong></span>
                     <span>Responsable: <strong className="text-stone-700">{userLabel(userDirectory, selectedObservation.assignedUserId)}</strong></span>
+                    {selectedObservation.participantUserIds.length ? (
+                      <span>Participantes: <strong className="text-stone-700">{selectedObservation.participantUserIds.map((userId) => userLabel(userDirectory, userId)).join(", ")}</strong></span>
+                    ) : null}
                     {selectedObservation.delegatedReviewerUserId ? (
                       <span>Revisor: <strong className="text-stone-700">{userLabel(userDirectory, selectedObservation.delegatedReviewerUserId)}</strong></span>
                     ) : null}
@@ -634,7 +811,7 @@ export function RequirementObservationPanel({
                   </div>
                 ) : (
                   <p className="rounded border border-stone-200 bg-stone-50 px-2 py-2 text-[10.5px] text-stone-500">
-                    Solo el responsable asignado puede responder esta observación.
+                    Solo el responsable asignado o un participante puede responder esta observación.
                   </p>
                 )}
 
