@@ -14,12 +14,19 @@ import { DateTextInput } from "@/components/sgp/ui/DateTextInput";
 import { EmailThreadButton } from "@/components/sgp/EmailThreadButton";
 import {
   RequirementObservationPanel,
+  canReassignObservation,
+  canReopenObservation,
+  canRespondToObservation,
+  canReviewObservation,
   observationCanResolveReason,
   observationEvidenceCount,
   observationStatusForItem,
   observationStatusLabel,
+  resolveObservationUser,
+  resolveObservationUserId,
   type ObservationEvidence,
   type ObservationPriority,
+  type ObservationUser,
   type ObservationWorkflowStatus,
   type RequirementObservation,
 } from "@/components/sgp/RequirementObservationPanel";
@@ -78,6 +85,8 @@ type RequirementWorkspaceModalProps = {
   hiddenItemColumnKeys?: string[];
   hiddenBusinessFields?: string[];
   canViewPrices?: boolean;
+  currentUser?: ObservationUser | null;
+  userDirectory?: ObservationUser[];
 };
 
 type LabelValueRowProps = {
@@ -446,6 +455,11 @@ function collectObservationEmailAttachments(observations: RequirementObservation
   );
 }
 
+function observationUserEmailLabel(userDirectory: ObservationUser[], userId: string | null | undefined): string {
+  const user = resolveObservationUser(userDirectory, userId);
+  return user?.displayName || user?.email || "-";
+}
+
 function buildObservationEmailPlainBody(input: {
   title: string;
   link: string;
@@ -453,6 +467,7 @@ function buildObservationEmailPlainBody(input: {
   proyecto: string;
   cliente: string;
   observations: RequirementObservation[];
+  userDirectory: ObservationUser[];
 }): string {
   const observationLines = input.observations.length
     ? input.observations
@@ -466,6 +481,8 @@ function buildObservationEmailPlainBody(input: {
             `   Recurso: ${observation.itemCode || "-"} - ${observation.itemDescription || "-"}`,
             `   Estado: ${observationStatusLabel(observation.status)}`,
             `   Prioridad: ${observation.priority}`,
+            `   Observador: ${observationUserEmailLabel(input.userDirectory, observation.observerUserId)}`,
+            `   Responsable: ${observationUserEmailLabel(input.userDirectory, observation.assignedUserId)}`,
             `   Respuestas: ${observation.responses.length}`,
             `   Evidencias locales: ${evidenceFiles.length}`,
             `   Adjuntos: ${
@@ -500,6 +517,7 @@ function buildObservationEmailHtmlBody(input: {
   proyecto: string;
   cliente: string;
   observations: RequirementObservation[];
+  userDirectory: ObservationUser[];
 }): string {
   const rows = input.observations.length
     ? input.observations
@@ -621,6 +639,8 @@ export function RequirementWorkspaceModal({
   hiddenItemColumnKeys = [],
   hiddenBusinessFields = [],
   canViewPrices = true,
+  currentUser = null,
+  userDirectory = [],
 }: RequirementWorkspaceModalProps) {
   const [isGeneralInfoEditing, setIsGeneralInfoEditing] = useState(false);
   const [catalogPanelOpen, setCatalogPanelOpen] = useState(false);
@@ -631,11 +651,35 @@ export function RequirementWorkspaceModal({
   const [filteredObservationItemIds, setFilteredObservationItemIds] = useState<string[]>([]);
   const [selectedObservationId, setSelectedObservationId] = useState<string | null>(null);
   const generalSnapshotRef = useRef("");
+  const localEvidenceUrlSetRef = useRef<Set<string>>(new Set());
   const hiddenBusinessFieldSet = useMemo(
     () => new Set(hiddenBusinessFields.map((field) => normalizeBusinessFieldKey(field))),
     [hiddenBusinessFields],
   );
   const isBusinessFieldHidden = (fieldKey: string): boolean => hiddenBusinessFieldSet.has(normalizeBusinessFieldKey(fieldKey));
+  const observationUserDirectory = useMemo(() => {
+    const byId = new Map<string, ObservationUser>();
+    [...userDirectory, ...(currentUser?.id ? [currentUser] : [])].forEach((user) => {
+      if (!user.id) return;
+      byId.set(user.id, {
+        ...user,
+        displayName: user.displayName || user.email || user.id,
+      });
+    });
+    return Array.from(byId.values());
+  }, [currentUser, userDirectory]);
+  const defaultAssignedObservationUserId = useMemo(
+    () => resolveObservationUserId(observationUserDirectory, draft?.responsable) ?? currentUser?.id ?? "",
+    [currentUser?.id, draft?.responsable, observationUserDirectory],
+  );
+  const currentObservationUser = currentUser?.id ? currentUser : null;
+
+  const revokeAllLocalEvidenceUrls = useCallback(() => {
+    localEvidenceUrlSetRef.current.forEach((url) => {
+      URL.revokeObjectURL(url);
+    });
+    localEvidenceUrlSetRef.current.clear();
+  }, []);
 
   useEffect(() => {
     if (!open) return;
@@ -646,11 +690,14 @@ export function RequirementWorkspaceModal({
     };
   }, [open]);
 
+  useEffect(() => revokeAllLocalEvidenceUrls, [revokeAllLocalEvidenceUrls]);
+
   useEffect(() => {
     if (open) {
       setIsGeneralInfoEditing(false);
       setCatalogPanelOpen(false);
       setActiveWorkspaceTab("recursos");
+      revokeAllLocalEvidenceUrls();
       setObservations([]);
       setSelectedItemId(null);
       setSelectedObservationItemIds([]);
@@ -658,7 +705,7 @@ export function RequirementWorkspaceModal({
       setSelectedObservationId(null);
       generalSnapshotRef.current = "";
     }
-  }, [open, draft?.id]);
+  }, [open, draft?.id, revokeAllLocalEvidenceUrls]);
 
   const generalComparable = useMemo(() => {
     if (!draft) return "";
@@ -859,29 +906,35 @@ export function RequirementWorkspaceModal({
       associatedTo: "observation" | "response",
       observationId: string,
       responseId?: string,
-    ): ObservationEvidence => ({
-      id: makePreviewId("ev"),
-      name: file.name,
-      size: file.size,
-      mimeType: file.type || "application/octet-stream",
-      localObjectUrl: typeof URL !== "undefined" ? URL.createObjectURL(file) : "",
-      associatedTo,
-      observationId,
-      responseId,
-      createdAt: new Date().toISOString(),
-    }),
-    [],
+    ): ObservationEvidence => {
+      const localObjectUrl = typeof URL !== "undefined" ? URL.createObjectURL(file) : "";
+      if (localObjectUrl) localEvidenceUrlSetRef.current.add(localObjectUrl);
+      return {
+        id: makePreviewId("ev"),
+        name: file.name,
+        size: file.size,
+        mimeType: file.type || "application/octet-stream",
+        localObjectUrl,
+        associatedTo,
+        observationId,
+        responseId,
+        uploadedByUserId: currentObservationUser?.id ?? "",
+        createdAt: new Date().toISOString(),
+      };
+    },
+    [currentObservationUser?.id],
   );
 
   const makeStatusHistoryEntry = useCallback(
-    (status: ObservationWorkflowStatus, note?: string) => ({
+    (previousStatus: ObservationWorkflowStatus | null, nextStatus: ObservationWorkflowStatus, note?: string) => ({
       id: makePreviewId("status"),
-      status,
-      author: draft?.solicitante_rq || "Usuario preview",
+      previousStatus,
+      nextStatus,
+      actorUserId: currentObservationUser?.id ?? "",
       createdAt: nowPreviewTimestamp(),
       note,
     }),
-    [draft?.solicitante_rq],
+    [currentObservationUser?.id],
   );
 
   const createObservationForSelectedItem = useCallback(
@@ -889,12 +942,13 @@ export function RequirementWorkspaceModal({
       description: string;
       priority: ObservationPriority;
       requiresEvidence: boolean;
+      assignedUserId: string;
+      delegatedReviewerUserId?: string;
       files: File[];
     }) => {
-      if (!selectedItem) return;
+      if (!selectedItem || !currentObservationUser?.id || !input.assignedUserId) return;
       const id = makePreviewId("obs");
       const createdAt = nowPreviewTimestamp();
-      const author = draft?.solicitante_rq || "Usuario preview";
       const code = `OBS-${String(observations.length + 1).padStart(3, "0")}`;
       const initialEvidence = input.files.map((file) => createEvidenceFromFile(file, "observation", id));
       const observation: RequirementObservation = {
@@ -908,15 +962,18 @@ export function RequirementWorkspaceModal({
         priority: input.priority,
         requiresEvidence: input.requiresEvidence,
         status: "pending",
-        author,
+        observerUserId: currentObservationUser.id,
+        assignedUserId: input.assignedUserId,
+        delegatedReviewerUserId: input.delegatedReviewerUserId,
         createdAt,
         initialEvidence,
         responses: [],
         statusHistory: [
           {
             id: makePreviewId("status"),
-            status: "pending",
-            author,
+            previousStatus: null,
+            nextStatus: "pending",
+            actorUserId: currentObservationUser.id,
             createdAt,
             note: "Observación registrada.",
           },
@@ -926,7 +983,7 @@ export function RequirementWorkspaceModal({
       setSelectedObservationId(id);
       setCatalogPanelOpen(false);
     },
-    [createEvidenceFromFile, draft?.id, draft?.solicitante_rq, observations.length, requerimiento?.id, selectedItem],
+    [createEvidenceFromFile, currentObservationUser, draft?.id, observations.length, requerimiento?.id, selectedItem],
   );
 
   const handleSelectObservationItem = useCallback((item: EditableRequirementItem) => {
@@ -961,99 +1018,125 @@ export function RequirementWorkspaceModal({
 
   const addResponseToObservation = useCallback(
     (observationId: string, responseText: string, files: File[]) => {
+      if (!currentObservationUser) return;
       const responseId = makePreviewId("response");
-      const author = draft?.solicitante_rq || "Usuario preview";
       const createdAt = nowPreviewTimestamp();
-      const evidenceFiles = files.map((file) => createEvidenceFromFile(file, "response", observationId, responseId));
       setObservations((current) =>
-        current.map((observation) =>
-          observation.id === observationId
-            ? {
-                ...observation,
-                status: observation.status === "resolved" ? observation.status : "answered",
+        current.map((observation) => {
+          if (observation.id !== observationId) return observation;
+          if (!canRespondToObservation(observation, currentObservationUser)) return observation;
+          if (observation.requiresEvidence && files.length === 0) return observation;
+          const evidenceFiles = files.map((file) => createEvidenceFromFile(file, "response", observationId, responseId));
+          return {
+            ...observation,
+            status: "under_review",
                 responses: [
                   ...observation.responses,
                   {
                     id: responseId,
                     observationId,
                     responseText,
-                    author,
+                authorUserId: currentObservationUser.id,
                     createdAt,
                     evidenceFiles,
                   },
                 ],
-                statusHistory:
-                  observation.status === "resolved"
-                    ? observation.statusHistory
-                    : [
-                        makeStatusHistoryEntry("answered", "Respuesta registrada."),
-                        ...observation.statusHistory,
-                      ],
-              }
-            : observation,
-        ),
-      );
-    },
-    [createEvidenceFromFile, draft?.solicitante_rq, makeStatusHistoryEntry],
-  );
-
-  const sendObservationToReview = useCallback(
-    (observationId: string) => {
-      setObservations((current) =>
-        current.map((observation) =>
-          observation.id === observationId && observation.responses.length > 0 && observation.status !== "resolved"
-            ? {
-                ...observation,
-                status: "under_review",
-                statusHistory: [
-                  makeStatusHistoryEntry("under_review", "Observación enviada a revisión."),
-                  ...observation.statusHistory,
-                ],
-              }
-            : observation,
-        ),
-      );
-    },
-    [makeStatusHistoryEntry],
-  );
-
-  const resolveObservation = useCallback(
-    (observationId: string) => {
-      setObservations((current) =>
-        current.map((observation) => {
-          if (observation.id !== observationId || observationCanResolveReason(observation)) return observation;
-          return {
-            ...observation,
-            status: "resolved",
             statusHistory: [
-              makeStatusHistoryEntry("resolved", "Observación levantada."),
+              makeStatusHistoryEntry(observation.status, "under_review", "Respuesta registrada. Pendiente de revisión."),
               ...observation.statusHistory,
             ],
           };
         }),
       );
     },
-    [makeStatusHistoryEntry],
+    [createEvidenceFromFile, currentObservationUser, makeStatusHistoryEntry],
+  );
+
+  const resolveObservation = useCallback(
+    (observationId: string) => {
+      if (!currentObservationUser) return;
+      setObservations((current) =>
+        current.map((observation) => {
+          if (observation.id !== observationId) return observation;
+          if (!canReviewObservation(observation, currentObservationUser)) return observation;
+          if (observationCanResolveReason(observation)) return observation;
+          return {
+            ...observation,
+            status: "resolved",
+            statusHistory: [
+              makeStatusHistoryEntry(observation.status, "resolved", "Levantamiento aprobado."),
+              ...observation.statusHistory,
+            ],
+          };
+        }),
+      );
+    },
+    [currentObservationUser, makeStatusHistoryEntry],
+  );
+
+  const requestCorrectionObservation = useCallback(
+    (observationId: string, reason: string) => {
+      if (!currentObservationUser || !reason.trim()) return;
+      setObservations((current) =>
+        current.map((observation) => {
+          if (observation.id !== observationId || !canReviewObservation(observation, currentObservationUser)) return observation;
+          return {
+            ...observation,
+            status: "correction_requested",
+            statusHistory: [
+              makeStatusHistoryEntry(observation.status, "correction_requested", `Motivo: ${reason.trim()}`),
+              ...observation.statusHistory,
+            ],
+          };
+        }),
+      );
+    },
+    [currentObservationUser, makeStatusHistoryEntry],
   );
 
   const reopenObservation = useCallback(
     (observationId: string, reason: string) => {
+      if (!currentObservationUser || !reason.trim()) return;
       setObservations((current) =>
-        current.map((observation) =>
-          observation.id === observationId && observation.status === "resolved"
-            ? {
-                ...observation,
-                status: "reopened",
-                statusHistory: [
-                  makeStatusHistoryEntry("reopened", `Motivo: ${reason}`),
-                  ...observation.statusHistory,
-                ],
-              }
-            : observation,
-        ),
+        current.map((observation) => {
+          if (observation.id !== observationId || !canReopenObservation(observation, currentObservationUser)) return observation;
+          return {
+            ...observation,
+            status: "reopened",
+            statusHistory: [
+              makeStatusHistoryEntry(observation.status, "reopened", `Motivo: ${reason.trim()}`),
+              ...observation.statusHistory,
+            ],
+          };
+        }),
       );
     },
-    [makeStatusHistoryEntry],
+    [currentObservationUser, makeStatusHistoryEntry],
+  );
+
+  const reassignObservation = useCallback(
+    (observationId: string, assignedUserId: string) => {
+      if (!currentObservationUser || !assignedUserId || !canReassignObservation(currentObservationUser)) return;
+      setObservations((current) =>
+        current.map((observation) => {
+          if (observation.id !== observationId) return observation;
+          const assignedUser = resolveObservationUser(observationUserDirectory, assignedUserId);
+          return {
+            ...observation,
+            assignedUserId,
+            statusHistory: [
+              makeStatusHistoryEntry(
+                observation.status,
+                observation.status,
+                `Responsable reasignado a ${assignedUser?.displayName || assignedUser?.email || "usuario seleccionado"}.`,
+              ),
+              ...observation.statusHistory,
+            ],
+          };
+        }),
+      );
+    },
+    [currentObservationUser, makeStatusHistoryEntry, observationUserDirectory],
   );
 
   const buildRequirementPlainEmail = useCallback(
@@ -1099,8 +1182,9 @@ export function RequirementWorkspaceModal({
         proyecto,
         cliente,
         observations,
+        userDirectory: observationUserDirectory,
       }),
-    [cliente, draft?.codigo, observations, proyecto],
+    [cliente, draft?.codigo, observationUserDirectory, observations, proyecto],
   );
 
   const buildObservationHtmlEmail = useCallback(
@@ -1112,8 +1196,9 @@ export function RequirementWorkspaceModal({
         proyecto,
         cliente,
         observations,
+        userDirectory: observationUserDirectory,
       }),
-    [cliente, draft?.codigo, observations, proyecto],
+    [cliente, draft?.codigo, observationUserDirectory, observations, proyecto],
   );
 
   const buildSelectedObservationPlainEmail = useCallback(
@@ -1125,8 +1210,9 @@ export function RequirementWorkspaceModal({
         proyecto,
         cliente,
         observations: selectedEmailObservations,
+        userDirectory: observationUserDirectory,
       }),
-    [cliente, draft?.codigo, proyecto, selectedEmailObservations],
+    [cliente, draft?.codigo, observationUserDirectory, proyecto, selectedEmailObservations],
   );
 
   const buildSelectedObservationHtmlEmail = useCallback(
@@ -1138,8 +1224,9 @@ export function RequirementWorkspaceModal({
         proyecto,
         cliente,
         observations: selectedEmailObservations,
+        userDirectory: observationUserDirectory,
       }),
-    [cliente, draft?.codigo, proyecto, selectedEmailObservations],
+    [cliente, draft?.codigo, observationUserDirectory, proyecto, selectedEmailObservations],
   );
 
   const buildFilteredObservationPlainEmail = useCallback(
@@ -1151,8 +1238,9 @@ export function RequirementWorkspaceModal({
         proyecto,
         cliente,
         observations: filteredEmailObservations,
+        userDirectory: observationUserDirectory,
       }),
-    [cliente, draft?.codigo, filteredEmailObservations, proyecto],
+    [cliente, draft?.codigo, filteredEmailObservations, observationUserDirectory, proyecto],
   );
 
   const buildFilteredObservationHtmlEmail = useCallback(
@@ -1164,8 +1252,9 @@ export function RequirementWorkspaceModal({
         proyecto,
         cliente,
         observations: filteredEmailObservations,
+        userDirectory: observationUserDirectory,
       }),
-    [cliente, draft?.codigo, filteredEmailObservations, proyecto],
+    [cliente, draft?.codigo, filteredEmailObservations, observationUserDirectory, proyecto],
   );
 
   if (!open || !requerimiento || !draft) return null;
@@ -1315,14 +1404,18 @@ export function RequirementWorkspaceModal({
       selectedObservationId={selectedObservation?.id ?? null}
       selectedObservation={selectedObservation}
       requirementCode={draft.codigo}
+      currentUser={currentObservationUser}
+      userDirectory={observationUserDirectory}
+      defaultAssignedUserId={defaultAssignedObservationUserId}
       footer={resourceObservationPanelFooter}
       onClose={() => setSelectedItemId(null)}
       onSelectObservation={setSelectedObservationId}
       onCreateObservation={createObservationForSelectedItem}
       onAddResponse={addResponseToObservation}
-      onSendToReview={sendObservationToReview}
-      onResolveObservation={resolveObservation}
+      onApproveObservation={resolveObservation}
+      onRequestCorrection={requestCorrectionObservation}
       onReopenObservation={reopenObservation}
+      onReassignObservation={reassignObservation}
     />
   );
   const observationsPanel = (
@@ -1389,7 +1482,9 @@ export function RequirementWorkspaceModal({
                     <td className="px-2 py-2">
                       <p className="font-medium text-stone-800">{observation.code} · {observation.description}</p>
                       <p className="mt-0.5 line-clamp-2 text-[10.5px] text-stone-500">{observation.itemDescription}</p>
-                      <p className="mt-1 text-[10px] text-stone-400">{observation.createdAt} · {observation.author}</p>
+                      <p className="mt-1 text-[10px] text-stone-400">
+                        {observation.createdAt} · Resp. {observationUserEmailLabel(observationUserDirectory, observation.assignedUserId)}
+                      </p>
                     </td>
                     <td className="px-2 py-2">
                       <span className={`inline-flex rounded border px-1.5 py-0.5 text-[10px] font-semibold ${observationStatusClassName(observationStatusForItem([observation]))}`}>
@@ -1441,6 +1536,10 @@ export function RequirementWorkspaceModal({
                     <p className="text-[12px] font-semibold text-stone-800">{selectedObservation.requiresEvidence ? "Sí" : "No"}</p>
                   </div>
                 </div>
+                <p className="mt-2 text-[10.5px] text-stone-500">
+                  Observó <strong className="text-stone-700">{observationUserEmailLabel(observationUserDirectory, selectedObservation.observerUserId)}</strong> · Responsable{" "}
+                  <strong className="text-stone-700">{observationUserEmailLabel(observationUserDirectory, selectedObservation.assignedUserId)}</strong>
+                </p>
               </>
             ) : (
               <p className="text-[11px] text-stone-400">Selecciona una observación para ver respuestas y evidencias.</p>
@@ -1449,13 +1548,16 @@ export function RequirementWorkspaceModal({
           <div className="min-h-0 overflow-auto rounded border border-border bg-white p-3">
             {selectedObservation ? (
               <div className="space-y-2">
-                <p className="text-[11px] font-semibold text-stone-700">Historial de revisión</p>
+                <p className="text-[11px] font-semibold text-stone-700">Actividad</p>
                 {selectedObservation.statusHistory.map((entry) => (
                   <div key={entry.id} className="rounded border border-stone-200 bg-stone-50 px-2 py-1.5">
                     <p className="text-[10.5px] font-semibold text-stone-700">
-                      {observationStatusLabel(entry.status)} · {entry.author}
+                      {entry.previousStatus ? `${observationStatusLabel(entry.previousStatus)} → ` : ""}
+                      {observationStatusLabel(entry.nextStatus)}
                     </p>
-                    <p className="text-[10px] text-stone-500">{entry.createdAt}</p>
+                    <p className="text-[10px] text-stone-500">
+                      {observationUserEmailLabel(observationUserDirectory, entry.actorUserId)} · {entry.createdAt}
+                    </p>
                     {entry.note ? <p className="mt-0.5 text-[10px] text-stone-600">{entry.note}</p> : null}
                   </div>
                 ))}

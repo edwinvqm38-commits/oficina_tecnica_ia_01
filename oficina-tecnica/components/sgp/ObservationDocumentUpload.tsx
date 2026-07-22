@@ -14,6 +14,7 @@ type LocalEvidencePickerProps = {
   label?: string;
   helperText?: string;
   disabled?: boolean;
+  compact?: boolean;
 };
 
 function formatFileSize(size: number): string {
@@ -28,12 +29,19 @@ export function LocalEvidencePicker({
   label = "Seleccionar evidencias",
   helperText = "PDF, imágenes, Excel, Word u otros documentos de evidencia",
   disabled = false,
+  compact = false,
 }: LocalEvidencePickerProps) {
   return (
     <div className="space-y-2">
-      <label className="flex min-h-[96px] cursor-pointer flex-col items-center justify-center rounded border border-dashed border-stone-300 bg-white px-3 py-4 text-center hover:bg-stone-50">
+      <label
+        className={
+          compact
+            ? "inline-flex h-7 cursor-pointer items-center justify-center rounded border border-stone-200 bg-white px-2.5 text-[11px] font-semibold text-stone-600 hover:bg-stone-50 focus-within:ring-2 focus-within:ring-stone-300"
+            : "flex min-h-[96px] cursor-pointer flex-col items-center justify-center rounded border border-dashed border-stone-300 bg-white px-3 py-4 text-center hover:bg-stone-50 focus-within:ring-2 focus-within:ring-stone-300"
+        }
+      >
         <span className="text-[11px] font-semibold text-stone-700">{label}</span>
-        <span className="mt-1 text-[10.5px] text-stone-500">{helperText}</span>
+        {!compact ? <span className="mt-1 text-[10.5px] text-stone-500">{helperText}</span> : null}
         <input
           type="file"
           multiple
@@ -48,21 +56,28 @@ export function LocalEvidencePicker({
         />
       </label>
       {files.length ? (
-        <div className="max-h-[120px] overflow-auto rounded border border-stone-200 bg-stone-50">
+        <div className={compact ? "flex flex-wrap gap-1.5" : "max-h-[120px] overflow-auto rounded border border-stone-200 bg-stone-50"}>
           {files.map((file, index) => (
-            <div key={`${file.name}-${file.size}-${index}`} className="flex items-center justify-between gap-2 border-b border-stone-100 px-2 py-1.5 last:border-b-0">
+            <div
+              key={`${file.name}-${file.size}-${index}`}
+              className={
+                compact
+                  ? "flex max-w-full items-center gap-1.5 rounded border border-stone-200 bg-white px-2 py-1"
+                  : "flex items-center justify-between gap-2 border-b border-stone-100 px-2 py-1.5 last:border-b-0"
+              }
+            >
               <div className="min-w-0">
                 <p className="truncate text-[11px] font-semibold text-stone-700" title={file.name}>
                   {file.name}
                 </p>
-                <p className="text-[10px] text-stone-500">
+                <p className={compact ? "max-w-[220px] truncate text-[10px] text-stone-500" : "text-[10px] text-stone-500"}>
                   {file.type || "archivo"} · {formatFileSize(file.size)}
                 </p>
               </div>
               <button
                 type="button"
                 onClick={() => onFilesChange(files.filter((_, fileIndex) => fileIndex !== index))}
-                className="shrink-0 rounded border border-stone-200 bg-white px-2 py-0.5 text-[10px] font-semibold text-stone-600 hover:bg-stone-100"
+                className="shrink-0 rounded border border-stone-200 bg-white px-2 py-0.5 text-[10px] font-semibold text-stone-600 hover:bg-stone-100 focus:outline-none focus:ring-2 focus:ring-stone-300"
               >
                 Retirar
               </button>
