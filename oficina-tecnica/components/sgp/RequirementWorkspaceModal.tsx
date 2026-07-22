@@ -12,10 +12,18 @@ import { FieldLabelIcon, type IconName } from "@/components/sgp/ui/FieldLabelIco
 import { FieldLockButton } from "@/components/sgp/ui/FieldLockButton";
 import { DateTextInput } from "@/components/sgp/ui/DateTextInput";
 import { EmailThreadButton } from "@/components/sgp/EmailThreadButton";
-import { ObservationComments, type ObservationComment } from "@/components/sgp/ObservationComments";
-import { ObservationDocumentUpload, formatFileSize } from "@/components/sgp/ObservationDocumentUpload";
-import type { EstadoRequerimiento, Recurso, Requerimiento, ResourceFileMeta } from "@/lib/sgp/demoData";
-import { authFetch } from "@/lib/api/authFetch";
+import {
+  RequirementObservationPanel,
+  observationCanResolveReason,
+  observationEvidenceCount,
+  observationStatusForItem,
+  observationStatusLabel,
+  type ObservationEvidence,
+  type ObservationPriority,
+  type ObservationWorkflowStatus,
+  type RequirementObservation,
+} from "@/components/sgp/RequirementObservationPanel";
+import type { EstadoRequerimiento, Recurso, Requerimiento } from "@/lib/sgp/demoData";
 import { formatCurrencyNumber, formatDate } from "@/lib/sgp/utils";
 
 type ResourceTypeSummary = {
@@ -83,31 +91,6 @@ type LabelValueRowProps = {
 
 type WorkspaceActionIconName = "cancel" | "save" | "close";
 type WorkspaceTab = "recursos" | "observaciones";
-
-type RequirementObservation = {
-  id: string;
-  requirementId: string;
-  itemId: string;
-  itemCode: string;
-  itemDescription: string;
-  title: string;
-  status: Exclude<RequirementObservationStatus, "Sin observación">;
-  author: string;
-  createdAt: string;
-  documents: ResourceFileMeta[];
-};
-
-type ObservationUploadMode = "attach" | "lift";
-
-type DriveUploadResponse = {
-  file_id: string;
-  name: string;
-  mime_type: string;
-  size: number;
-  folder_id: string;
-  web_view_link: string;
-  web_content_link?: string | null;
-};
 
 type ObservationEmailAttachment = {
   name: string;
@@ -449,20 +432,16 @@ function observationStatusClassName(status: RequirementObservationStatus): strin
   return "border-stone-200 bg-stone-50 text-stone-500";
 }
 
-function observationStatusForItem(observations: RequirementObservation[]): RequirementObservationStatus {
-  if (observations.length === 0) return "Sin observación";
-  if (observations.some((observation) => observation.status === "Observado")) return "Observado";
-  if (observations.some((observation) => observation.status === "En seguimiento")) return "En seguimiento";
-  return "Levantado";
-}
-
 function collectObservationEmailAttachments(observations: RequirementObservation[]): ObservationEmailAttachment[] {
   return observations.flatMap((observation) =>
-    observation.documents.map((file) => ({
+    [
+      ...observation.initialEvidence,
+      ...observation.responses.flatMap((response) => response.evidenceFiles),
+    ].map((file) => ({
       name: file.name,
       size: file.size,
-      type: file.type,
-      url: file.futureDriveUrl || null,
+      type: file.mimeType,
+      url: file.localObjectUrl || null,
     })),
   );
 }
@@ -474,25 +453,24 @@ function buildObservationEmailPlainBody(input: {
   proyecto: string;
   cliente: string;
   observations: RequirementObservation[];
-  comments: ObservationComment[];
 }): string {
   const observationLines = input.observations.length
     ? input.observations
         .map((observation, index) => {
-          const commentCount = input.comments.filter((comment) => comment.observationId === observation.id).length;
+          const evidenceFiles = [
+            ...observation.initialEvidence,
+            ...observation.responses.flatMap((response) => response.evidenceFiles),
+          ];
           return [
-            `${index + 1}. ${observation.title}`,
+            `${index + 1}. ${observation.code} - ${observation.description}`,
             `   Recurso: ${observation.itemCode || "-"} - ${observation.itemDescription || "-"}`,
-            `   Estado: ${observation.status}`,
-            `   Evidencias Drive: ${observation.documents.length}`,
+            `   Estado: ${observationStatusLabel(observation.status)}`,
+            `   Prioridad: ${observation.priority}`,
+            `   Respuestas: ${observation.responses.length}`,
+            `   Evidencias locales: ${evidenceFiles.length}`,
             `   Adjuntos: ${
-              observation.documents.length
-                ? observation.documents
-                    .map((file) => `${file.name}${file.futureDriveUrl ? ` (${file.futureDriveUrl})` : ""}`)
-                    .join(", ")
-                : "-"
+              evidenceFiles.length ? evidenceFiles.map((file) => file.name).join(", ") : "-"
             }`,
-            `   Comentarios: ${commentCount}`,
           ].join("\n");
         })
         .join("\n\n")
@@ -522,30 +500,28 @@ function buildObservationEmailHtmlBody(input: {
   proyecto: string;
   cliente: string;
   observations: RequirementObservation[];
-  comments: ObservationComment[];
 }): string {
   const rows = input.observations.length
     ? input.observations
         .map((observation, index) => {
-          const commentCount = input.comments.filter((comment) => comment.observationId === observation.id).length;
-          const attachments = observation.documents.length
-            ? observation.documents
-                .map((file) =>
-                  file.futureDriveUrl
-                    ? `<a href="${escapeEmailHtml(file.futureDriveUrl)}" style="color:#0f766e;text-decoration:underline;">${escapeEmailHtml(file.name)}</a>`
-                    : escapeEmailHtml(file.name),
-                )
+          const evidenceFiles = [
+            ...observation.initialEvidence,
+            ...observation.responses.flatMap((response) => response.evidenceFiles),
+          ];
+          const attachments = evidenceFiles.length
+            ? evidenceFiles
+                .map((file) => escapeEmailHtml(file.name))
                 .join("<br>")
             : "-";
           return `
             <tr>
               <td style="padding:7px;border:1px solid #e5e7eb;text-align:right;color:#374151;">${index + 1}</td>
               <td style="padding:7px;border:1px solid #e5e7eb;font-weight:700;color:#111827;">${escapeEmailHtml(observation.itemCode || "-")}</td>
-              <td style="padding:7px;border:1px solid #e5e7eb;color:#111827;">${escapeEmailHtml(observation.title)}</td>
-              <td style="padding:7px;border:1px solid #e5e7eb;color:#374151;">${escapeEmailHtml(observation.status)}</td>
-              <td style="padding:7px;border:1px solid #e5e7eb;text-align:right;color:#111827;">${observation.documents.length}</td>
+              <td style="padding:7px;border:1px solid #e5e7eb;color:#111827;">${escapeEmailHtml(`${observation.code} - ${observation.description}`)}</td>
+              <td style="padding:7px;border:1px solid #e5e7eb;color:#374151;">${escapeEmailHtml(observationStatusLabel(observation.status))}</td>
+              <td style="padding:7px;border:1px solid #e5e7eb;text-align:right;color:#111827;">${evidenceFiles.length}</td>
               <td style="padding:7px;border:1px solid #e5e7eb;color:#374151;">${attachments}</td>
-              <td style="padding:7px;border:1px solid #e5e7eb;text-align:right;color:#111827;">${commentCount}</td>
+              <td style="padding:7px;border:1px solid #e5e7eb;text-align:right;color:#111827;">${observation.responses.length}</td>
             </tr>`;
         })
         .join("")
@@ -564,7 +540,7 @@ function buildObservationEmailHtmlBody(input: {
         </tr>
         <tr>
           <td style="padding:16px 20px;">
-            <p style="margin:0 0 12px;font-size:13px;line-height:18px;color:#374151;">Resumen de observaciones, comentarios y evidencias Drive para pruebas locales.</p>
+            <p style="margin:0 0 12px;font-size:13px;line-height:18px;color:#374151;">Resumen de observaciones, respuestas y evidencias locales para pruebas.</p>
             <table style="width:100%;border-collapse:collapse;margin-bottom:14px;font-size:12px;">
               <tr>
                 <td style="width:50%;padding:8px;border:1px solid #e5e7eb;background:#f8fafc;font-weight:700;">Proyecto</td>
@@ -582,9 +558,9 @@ function buildObservationEmailHtmlBody(input: {
                   <th style="width:130px;padding:7px;border:1px solid #e5e7eb;text-align:left;">Recurso</th>
                   <th style="padding:7px;border:1px solid #e5e7eb;text-align:left;">Observación</th>
                   <th style="width:100px;padding:7px;border:1px solid #e5e7eb;text-align:left;">Estado</th>
-                  <th style="width:80px;padding:7px;border:1px solid #e5e7eb;text-align:right;">Docs</th>
+                  <th style="width:80px;padding:7px;border:1px solid #e5e7eb;text-align:right;">Evidencias</th>
                   <th style="width:150px;padding:7px;border:1px solid #e5e7eb;text-align:left;">Adjuntos</th>
-                  <th style="width:90px;padding:7px;border:1px solid #e5e7eb;text-align:right;">Comentarios</th>
+                  <th style="width:90px;padding:7px;border:1px solid #e5e7eb;text-align:right;">Respuestas</th>
                 </tr>
               </thead>
               <tbody>${rows}</tbody>
@@ -650,15 +626,10 @@ export function RequirementWorkspaceModal({
   const [catalogPanelOpen, setCatalogPanelOpen] = useState(false);
   const [activeWorkspaceTab, setActiveWorkspaceTab] = useState<WorkspaceTab>("recursos");
   const [observations, setObservations] = useState<RequirementObservation[]>([]);
-  const [comments, setComments] = useState<ObservationComment[]>([]);
   const [selectedItemId, setSelectedItemId] = useState<string | null>(null);
   const [selectedObservationItemIds, setSelectedObservationItemIds] = useState<string[]>([]);
   const [filteredObservationItemIds, setFilteredObservationItemIds] = useState<string[]>([]);
   const [selectedObservationId, setSelectedObservationId] = useState<string | null>(null);
-  const [uploadObservationId, setUploadObservationId] = useState<string | null>(null);
-  const [uploadMode, setUploadMode] = useState<ObservationUploadMode>("attach");
-  const [isUploadingObservationFile, setIsUploadingObservationFile] = useState(false);
-  const [observationMessage, setObservationMessage] = useState("");
   const generalSnapshotRef = useRef("");
   const hiddenBusinessFieldSet = useMemo(
     () => new Set(hiddenBusinessFields.map((field) => normalizeBusinessFieldKey(field))),
@@ -681,15 +652,10 @@ export function RequirementWorkspaceModal({
       setCatalogPanelOpen(false);
       setActiveWorkspaceTab("recursos");
       setObservations([]);
-      setComments([]);
       setSelectedItemId(null);
       setSelectedObservationItemIds([]);
       setFilteredObservationItemIds([]);
       setSelectedObservationId(null);
-      setUploadObservationId(null);
-      setUploadMode("attach");
-      setIsUploadingObservationFile(false);
-      setObservationMessage("");
       generalSnapshotRef.current = "";
     }
   }, [open, draft?.id]);
@@ -771,15 +737,9 @@ export function RequirementWorkspaceModal({
       null,
     [selectedItemObservations, selectedObservationId],
   );
-  const selectedObservationComments = useMemo(
-    () => comments.filter((comment) => comment.observationId === selectedObservation?.id),
-    [comments, selectedObservation?.id],
-  );
-  const uploadObservation = useMemo(
-    () => observations.find((observation) => observation.id === uploadObservationId) ?? null,
-    [observations, uploadObservationId],
-  );
-  const selectedObservationStatus = selectedObservation?.status ?? observationStatusForItem(selectedItemObservations);
+  const selectedObservationGridStatus = selectedObservation
+    ? observationStatusForItem([selectedObservation])
+    : observationStatusForItem(selectedItemObservations);
   const observedItemIdSet = useMemo(() => new Set(observations.map((observation) => observation.itemId)), [observations]);
   const selectedObservationItemIdSet = useMemo(() => new Set(selectedObservationItemIds), [selectedObservationItemIds]);
   const filteredObservationItemIdSet = useMemo(() => new Set(filteredObservationItemIds), [filteredObservationItemIds]);
@@ -893,47 +853,85 @@ export function RequirementWorkspaceModal({
     }
   }, [canAddCatalogResource, onAddRow, onAssignCatalogRecurso, onSelectRecurso]);
 
-  const createObservationForItem = useCallback(
-    (item: EditableRequirementItem, titleOverride?: string): string => {
+  const createEvidenceFromFile = useCallback(
+    (
+      file: File,
+      associatedTo: "observation" | "response",
+      observationId: string,
+      responseId?: string,
+    ): ObservationEvidence => ({
+      id: makePreviewId("ev"),
+      name: file.name,
+      size: file.size,
+      mimeType: file.type || "application/octet-stream",
+      localObjectUrl: typeof URL !== "undefined" ? URL.createObjectURL(file) : "",
+      associatedTo,
+      observationId,
+      responseId,
+      createdAt: new Date().toISOString(),
+    }),
+    [],
+  );
+
+  const makeStatusHistoryEntry = useCallback(
+    (status: ObservationWorkflowStatus, note?: string) => ({
+      id: makePreviewId("status"),
+      status,
+      author: draft?.solicitante_rq || "Usuario preview",
+      createdAt: nowPreviewTimestamp(),
+      note,
+    }),
+    [draft?.solicitante_rq],
+  );
+
+  const createObservationForSelectedItem = useCallback(
+    (input: {
+      description: string;
+      priority: ObservationPriority;
+      requiresEvidence: boolean;
+      files: File[];
+    }) => {
+      if (!selectedItem) return;
       const id = makePreviewId("obs");
-      const title = titleOverride || `Observación sobre ${item.codigo_fabricante || item.descripcion || "recurso"}`;
       const createdAt = nowPreviewTimestamp();
       const author = draft?.solicitante_rq || "Usuario preview";
+      const code = `OBS-${String(observations.length + 1).padStart(3, "0")}`;
+      const initialEvidence = input.files.map((file) => createEvidenceFromFile(file, "observation", id));
       const observation: RequirementObservation = {
         id,
+        code,
         requirementId: draft?.id ?? requerimiento?.id ?? "preview-rq",
-        itemId: item.id,
-        itemCode: item.codigo_fabricante || item.codigo_recurso || "-",
-        itemDescription: item.descripcion || item.recurso_a_suministrar || "-",
-        title,
-        status: "Observado",
+        itemId: selectedItem.id,
+        itemCode: selectedItem.codigo_fabricante || selectedItem.codigo_recurso || "-",
+        itemDescription: selectedItem.descripcion || selectedItem.recurso_a_suministrar || "-",
+        description: input.description,
+        priority: input.priority,
+        requiresEvidence: input.requiresEvidence,
+        status: "pending",
         author,
         createdAt,
-        documents: [],
+        initialEvidence,
+        responses: [],
+        statusHistory: [
+          {
+            id: makePreviewId("status"),
+            status: "pending",
+            author,
+            createdAt,
+            note: "Observación registrada.",
+          },
+        ],
       };
       setObservations((current) => [observation, ...current]);
-      setComments((current) => [
-        {
-          id: makePreviewId("comment"),
-          observationId: id,
-          author,
-          message: title,
-          createdAt,
-        },
-        ...current,
-      ]);
-      setSelectedItemId(item.id);
       setSelectedObservationId(id);
       setCatalogPanelOpen(false);
-      return id;
     },
-    [draft?.id, draft?.solicitante_rq, requerimiento?.id],
+    [createEvidenceFromFile, draft?.id, draft?.solicitante_rq, observations.length, requerimiento?.id, selectedItem],
   );
 
   const handleSelectObservationItem = useCallback((item: EditableRequirementItem) => {
     setSelectedItemId(item.id);
     setCatalogPanelOpen(false);
-    setObservationMessage("");
   }, []);
 
   const handleToggleObservationItemSelection = useCallback(
@@ -961,148 +959,101 @@ export function RequirementWorkspaceModal({
     setFilteredObservationItemIds(visibleItems.map((item) => item.id));
   }, []);
 
-  const openObservationUpload = useCallback(
-    (mode: ObservationUploadMode) => {
-      if (!selectedItem) return;
-      const observationId =
-        selectedObservation?.id ??
-        createObservationForItem(selectedItem, `Observación sobre ${selectedItem.codigo_fabricante || selectedItem.descripcion || "recurso"}`);
-      setUploadMode(mode);
-      setSelectedObservationId(observationId);
-      setUploadObservationId(observationId);
-      setObservationMessage("");
-    },
-    [createObservationForItem, selectedItem, selectedObservation?.id],
-  );
-
-  const addCommentToSelectedObservation = useCallback(
-    (message: string) => {
-      if (!selectedObservation) return;
-      setComments((current) => [
-        {
-          id: makePreviewId("comment"),
-          observationId: selectedObservation.id,
-          author: draft?.solicitante_rq || "Usuario preview",
-          message,
-          createdAt: nowPreviewTimestamp(),
-        },
-        ...current,
-      ]);
-    },
-    [draft?.solicitante_rq, selectedObservation],
-  );
-
-  const createObservationFromPanel = useCallback(
-    (message: string) => {
-      const title = message.trim();
-      if (!selectedItem || !title) return;
-      createObservationForItem(selectedItem, title);
-      setObservationMessage("");
-    },
-    [createObservationForItem, selectedItem],
-  );
-
-  const updateObservationStatus = useCallback(
-    (observationId: string, status: Exclude<RequirementObservationStatus, "Sin observación">) => {
+  const addResponseToObservation = useCallback(
+    (observationId: string, responseText: string, files: File[]) => {
+      const responseId = makePreviewId("response");
+      const author = draft?.solicitante_rq || "Usuario preview";
+      const createdAt = nowPreviewTimestamp();
+      const evidenceFiles = files.map((file) => createEvidenceFromFile(file, "response", observationId, responseId));
       setObservations((current) =>
-        current.map((observation) => (observation.id === observationId ? { ...observation, status } : observation)),
+        current.map((observation) =>
+          observation.id === observationId
+            ? {
+                ...observation,
+                status: observation.status === "resolved" ? observation.status : "answered",
+                responses: [
+                  ...observation.responses,
+                  {
+                    id: responseId,
+                    observationId,
+                    responseText,
+                    author,
+                    createdAt,
+                    evidenceFiles,
+                  },
+                ],
+                statusHistory:
+                  observation.status === "resolved"
+                    ? observation.statusHistory
+                    : [
+                        makeStatusHistoryEntry("answered", "Respuesta registrada."),
+                        ...observation.statusHistory,
+                      ],
+              }
+            : observation,
+        ),
       );
-      if (status === "En seguimiento" || status === "Levantado") {
-        setComments((current) => [
-          {
-            id: makePreviewId("comment"),
-            observationId,
-            author: draft?.solicitante_rq || "Usuario preview",
-            message: `Estado actualizado a ${status}.`,
-            createdAt: nowPreviewTimestamp(),
-          },
-          ...current,
-        ]);
-      }
     },
-    [draft?.solicitante_rq],
+    [createEvidenceFromFile, draft?.solicitante_rq, makeStatusHistoryEntry],
   );
 
-  const uploadObservationFileToDrive = useCallback(
-    async (file: File): Promise<ResourceFileMeta> => {
-      if (!draft?.codigo) throw new Error("Falta código RQ para subir evidencia a Drive.");
-      const form = new FormData();
-      form.append("file", file);
-      form.append("entityType", "requirement");
-      form.append("entityCode", draft.codigo);
-      form.append("category", "attachment");
-
-      const response = await authFetch("/api/drive/upload", {
-        method: "POST",
-        body: form,
-      });
-      const json = (await response.json().catch(() => ({}))) as Partial<DriveUploadResponse> & { error?: string };
-      if (!response.ok || !json.file_id) {
-        throw new Error(json.error || `No se pudo subir ${file.name} a Drive.`);
-      }
-
-      return {
-        name: json.name || file.name,
-        size: Number(json.size ?? file.size),
-        type: json.mime_type || file.type || "application/octet-stream",
-        localPreviewUrl: "",
-        futureDriveFileId: json.file_id,
-        futureDriveUrl: json.web_view_link || `https://drive.google.com/file/d/${json.file_id}/view`,
-        driveFolderId: json.folder_id,
-        driveWebContentLink: json.web_content_link ?? undefined,
-        file_name: json.name || file.name,
-        file_type: "attachment",
-        mime_type: json.mime_type || file.type || "application/octet-stream",
-        uploaded_at: new Date().toISOString(),
-      };
+  const sendObservationToReview = useCallback(
+    (observationId: string) => {
+      setObservations((current) =>
+        current.map((observation) =>
+          observation.id === observationId && observation.responses.length > 0 && observation.status !== "resolved"
+            ? {
+                ...observation,
+                status: "under_review",
+                statusHistory: [
+                  makeStatusHistoryEntry("under_review", "Observación enviada a revisión."),
+                  ...observation.statusHistory,
+                ],
+              }
+            : observation,
+        ),
+      );
     },
-    [draft?.codigo],
+    [makeStatusHistoryEntry],
   );
 
-  const attachFilesToObservation = useCallback(
-    async (files: File[]) => {
-      if (!uploadObservationId || files.length === 0) return;
-      setIsUploadingObservationFile(true);
-      setObservationMessage("");
-      try {
-        const uploadedFiles: ResourceFileMeta[] = [];
-        for (const file of files) {
-          uploadedFiles.push(await uploadObservationFileToDrive(file));
-        }
-
-        setObservations((current) =>
-          current.map((observation) =>
-            observation.id === uploadObservationId
-              ? {
-                  ...observation,
-                  status: uploadMode === "lift" ? "Levantado" : observation.status,
-                  documents: [...uploadedFiles, ...observation.documents],
-                }
-              : observation,
-          ),
-        );
-        setComments((current) => [
-          {
-            id: makePreviewId("comment"),
-            observationId: uploadObservationId,
-            author: draft?.solicitante_rq || "Usuario preview",
-            message:
-              uploadMode === "lift"
-                ? `Observación levantada con evidencia Drive: ${uploadedFiles.map((file) => file.name).join(", ")}`
-                : `Se adjuntaron ${uploadedFiles.length} archivo(s) en Drive: ${uploadedFiles.map((file) => file.name).join(", ")}`,
-            createdAt: nowPreviewTimestamp(),
-          },
-          ...current,
-        ]);
-        setObservationMessage(`Evidencia subida a Drive: ${uploadedFiles.map((file) => file.name).join(", ")}`);
-        setUploadObservationId(null);
-      } catch (error) {
-        setObservationMessage(error instanceof Error ? error.message : "No se pudo subir la evidencia a Drive.");
-      } finally {
-        setIsUploadingObservationFile(false);
-      }
+  const resolveObservation = useCallback(
+    (observationId: string) => {
+      setObservations((current) =>
+        current.map((observation) => {
+          if (observation.id !== observationId || observationCanResolveReason(observation)) return observation;
+          return {
+            ...observation,
+            status: "resolved",
+            statusHistory: [
+              makeStatusHistoryEntry("resolved", "Observación levantada."),
+              ...observation.statusHistory,
+            ],
+          };
+        }),
+      );
     },
-    [draft?.solicitante_rq, uploadMode, uploadObservationFileToDrive, uploadObservationId],
+    [makeStatusHistoryEntry],
+  );
+
+  const reopenObservation = useCallback(
+    (observationId: string, reason: string) => {
+      setObservations((current) =>
+        current.map((observation) =>
+          observation.id === observationId && observation.status === "resolved"
+            ? {
+                ...observation,
+                status: "reopened",
+                statusHistory: [
+                  makeStatusHistoryEntry("reopened", `Motivo: ${reason}`),
+                  ...observation.statusHistory,
+                ],
+              }
+            : observation,
+        ),
+      );
+    },
+    [makeStatusHistoryEntry],
   );
 
   const buildRequirementPlainEmail = useCallback(
@@ -1148,9 +1099,8 @@ export function RequirementWorkspaceModal({
         proyecto,
         cliente,
         observations,
-        comments,
       }),
-    [cliente, comments, draft?.codigo, observations, proyecto],
+    [cliente, draft?.codigo, observations, proyecto],
   );
 
   const buildObservationHtmlEmail = useCallback(
@@ -1162,9 +1112,8 @@ export function RequirementWorkspaceModal({
         proyecto,
         cliente,
         observations,
-        comments,
       }),
-    [cliente, comments, draft?.codigo, observations, proyecto],
+    [cliente, draft?.codigo, observations, proyecto],
   );
 
   const buildSelectedObservationPlainEmail = useCallback(
@@ -1176,9 +1125,8 @@ export function RequirementWorkspaceModal({
         proyecto,
         cliente,
         observations: selectedEmailObservations,
-        comments,
       }),
-    [cliente, comments, draft?.codigo, proyecto, selectedEmailObservations],
+    [cliente, draft?.codigo, proyecto, selectedEmailObservations],
   );
 
   const buildSelectedObservationHtmlEmail = useCallback(
@@ -1190,9 +1138,8 @@ export function RequirementWorkspaceModal({
         proyecto,
         cliente,
         observations: selectedEmailObservations,
-        comments,
       }),
-    [cliente, comments, draft?.codigo, proyecto, selectedEmailObservations],
+    [cliente, draft?.codigo, proyecto, selectedEmailObservations],
   );
 
   const buildFilteredObservationPlainEmail = useCallback(
@@ -1204,9 +1151,8 @@ export function RequirementWorkspaceModal({
         proyecto,
         cliente,
         observations: filteredEmailObservations,
-        comments,
       }),
-    [cliente, comments, draft?.codigo, filteredEmailObservations, proyecto],
+    [cliente, draft?.codigo, filteredEmailObservations, proyecto],
   );
 
   const buildFilteredObservationHtmlEmail = useCallback(
@@ -1218,9 +1164,8 @@ export function RequirementWorkspaceModal({
         proyecto,
         cliente,
         observations: filteredEmailObservations,
-        comments,
       }),
-    [cliente, comments, draft?.codigo, filteredEmailObservations, proyecto],
+    [cliente, draft?.codigo, filteredEmailObservations, proyecto],
   );
 
   if (!open || !requerimiento || !draft) return null;
@@ -1286,8 +1231,8 @@ export function RequirementWorkspaceModal({
     { label: "Proyecto", value: proyecto },
     { label: "Cliente", value: cliente },
     { label: "Observaciones", value: observations.length },
-    { label: "Comentarios", value: comments.length },
-    { label: "Evidencias Drive", value: observations.reduce((total, observation) => total + observation.documents.length, 0) },
+    { label: "Respuestas", value: observations.reduce((total, observation) => total + observation.responses.length, 0) },
+    { label: "Evidencias locales", value: observations.reduce((total, observation) => total + observationEvidenceCount(observation), 0) },
   ];
   const selectedObservationEmailRows = [
     { label: "Código RQ", value: draft.codigo },
@@ -1311,261 +1256,74 @@ export function RequirementWorkspaceModal({
         ? "border-stone-900 bg-stone-900 text-white"
         : "border-stone-200 bg-white text-stone-600 hover:bg-stone-50"
     }`;
-  const resourceObservationPanel = (
-    <aside className="flex h-full min-h-0 flex-col rounded-xl border border-border bg-white">
-      <div className="flex flex-none items-start justify-between gap-2 border-b border-border px-3 py-2">
-        <div className="min-w-0">
-          <div className="flex min-w-0 items-center gap-2">
-            <FieldLabelIcon icon="clipboard-list" label="Observaciones del recurso" className="text-xs font-medium" />
-            <span
-              className={`rounded border px-2 py-0.5 text-[10px] font-semibold ${observationStatusClassName(
-                selectedObservationStatus,
-              )}`}
-            >
-              {selectedObservationStatus}
-            </span>
-          </div>
-          <p className="mt-1 truncate text-[11px] text-stone-500" title={selectedItem?.descripcion || ""}>
-            {selectedItem ? selectedItem.descripcion || selectedItem.recurso_a_suministrar || "Recurso sin descripción" : "Selecciona un recurso"}
-          </p>
+  const resourceObservationPanelFooter = (
+    <div className="rounded border border-stone-200 bg-stone-50 p-2">
+      <div className="mb-2 grid grid-cols-2 gap-1.5 text-[10.5px]">
+        <div className="rounded border border-stone-200 bg-white px-2 py-1">
+          <span className="block font-semibold text-stone-500">Seleccionados</span>
+          <span className="text-[12px] font-semibold text-stone-800">
+            {selectedObservationItems.length} recursos · {selectedEmailAttachments.length} adjuntos
+          </span>
         </div>
-        <button
-          type="button"
-          onClick={() => setSelectedItemId(null)}
-          title="Cerrar panel"
-          aria-label="Cerrar panel de observaciones"
-          className={workspaceActionButtonClassName(true)}
-        >
-          <WorkspaceActionIcon name="close" />
-        </button>
+        <div className="rounded border border-stone-200 bg-white px-2 py-1">
+          <span className="block font-semibold text-stone-500">Filtrados</span>
+          <span className="text-[12px] font-semibold text-stone-800">
+            {filteredObservedItems.length} recursos · {filteredEmailAttachments.length} adjuntos
+          </span>
+        </div>
       </div>
-
-      {selectedItem ? (
-        <div className="flex min-h-0 flex-1 flex-col gap-2 overflow-auto p-2">
-          <div className="rounded border border-stone-200 bg-stone-50 p-2">
-            <div className="grid grid-cols-2 gap-x-2 gap-y-1 text-[11px]">
-              <span className="font-semibold text-stone-500">Código</span>
-              <span className="truncate text-right font-semibold text-stone-800" title={selectedItem.codigo_fabricante || selectedItem.codigo_recurso}>
-                {selectedItem.codigo_fabricante || selectedItem.codigo_recurso || "-"}
-              </span>
-              <span className="font-semibold text-stone-500">Tipo</span>
-              <span className="truncate text-right text-stone-700" title={selectedItem.tipo_recurso}>{selectedItem.tipo_recurso || "-"}</span>
-              <span className="font-semibold text-stone-500">Cantidad</span>
-              <span className="text-right text-stone-700">
-                {formatCurrencyNumber(selectedItem.cantidad)} {selectedItem.unidad || ""}
-              </span>
-            </div>
-            <div className="mt-2 flex flex-wrap justify-end gap-1.5">
-              <a
-                href={`/requerimientos?rqCode=${encodeURIComponent(draft.codigo)}&item=${encodeURIComponent(selectedItem.id)}`}
-                onClick={(event) => event.preventDefault()}
-                className={workspaceActionButtonClassName()}
-                title="Link simulado al recurso"
-              >
-                Abrir recurso
-              </a>
-              <a
-                href={`/requerimientos?rqCode=${encodeURIComponent(draft.codigo)}`}
-                onClick={(event) => event.preventDefault()}
-                className={workspaceActionButtonClassName()}
-                title="Link simulado al RQ"
-              >
-                Abrir RQ
-              </a>
-            </div>
-          </div>
-
-          <form
-            action={(formData) => createObservationFromPanel(String(formData.get("message") ?? ""))}
-            className="rounded border border-stone-200 bg-white p-2"
-          >
-            <label className="block text-[10.5px] font-semibold text-stone-500">
-              Nueva observación
-              <textarea
-                name="message"
-                rows={3}
-                className="mt-1 w-full resize-none rounded border border-stone-200 bg-white px-2 py-1 text-[11px] text-stone-700 outline-none focus:border-teal-500"
-                placeholder="Registra el hallazgo o comentario técnico"
-              />
-            </label>
-            <div className="mt-2 flex justify-end">
-              <button
-                type="submit"
-                className="h-7 rounded border border-teal-700 bg-teal-700 px-3 text-[11px] font-semibold text-white hover:bg-teal-800"
-              >
-                Registrar
-              </button>
-            </div>
-          </form>
-
-          <div className="rounded border border-stone-200 bg-white">
-            <div className="flex items-center justify-between border-b border-stone-200 px-2 py-1.5">
-              <p className="text-[11px] font-semibold text-stone-700">Historial del recurso</p>
-              <span className="text-[10px] font-semibold text-stone-400">{selectedItemObservations.length}</span>
-            </div>
-            <div className="max-h-[150px] overflow-auto">
-              {selectedItemObservations.length ? (
-                selectedItemObservations.map((observation) => (
-                  <button
-                    key={observation.id}
-                    type="button"
-                    onClick={() => setSelectedObservationId(observation.id)}
-                    className={`block w-full border-b border-stone-100 px-2 py-1.5 text-left hover:bg-stone-50 ${
-                      selectedObservation?.id === observation.id ? "bg-amber-50" : ""
-                    }`}
-                  >
-                    <span className="block truncate text-[11px] font-semibold text-stone-800" title={observation.title}>
-                      {observation.title}
-                    </span>
-                    <span className="mt-1 flex items-center justify-between gap-2 text-[10px] text-stone-500">
-                      <span>{observation.createdAt}</span>
-                      <span className={`rounded border px-1.5 py-0.5 font-semibold ${observationStatusClassName(observation.status)}`}>
-                        {observation.status}
-                      </span>
-                    </span>
-                  </button>
-                ))
-              ) : (
-                <p className="px-2 py-4 text-center text-[11px] text-stone-400">
-                  Sin observaciones para este recurso.
-                </p>
-              )}
-            </div>
-          </div>
-
-          <div className="rounded border border-stone-200 bg-white p-2">
-            {selectedObservation ? (
-              <>
-                <div className="flex flex-wrap items-center justify-between gap-2">
-                  <label className="text-[10.5px] font-semibold text-stone-500">
-                    Estado
-                    <select
-                      value={selectedObservation.status}
-                      onChange={(event) =>
-                        updateObservationStatus(
-                          selectedObservation.id,
-                          event.target.value as Exclude<RequirementObservationStatus, "Sin observación">,
-                        )
-                      }
-                      className={`ml-2 h-7 rounded border px-2 text-[11px] font-semibold outline-none ${observationStatusClassName(
-                        selectedObservation.status,
-                      )}`}
-                    >
-                      <option>Observado</option>
-                      <option>En seguimiento</option>
-                      <option>Levantado</option>
-                    </select>
-                  </label>
-                  <div className="flex flex-wrap gap-1.5">
-                    <button
-                      type="button"
-                      onClick={() => openObservationUpload("attach")}
-                      className={workspaceActionButtonClassName()}
-                    >
-                      Adjuntar evidencia
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => openObservationUpload("lift")}
-                      className="inline-flex h-6 min-h-6 items-center justify-center rounded border border-emerald-700 bg-emerald-700 px-1.5 text-[11px] font-semibold leading-none text-white hover:bg-emerald-800"
-                    >
-                      Levantar con evidencia
-                    </button>
-                  </div>
-                </div>
-                {observationMessage ? (
-                  <p className="mt-2 rounded border border-amber-200 bg-amber-50 px-2 py-1 text-[10.5px] text-amber-800">
-                    {observationMessage}
-                  </p>
-                ) : null}
-                <div className="mt-2 grid grid-cols-1 gap-1.5">
-                  {selectedObservation.documents.length ? (
-                    selectedObservation.documents.map((file, index) => (
-                      <a
-                        key={`${file.name}-${index}`}
-                        href={file.futureDriveUrl || "#"}
-                        target="_blank"
-                        rel="noreferrer"
-                        onClick={(event) => {
-                          if (!file.futureDriveUrl) event.preventDefault();
-                        }}
-                        className="rounded border border-stone-200 bg-stone-50 px-2 py-1.5 hover:bg-white"
-                      >
-                        <span className="block truncate text-[11px] font-semibold text-stone-700" title={file.name}>{file.name}</span>
-                        <span className="mt-0.5 block text-[10px] text-stone-500">
-                          {file.type || "archivo"} · {formatFileSize(file.size)}
-                        </span>
-                      </a>
-                    ))
-                  ) : (
-                    <p className="text-[11px] text-stone-400">Sin evidencias adjuntas.</p>
-                  )}
-                </div>
-              </>
-            ) : (
-              <p className="text-[11px] text-stone-400">
-                Registra una observación para habilitar comentarios y evidencias.
-              </p>
-            )}
-          </div>
-
-          <div className="min-h-[260px]">
-            <ObservationComments comments={selectedObservationComments} onAddComment={addCommentToSelectedObservation} />
-          </div>
-
-          <div className="rounded border border-stone-200 bg-stone-50 p-2">
-            <div className="mb-2 grid grid-cols-2 gap-1.5 text-[10.5px]">
-              <div className="rounded border border-stone-200 bg-white px-2 py-1">
-                <span className="block font-semibold text-stone-500">Seleccionados</span>
-                <span className="text-[12px] font-semibold text-stone-800">
-                  {selectedObservationItems.length} recursos · {selectedEmailAttachments.length} adjuntos
-                </span>
-              </div>
-              <div className="rounded border border-stone-200 bg-white px-2 py-1">
-                <span className="block font-semibold text-stone-500">Filtrados</span>
-                <span className="text-[12px] font-semibold text-stone-800">
-                  {filteredObservedItems.length} recursos · {filteredEmailAttachments.length} adjuntos
-                </span>
-              </div>
-            </div>
-            <div className="flex flex-wrap items-center justify-end gap-1.5">
-              <EmailThreadButton
-                kind="requirement"
-                entityCode={`${draft.codigo}-observaciones-seleccionadas`}
-                subject={`Observaciones SGP seleccionadas / ${draft.codigo} / ${proyecto || "-"}`}
-                title={`Observaciones seleccionadas ${draft.codigo}`}
-                linkPath={`/requerimientos?rqCode=${encodeURIComponent(draft.codigo)}&scope=seleccionados`}
-                summaryRows={selectedObservationEmailRows}
-                buildPlainBody={buildSelectedObservationPlainEmail}
-                buildHtmlBody={buildSelectedObservationHtmlEmail}
-                showHtmlPreview
-                previewOnly
-                disabled={selectedObservationItems.length === 0}
-                attachments={selectedEmailAttachments}
-                className={workspaceActionButtonClassName()}
-                buttonLabel={`Enviar seleccionados (${selectedObservationItems.length})`}
-              />
-              <EmailThreadButton
-                kind="requirement"
-                entityCode={`${draft.codigo}-observaciones-filtradas`}
-                subject={`Observaciones SGP filtradas / ${draft.codigo} / ${proyecto || "-"}`}
-                title={`Observaciones filtradas ${draft.codigo}`}
-                linkPath={`/requerimientos?rqCode=${encodeURIComponent(draft.codigo)}&scope=filtrados`}
-                summaryRows={filteredObservationEmailRows}
-                buildPlainBody={buildFilteredObservationPlainEmail}
-                buildHtmlBody={buildFilteredObservationHtmlEmail}
-                showHtmlPreview
-                previewOnly
-                disabled={filteredObservedItems.length === 0}
-                attachments={filteredEmailAttachments}
-                className={workspaceActionButtonClassName()}
-                buttonLabel={`Enviar filtrados (${filteredObservedItems.length})`}
-              />
-            </div>
-          </div>
-        </div>
-      ) : null}
-    </aside>
+      <div className="flex flex-wrap items-center justify-end gap-1.5">
+        <EmailThreadButton
+          kind="requirement"
+          entityCode={`${draft.codigo}-observaciones-seleccionadas`}
+          subject={`Observaciones SGP seleccionadas / ${draft.codigo} / ${proyecto || "-"}`}
+          title={`Observaciones seleccionadas ${draft.codigo}`}
+          linkPath={`/requerimientos?rqCode=${encodeURIComponent(draft.codigo)}&scope=seleccionados`}
+          summaryRows={selectedObservationEmailRows}
+          buildPlainBody={buildSelectedObservationPlainEmail}
+          buildHtmlBody={buildSelectedObservationHtmlEmail}
+          showHtmlPreview
+          previewOnly
+          disabled={selectedObservationItems.length === 0}
+          attachments={selectedEmailAttachments}
+          className={workspaceActionButtonClassName()}
+          buttonLabel={`Enviar seleccionados (${selectedObservationItems.length})`}
+        />
+        <EmailThreadButton
+          kind="requirement"
+          entityCode={`${draft.codigo}-observaciones-filtradas`}
+          subject={`Observaciones SGP filtradas / ${draft.codigo} / ${proyecto || "-"}`}
+          title={`Observaciones filtradas ${draft.codigo}`}
+          linkPath={`/requerimientos?rqCode=${encodeURIComponent(draft.codigo)}&scope=filtrados`}
+          summaryRows={filteredObservationEmailRows}
+          buildPlainBody={buildFilteredObservationPlainEmail}
+          buildHtmlBody={buildFilteredObservationHtmlEmail}
+          showHtmlPreview
+          previewOnly
+          disabled={filteredObservedItems.length === 0}
+          attachments={filteredEmailAttachments}
+          className={workspaceActionButtonClassName()}
+          buttonLabel={`Enviar filtrados (${filteredObservedItems.length})`}
+        />
+      </div>
+    </div>
+  );
+  const resourceObservationPanel = (
+    <RequirementObservationPanel
+      selectedItem={selectedItem}
+      observations={selectedItemObservations}
+      selectedObservationId={selectedObservation?.id ?? null}
+      selectedObservation={selectedObservation}
+      requirementCode={draft.codigo}
+      footer={resourceObservationPanelFooter}
+      onClose={() => setSelectedItemId(null)}
+      onSelectObservation={setSelectedObservationId}
+      onCreateObservation={createObservationForSelectedItem}
+      onAddResponse={addResponseToObservation}
+      onSendToReview={sendObservationToReview}
+      onResolveObservation={resolveObservation}
+      onReopenObservation={reopenObservation}
+    />
   );
   const observationsPanel = (
     <div className="flex h-full min-h-0 flex-col rounded-xl border border-border bg-panel">
@@ -1609,8 +1367,9 @@ export function RequirementWorkspaceModal({
               <tr>
                 <th className="w-[110px] border-b border-stone-200 px-2 py-1.5 text-left font-semibold">Recurso</th>
                 <th className="border-b border-stone-200 px-2 py-1.5 text-left font-semibold">Observación</th>
-                <th className="w-[86px] border-b border-stone-200 px-2 py-1.5 text-left font-semibold">Estado</th>
-                <th className="w-[70px] border-b border-stone-200 px-2 py-1.5 text-right font-semibold">Docs</th>
+                <th className="w-[100px] border-b border-stone-200 px-2 py-1.5 text-left font-semibold">Estado</th>
+                <th className="w-[90px] border-b border-stone-200 px-2 py-1.5 text-right font-semibold">Respuestas</th>
+                <th className="w-[90px] border-b border-stone-200 px-2 py-1.5 text-right font-semibold">Evidencias</th>
               </tr>
             </thead>
             <tbody>
@@ -1628,32 +1387,22 @@ export function RequirementWorkspaceModal({
                   >
                     <td className="px-2 py-2 font-semibold text-stone-700">{observation.itemCode}</td>
                     <td className="px-2 py-2">
-                      <p className="font-medium text-stone-800">{observation.title}</p>
+                      <p className="font-medium text-stone-800">{observation.code} · {observation.description}</p>
                       <p className="mt-0.5 line-clamp-2 text-[10.5px] text-stone-500">{observation.itemDescription}</p>
                       <p className="mt-1 text-[10px] text-stone-400">{observation.createdAt} · {observation.author}</p>
                     </td>
                     <td className="px-2 py-2">
-                      <select
-                        value={observation.status}
-                        onClick={(event) => event.stopPropagation()}
-                        onChange={(event) => {
-                          updateObservationStatus(observation.id, event.target.value as RequirementObservation["status"]);
-                        }}
-                        className={`h-6 w-full rounded border px-1 text-[10px] font-semibold outline-none ${observationStatusClassName(
-                          observation.status,
-                        )}`}
-                      >
-                        <option>Observado</option>
-                        <option>En seguimiento</option>
-                        <option>Levantado</option>
-                      </select>
+                      <span className={`inline-flex rounded border px-1.5 py-0.5 text-[10px] font-semibold ${observationStatusClassName(observationStatusForItem([observation]))}`}>
+                        {observationStatusLabel(observation.status)}
+                      </span>
                     </td>
-                    <td className="px-2 py-2 text-right font-semibold text-stone-700">{observation.documents.length}</td>
+                    <td className="px-2 py-2 text-right font-semibold text-stone-700">{observation.responses.length}</td>
+                    <td className="px-2 py-2 text-right font-semibold text-stone-700">{observationEvidenceCount(observation)}</td>
                   </tr>
                 ))
               ) : (
                 <tr>
-                  <td colSpan={4} className="px-3 py-8 text-center text-[11px] text-stone-400">
+                  <td colSpan={5} className="px-3 py-8 text-center text-[11px] text-stone-400">
                     Selecciona un recurso en la grilla para iniciar la trazabilidad local.
                   </td>
                 </tr>
@@ -1667,37 +1416,54 @@ export function RequirementWorkspaceModal({
               <>
                 <div className="flex items-start justify-between gap-3">
                   <div className="min-w-0">
-                    <p className="text-[12px] font-semibold text-stone-800">{selectedObservation.title}</p>
+                    <p className="text-[12px] font-semibold text-stone-800">
+                      {selectedObservation.code} · {selectedObservation.description}
+                    </p>
                     <p className="mt-1 text-[11px] text-stone-500">
                       {selectedObservation.itemCode} · {selectedObservation.itemDescription}
                     </p>
                   </div>
-                  <button
-                    type="button"
-                    onClick={() => openObservationUpload("attach")}
-                    className="rounded border border-stone-200 bg-white px-2 py-1 text-[11px] font-semibold text-stone-600 hover:bg-stone-50"
-                  >
-                    Adjuntar archivo
-                  </button>
+                  <span className={`rounded border px-2 py-0.5 text-[10px] font-semibold ${observationStatusClassName(selectedObservationGridStatus)}`}>
+                    {observationStatusLabel(selectedObservation.status)}
+                  </span>
                 </div>
-                <div className="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-2">
-                  {selectedObservation.documents.length ? (
-                    selectedObservation.documents.map((file, index) => (
-                      <div key={`${file.name}-${index}`} className="rounded border border-stone-200 bg-stone-50 px-2 py-1.5">
-                        <p className="truncate text-[11px] font-semibold text-stone-700" title={file.name}>{file.name}</p>
-                        <p className="mt-0.5 text-[10px] text-stone-500">{file.type || "archivo"} · {formatFileSize(file.size)}</p>
-                      </div>
-                    ))
-                  ) : (
-                    <p className="text-[11px] text-stone-400">Sin evidencias adjuntas.</p>
-                  )}
+                <div className="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-3">
+                  <div className="rounded border border-stone-200 bg-stone-50 px-2 py-1.5">
+                    <p className="text-[10px] font-semibold text-stone-500">Respuestas</p>
+                    <p className="text-[12px] font-semibold text-stone-800">{selectedObservation.responses.length}</p>
+                  </div>
+                  <div className="rounded border border-stone-200 bg-stone-50 px-2 py-1.5">
+                    <p className="text-[10px] font-semibold text-stone-500">Evidencias</p>
+                    <p className="text-[12px] font-semibold text-stone-800">{observationEvidenceCount(selectedObservation)}</p>
+                  </div>
+                  <div className="rounded border border-stone-200 bg-stone-50 px-2 py-1.5">
+                    <p className="text-[10px] font-semibold text-stone-500">Requiere evidencia</p>
+                    <p className="text-[12px] font-semibold text-stone-800">{selectedObservation.requiresEvidence ? "Sí" : "No"}</p>
+                  </div>
                 </div>
               </>
             ) : (
-              <p className="text-[11px] text-stone-400">Selecciona una observación para ver comentarios y documentos.</p>
+              <p className="text-[11px] text-stone-400">Selecciona una observación para ver respuestas y evidencias.</p>
             )}
           </div>
-          <ObservationComments comments={selectedObservationComments} onAddComment={addCommentToSelectedObservation} />
+          <div className="min-h-0 overflow-auto rounded border border-border bg-white p-3">
+            {selectedObservation ? (
+              <div className="space-y-2">
+                <p className="text-[11px] font-semibold text-stone-700">Historial de revisión</p>
+                {selectedObservation.statusHistory.map((entry) => (
+                  <div key={entry.id} className="rounded border border-stone-200 bg-stone-50 px-2 py-1.5">
+                    <p className="text-[10.5px] font-semibold text-stone-700">
+                      {observationStatusLabel(entry.status)} · {entry.author}
+                    </p>
+                    <p className="text-[10px] text-stone-500">{entry.createdAt}</p>
+                    {entry.note ? <p className="mt-0.5 text-[10px] text-stone-600">{entry.note}</p> : null}
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <p className="text-[11px] text-stone-400">Sin observación activa.</p>
+            )}
+          </div>
         </div>
       </div>
     </div>
@@ -1738,7 +1504,7 @@ export function RequirementWorkspaceModal({
           <div
             className={`grid min-h-0 flex-1 grid-cols-1 gap-2 overflow-hidden ${
               hasWorkspaceSidePanel
-                ? "lg:grid-cols-[minmax(0,1fr)_minmax(460px,560px)] xl:grid-cols-[minmax(0,1fr)_minmax(540px,640px)]"
+                ? "lg:grid-cols-[minmax(0,2fr)_clamp(460px,32vw,520px)]"
                 : "lg:grid-cols-1"
             }`}
           >
@@ -2054,7 +1820,13 @@ export function RequirementWorkspaceModal({
             )}
           </div>
             </div>
-            <div className={`${hasWorkspaceSidePanel ? "flex min-h-[320px]" : "hidden"} min-h-0 lg:min-h-0`}>
+            <div
+              className={`${
+                hasWorkspaceSidePanel
+                  ? "fixed inset-x-3 bottom-3 top-14 z-[85] flex overflow-hidden rounded-xl border border-border bg-white shadow-xl lg:static lg:inset-auto lg:z-auto lg:min-h-0 lg:rounded-none lg:border-0 lg:bg-transparent lg:shadow-none"
+                  : "hidden"
+              } min-h-0`}
+            >
               {isResourceCatalogVisible ? (
                 <ResourceCatalogPanel
                   resources={recursos}
@@ -2069,13 +1841,6 @@ export function RequirementWorkspaceModal({
           </div>
         </div>
       </div>
-      <ObservationDocumentUpload
-        open={Boolean(uploadObservation)}
-        title={`${uploadMode === "lift" ? "Levantar con evidencia" : "Adjuntar evidencia"} - ${uploadObservation?.itemCode ?? "observación"}`}
-        onClose={() => setUploadObservationId(null)}
-        isUploading={isUploadingObservationFile}
-        onAttachFiles={attachFilesToObservation}
-      />
     </div>
   );
 }
