@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { supabase } from "@/lib/supabaseClient";
+import { FieldLabelIcon } from "@/components/sgp/ui/FieldLabelIcon";
 
 export type EmailThreadKind = "quotation" | "requirement";
 
@@ -189,6 +190,7 @@ export function EmailThreadButton({
   const [selectedAccountId, setSelectedAccountId] = useState("");
   const [isLoading, setIsLoading] = useState(false);
   const [isSending, setIsSending] = useState(false);
+  const [isPreviewFullscreen, setIsPreviewFullscreen] = useState(false);
   const link = useMemo(() => absoluteLink(linkPath), [linkPath]);
   const bodyContext = useMemo(() => ({ title, link, summaryRows }), [title, link, summaryRows]);
   const plainBody = useMemo(
@@ -292,6 +294,14 @@ export function EmailThreadButton({
     }
   }
 
+  function closeModal() {
+    setOpen(false);
+    setStatus("");
+    setIsPreviewFullscreen(false);
+  }
+
+  const modalTitleId = `email-modal-title-${kind}-${entityCode}`;
+
   return (
     <>
       <button
@@ -305,28 +315,53 @@ export function EmailThreadButton({
         <span>{buttonLabel}</span>
       </button>
       {open ? (
-        <div className="fixed inset-0 z-[90] flex items-center justify-center bg-black/30 p-4">
-          <div className="w-full max-w-[600px] rounded-lg border border-border bg-panel p-3 shadow-xl">
-            <div className="mb-3 flex items-center justify-between gap-2">
+        <div className="fixed inset-0 z-[90] flex items-center justify-center overflow-hidden bg-black/30 p-2 sm:p-4">
+          <div
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby={modalTitleId}
+            className={`flex min-h-0 min-w-0 flex-col overflow-hidden rounded-lg border border-border bg-panel shadow-xl ${
+              isPreviewFullscreen
+                ? "h-[96vh] max-h-[96vh] w-[98vw] max-w-[98vw]"
+                : "h-[90vh] max-h-[90vh] w-[calc(100vw-1rem)] max-w-[1180px] md:min-w-[760px] sm:w-[92vw]"
+            }`}
+          >
+            <div className="flex flex-none items-center justify-between gap-2 border-b border-border px-3 py-2">
               <div>
-                <p className="text-[12px] font-semibold text-stone-800">
+                <p id={modalTitleId} className="text-[12px] font-semibold text-stone-800">
                   {previewOnly ? "Vista previa de correo HTML" : "Enviar correo por Gmail"}
                 </p>
                 <p className="text-[10.5px] text-stone-500">
                   {previewOnly
                     ? "Modo preview: no se consultan cuentas, contactos ni se envia Gmail real."
                     : "El asunto e hilo Gmail se mantienen por cotización o requerimiento."}
-                </p>
-              </div>
+                  </p>
+                </div>
+              <div className="flex shrink-0 items-center gap-1.5">
+                {showHtmlPreview ? (
+                  <button
+                    type="button"
+                    onClick={() => setIsPreviewFullscreen((current) => !current)}
+                    className="inline-flex h-7 items-center gap-1.5 rounded border border-stone-200 bg-white px-2 text-[11px] font-medium text-stone-600 hover:bg-stone-100 focus:outline-none focus:ring-2 focus:ring-teal-500"
+                    aria-label={isPreviewFullscreen ? "Salir de pantalla completa" : "Pantalla completa"}
+                    title={isPreviewFullscreen ? "Salir de pantalla completa" : "Pantalla completa"}
+                  >
+                    <FieldLabelIcon icon="layout-grid" label={isPreviewFullscreen ? "Salir de pantalla completa" : "Pantalla completa"} />
+                  </button>
+                ) : null}
               <button
                 type="button"
-                onClick={() => { setOpen(false); setStatus(""); }}
-                className="rounded border border-stone-200 px-2 py-1 text-[11px] text-stone-600 hover:bg-stone-100"
+                  onClick={closeModal}
+                  className="h-7 rounded border border-stone-200 bg-white px-2 text-[11px] text-stone-600 hover:bg-stone-100 focus:outline-none focus:ring-2 focus:ring-teal-500"
+                  aria-label="Cerrar"
+                  title="Cerrar"
               >
                 Cerrar
               </button>
+              </div>
             </div>
-            <div className="space-y-2">
+            <div className="flex min-h-0 flex-1 flex-col gap-2 overflow-hidden p-3">
+              <div className="flex-none space-y-2">
               {!previewOnly ? (
                 <>
                   <label className="block text-[11px] font-medium text-stone-600">
@@ -393,16 +428,19 @@ export function EmailThreadButton({
                 Link
                 <input value={link} readOnly className="mt-1 h-8 w-full rounded border border-stone-200 bg-stone-50 px-2 text-[12px]" />
               </label>
+              </div>
               {showHtmlPreview ? (
-                <div className="block text-[11px] font-medium text-stone-600">
-                  Vista previa HTML
-                  <div className="mt-1 max-h-[240px] overflow-auto rounded border border-stone-200 bg-stone-50 p-2">
-                    <div dangerouslySetInnerHTML={{ __html: htmlBody }} />
+                <div className="flex min-h-0 flex-1 flex-col text-[11px] font-medium text-stone-600">
+                  <div className="flex-none">Vista previa HTML</div>
+                  <div className="mt-1 flex min-h-[280px] flex-1 overflow-hidden rounded border border-stone-200 bg-stone-50 md:min-h-[500px]">
+                    <div className="flex h-full w-full justify-center overflow-auto p-3">
+                      <div className="h-full min-w-0" dangerouslySetInnerHTML={{ __html: htmlBody }} />
+                    </div>
                   </div>
                 </div>
               ) : null}
               {attachments.length ? (
-                <div className="block text-[11px] font-medium text-stone-600">
+                <div className="flex-none text-[11px] font-medium text-stone-600">
                   Adjuntos preparados
                   <div className="mt-1 max-h-[110px] overflow-auto rounded border border-stone-200 bg-white">
                     {attachments.map((attachment, index) => (
@@ -422,20 +460,20 @@ export function EmailThreadButton({
               ) : null}
             </div>
             {!previewOnly && !accounts.length && !isLoading ? (
-              <div className="mt-3 rounded border border-blue-200 bg-blue-50 px-3 py-2 text-[11px] leading-relaxed text-blue-800">
+              <div className="mx-3 mb-3 flex-none rounded border border-blue-200 bg-blue-50 px-3 py-2 text-[11px] leading-relaxed text-blue-800">
                 Conecta tu Gmail una vez. Después podrás elegirlo como origen y enviar desde la app.
               </div>
             ) : null}
             {status ? (
-              <div className="mt-3 rounded border border-amber-200 bg-amber-50 px-3 py-2 text-[11px] leading-relaxed text-amber-800">
+              <div className="mx-3 mb-3 flex-none rounded border border-amber-200 bg-amber-50 px-3 py-2 text-[11px] leading-relaxed text-amber-800">
                 {status}
               </div>
             ) : null}
-            <div className="mt-3 flex flex-wrap items-center justify-end gap-2">
+            <div className="flex flex-none flex-wrap items-center justify-end gap-2 border-t border-border px-3 py-2">
               <button
                 type="button"
                 onClick={() => void copyHtml()}
-                className="rounded border border-stone-200 bg-white px-3 py-1.5 text-[11px] text-stone-700 hover:bg-stone-50"
+                className="rounded border border-stone-200 bg-white px-3 py-1.5 text-[11px] text-stone-700 hover:bg-stone-50 focus:outline-none focus:ring-2 focus:ring-teal-500"
               >
                 Copiar HTML
               </button>
@@ -444,7 +482,7 @@ export function EmailThreadButton({
                   type="button"
                   onClick={() => void sendGmail()}
                   disabled={isSending || isLoading || !selectedAccountId}
-                  className="rounded border border-teal-700 bg-teal-700 px-3 py-1.5 text-[11px] font-semibold text-white hover:bg-teal-800 disabled:cursor-not-allowed disabled:opacity-50"
+                  className="rounded border border-teal-700 bg-teal-700 px-3 py-1.5 text-[11px] font-semibold text-white hover:bg-teal-800 focus:outline-none focus:ring-2 focus:ring-teal-500 disabled:cursor-not-allowed disabled:opacity-50"
                 >
                   {isSending ? "Enviando..." : "Enviar Gmail"}
                 </button>
