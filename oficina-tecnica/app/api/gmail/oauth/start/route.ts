@@ -11,6 +11,29 @@ function secureCookie() {
   return process.env.NODE_ENV === "production";
 }
 
+function safeReturnTo(value: unknown, origin: string): string {
+  const fallback = `${origin}/conexiones`;
+  if (typeof value !== "string") return fallback;
+
+  const candidate = value.trim();
+  if (!candidate || candidate.startsWith("//")) return fallback;
+
+  if (candidate.startsWith("/")) {
+    return `${origin}${candidate}`;
+  }
+
+  try {
+    const url = new URL(candidate);
+    if ((url.protocol === "http:" || url.protocol === "https:") && url.origin === origin) {
+      return url.toString();
+    }
+  } catch {
+    return fallback;
+  }
+
+  return fallback;
+}
+
 export async function POST(request: NextRequest) {
   try {
     const accessToken = bearerTokenFromRequest(request);
@@ -19,7 +42,7 @@ export async function POST(request: NextRequest) {
     const body = await request.json().catch(() => ({})) as { returnTo?: string };
     const origin = new URL(request.url).origin;
     const state = randomUUID();
-    const returnTo = body.returnTo && body.returnTo.startsWith("http") ? body.returnTo : origin;
+    const returnTo = safeReturnTo(body.returnTo, origin);
     const response = NextResponse.json({
       authUrl: buildGmailAuthUrl(origin, state),
       redirectUri: gmailRedirectUri(origin),
