@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { Recurso, ResourceFileMeta } from "@/lib/sgp/demoData";
 import { FieldLabelIcon } from "@/components/sgp/ui/FieldLabelIcon";
 import { StatusBadge } from "@/components/sgp/StatusBadge";
@@ -65,7 +65,7 @@ function driveThumbnailSources(file: ResourceFileMeta | null | undefined): strin
   ]);
 }
 
-function resourceImageSources(resource: Recurso, resolvedImages: Record<string, ResolvedDriveImage>): string[] {
+function resourceImageSources(resource: Recurso, resolvedImages: Record<string, ResolvedDriveImage | null>): string[] {
   const imageFile = resource.resourceFiles.imagenes?.[0] ?? resource.resourceFiles.imagen ?? null;
   const explicitImages = driveThumbnailSources(imageFile);
   if (explicitImages.length > 0) return explicitImages;
@@ -170,7 +170,8 @@ function matchesResource(resource: Recurso, query: string): boolean {
 export function ResourceGallery({ rows, loading = false, onEdit, canEdit = false }: ResourceGalleryProps) {
   const [search, setSearch] = useState("");
   const [typeFilter, setTypeFilter] = useState("");
-  const [resolvedImages, setResolvedImages] = useState<Record<string, ResolvedDriveImage>>({});
+  const [resolvedImages, setResolvedImages] = useState<Record<string, ResolvedDriveImage | null>>({});
+  const pendingImageCodesRef = useRef<Set<string>>(new Set());
   const normalizedSearch = normalizeSearch(search);
   const typeOptions = useMemo(
     () =>
@@ -192,13 +193,15 @@ export function ResourceGallery({ rows, loading = false, onEdit, canEdit = false
       rows
         .filter((row) => resourceImageSources(row, resolvedImages).length === 0)
         .map((row) => row.codigo_recurso)
-        .filter(Boolean),
+        .filter((code) => Boolean(code) && !Object.prototype.hasOwnProperty.call(resolvedImages, code)),
     [resolvedImages, rows],
   );
 
   useEffect(() => {
-    const unresolvedCodes = missingImageCodes.filter((code) => !resolvedImages[code]);
+    const pendingImageCodes = pendingImageCodesRef.current;
+    const unresolvedCodes = missingImageCodes.filter((code) => !pendingImageCodes.has(code));
     if (unresolvedCodes.length === 0) return;
+    unresolvedCodes.forEach((code) => pendingImageCodes.add(code));
     const controller = new AbortController();
     authFetch("/api/drive/resource-images", {
       method: "POST",
@@ -206,17 +209,38 @@ export function ResourceGallery({ rows, loading = false, onEdit, canEdit = false
       body: JSON.stringify({ resourceCodes: unresolvedCodes }),
       signal: controller.signal,
     })
-      .then((response) => (response.ok ? response.json() : null))
+      .then((response) => {
+        if (!response.ok) throw new Error("No se pudieron resolver imágenes desde Drive.");
+        return response.json();
+      })
       .then((payload: { images?: Record<string, ResolvedDriveImage> } | null) => {
-        if (!payload?.images) return;
-        setResolvedImages((prev) => ({ ...prev, ...payload.images }));
+        const images = payload?.images ?? {};
+        setResolvedImages((prev) => {
+          let changed = false;
+          const next = { ...prev };
+          unresolvedCodes.forEach((code) => {
+            const image = images[code];
+            const resolved = image?.fileId ? image : null;
+            if (!Object.prototype.hasOwnProperty.call(prev, code) || prev[code] !== resolved) {
+              next[code] = resolved;
+              changed = true;
+            }
+          });
+          return changed ? next : prev;
+        });
       })
       .catch((error: unknown) => {
         if (error instanceof DOMException && error.name === "AbortError") return;
         console.warn("[ResourceGallery] No se pudieron resolver imágenes desde Drive.", error);
+      })
+      .finally(() => {
+        unresolvedCodes.forEach((code) => pendingImageCodes.delete(code));
       });
-    return () => controller.abort();
-  }, [missingImageCodes, resolvedImages]);
+    return () => {
+      controller.abort();
+      unresolvedCodes.forEach((code) => pendingImageCodes.delete(code));
+    };
+  }, [missingImageCodes]);
 
   return (
     <section className="flex min-h-0 flex-1 flex-col rounded-xl border border-border bg-white">
