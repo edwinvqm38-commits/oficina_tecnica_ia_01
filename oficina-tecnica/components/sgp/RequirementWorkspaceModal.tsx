@@ -1318,7 +1318,7 @@ export function RequirementWorkspaceModal({
         buildPlainBody={buildRequirementPlainEmail}
         buildHtmlBody={buildRequirementHtmlEmail}
         showHtmlPreview
-        previewOnly
+        sendEnabled
         className={workspaceActionButtonClassName()}
         buttonLabel="Correo"
       />

@@ -142,14 +142,22 @@ function encodeHeader(value: string): string {
     : value;
 }
 
+export function sanitizeMimeHeaderValue(value: string): string {
+  return value
+    .replace(/[\r\n]+[ \t]*/g, " ")
+    .replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/g, "")
+    .trim();
+}
+
 function normalizeEmails(value: string[] = []): string[] {
-  return value.map((item) => item.trim()).filter(Boolean);
+  return value.map((item) => sanitizeMimeHeaderValue(item)).filter(Boolean);
 }
 
 export function buildMimeMessage(input: {
   from: string;
   to: string[];
   cc?: string[];
+  bcc?: string[];
   subject: string;
   text: string;
   html: string;
@@ -158,15 +166,21 @@ export function buildMimeMessage(input: {
   references?: string | null;
 }): string {
   const boundary = `oficina-tecnica-${Date.now().toString(36)}`;
+  const from = sanitizeMimeHeaderValue(input.from);
+  const subject = sanitizeMimeHeaderValue(input.subject);
+  const messageId = sanitizeMimeHeaderValue(input.messageId);
+  const inReplyTo = input.inReplyTo ? sanitizeMimeHeaderValue(input.inReplyTo) : "";
+  const references = input.references ? sanitizeMimeHeaderValue(input.references) : "";
   const headers = [
-    `From: ${input.from}`,
+    `From: ${from}`,
     `To: ${normalizeEmails(input.to).join(", ")}`,
     normalizeEmails(input.cc).length ? `Cc: ${normalizeEmails(input.cc).join(", ")}` : "",
-    `Subject: ${encodeHeader(input.subject)}`,
+    normalizeEmails(input.bcc).length ? `Bcc: ${normalizeEmails(input.bcc).join(", ")}` : "",
+    `Subject: ${encodeHeader(subject)}`,
     "MIME-Version: 1.0",
-    `Message-ID: ${input.messageId}`,
-    input.inReplyTo ? `In-Reply-To: ${input.inReplyTo}` : "",
-    input.references ? `References: ${input.references}` : "",
+    `Message-ID: ${messageId}`,
+    inReplyTo ? `In-Reply-To: ${inReplyTo}` : "",
+    references ? `References: ${references}` : "",
     `Content-Type: multipart/alternative; boundary="${boundary}"`,
   ].filter(Boolean);
 

@@ -13,7 +13,13 @@ export async function GET(request: NextRequest) {
       .order("last_used_at", { ascending: false })
       .limit(80);
     if (error) throw error;
-    return NextResponse.json({ contacts: data ?? [] });
+    const { data: users, error: usersError } = await supabase
+      .from("user_profiles")
+      .select("id, email, full_name")
+      .eq("status", "approved")
+      .limit(100);
+    if (usersError) throw usersError;
+    return NextResponse.json({ contacts: data ?? [], users: users ?? [] });
   } catch (error) {
     return NextResponse.json(
       { error: error instanceof Error ? error.message : "No se pudieron leer contactos." },
