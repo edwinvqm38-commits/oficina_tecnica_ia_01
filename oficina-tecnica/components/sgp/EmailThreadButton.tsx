@@ -2,12 +2,15 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { authFetch } from "@/lib/api/authFetch";
+import { buildPublicAppUrl } from "@/lib/app/publicUrl";
 import { FieldLabelIcon } from "@/components/sgp/ui/FieldLabelIcon";
 
 export type EmailThreadKind = "quotation" | "requirement";
+export type EmailPurpose = "operational_request" | "management_status" | "observation_trace";
 
 type EmailThreadButtonProps = {
   kind: EmailThreadKind;
+  emailPurpose?: EmailPurpose;
   entityCode: string;
   subject: string;
   title: string;
@@ -22,12 +25,17 @@ type EmailThreadButtonProps = {
   attachments?: Array<{ name: string; size?: number; type?: string; url?: string | null }>;
   className?: string;
   buttonLabel?: string;
+  disabledTitle?: string;
+  modalTitle?: string;
+  modalDescription?: string;
+  sendButtonLabel?: string;
 };
 
 type EmailBodyBuilderContext = {
   title: string;
   link: string;
   summaryRows: EmailThreadButtonProps["summaryRows"];
+  emailPurpose: EmailPurpose;
 };
 
 type GmailAccount = {
@@ -111,13 +119,6 @@ function escapeHtml(value: string | number | null | undefined): string {
     .replace(/</g, "&lt;")
     .replace(/>/g, "&gt;")
     .replace(/"/g, "&quot;");
-}
-
-function absoluteLink(path: string): string {
-  const configuredBaseUrl = process.env.NEXT_PUBLIC_APP_URL?.trim();
-  if (configuredBaseUrl) return new URL(path, configuredBaseUrl.replace(/\/$/, "")).toString();
-  if (typeof window === "undefined") return path;
-  return new URL(path, window.location.origin).toString();
 }
 
 function buildPlainBody(title: string, link: string, rows: EmailThreadButtonProps["summaryRows"]): string {
@@ -212,7 +213,7 @@ async function copyTextWithFallback(value: string): Promise<void> {
   textarea.remove();
 }
 
-async function copyHtmlWithFallback(html: string, plain: string): Promise<void> {
+export async function copyEmailHtmlWithFallback(html: string, plain: string): Promise<void> {
   if (navigator.clipboard?.write && typeof ClipboardItem !== "undefined") {
     await navigator.clipboard.write([
       new ClipboardItem({
@@ -318,6 +319,7 @@ function RecipientInput({
 
 export function EmailThreadButton({
   kind,
+  emailPurpose = "operational_request",
   entityCode,
   subject,
   title,
@@ -332,6 +334,10 @@ export function EmailThreadButton({
   attachments = [],
   className,
   buttonLabel = "Correo",
+  disabledTitle,
+  modalTitle,
+  modalDescription,
+  sendButtonLabel = "Enviar correo",
 }: EmailThreadButtonProps) {
   const [open, setOpen] = useState(false);
   const [recipients, setRecipients] = useState<Record<RecipientField, string[]>>({ to: [], cc: [], bcc: [] });
@@ -349,8 +355,8 @@ export function EmailThreadButton({
   const [isPreviewFullscreen, setIsPreviewFullscreen] = useState(false);
   const idempotencyRef = useRef<{ signature: string; key: string } | null>(null);
   const canSend = sendEnabled ?? !previewOnly;
-  const link = useMemo(() => absoluteLink(linkPath), [linkPath]);
-  const bodyContext = useMemo(() => ({ title, link, summaryRows }), [title, link, summaryRows]);
+  const link = useMemo(() => buildPublicAppUrl(linkPath), [linkPath]);
+  const bodyContext = useMemo(() => ({ title, link, summaryRows, emailPurpose }), [emailPurpose, title, link, summaryRows]);
   const plainBody = useMemo(
     () => buildCustomPlainBody?.(bodyContext) ?? buildPlainBody(title, link, summaryRows),
     [bodyContext, buildCustomPlainBody, link, summaryRows, title],
@@ -508,6 +514,7 @@ export function EmailThreadButton({
       plainBody,
       htmlBody,
       kind,
+      emailPurpose,
       entityCode,
     });
   }
@@ -590,6 +597,7 @@ export function EmailThreadButton({
           htmlBody,
           entityType: kind,
           entityCode,
+          emailPurpose,
           idempotencyKey: getIdempotencyKey(recipientsForSend),
         }),
       });
@@ -639,7 +647,7 @@ export function EmailThreadButton({
   async function copyHtml() {
     setStatus(null);
     try {
-      await copyHtmlWithFallback(htmlBody, plainBody);
+      await copyEmailHtmlWithFallback(htmlBody, plainBody);
       setStatus({ kind: "success", text: "HTML copiado. Puedes pegarlo en Gmail si necesitas enviarlo manualmente." });
     } catch {
       setStatus({ kind: "error", text: "No pude copiar el HTML. Revisa permisos del portapapeles del navegador." });
@@ -659,7 +667,7 @@ export function EmailThreadButton({
         onClick={() => setOpen(true)}
         disabled={disabled}
         className={className}
-        title={disabled ? "No hay recursos observados para preparar correo" : "Enviar correo en hilo"}
+        title={disabled ? disabledTitle || "No hay recursos observados para preparar correo" : "Enviar correo en hilo"}
       >
         <span aria-hidden>✉</span>
         <span>{buttonLabel}</span>
@@ -679,12 +687,13 @@ export function EmailThreadButton({
             <div className="flex flex-none items-center justify-between gap-2 border-b border-border px-3 py-2">
               <div className="min-w-0">
                 <p id={modalTitleId} className="truncate text-[12px] font-semibold text-stone-800">
-                  {canSend ? "Vista previa de correo HTML" : "Vista previa de correo HTML"}
+                  {modalTitle || "Vista previa de correo HTML"}
                 </p>
                 <p className="truncate text-[10.5px] text-stone-500">
-                  {canSend
-                    ? "El remitente es una cuenta Gmail conectada del usuario autenticado."
-                    : "Modo preview: no se consultan cuentas, contactos ni se envia Gmail real."}
+                  {modalDescription ||
+                    (canSend
+                      ? "El remitente es una cuenta Gmail conectada del usuario autenticado."
+                      : "Modo preview: no se consultan cuentas, contactos ni se envia Gmail real.")}
                 </p>
               </div>
               <div className="flex shrink-0 items-center gap-1.5">
@@ -878,7 +887,7 @@ export function EmailThreadButton({
                   className="inline-flex items-center gap-2 rounded border border-teal-700 bg-teal-700 px-3 py-1.5 text-[11px] font-semibold text-white hover:bg-teal-800 focus:outline-none focus:ring-2 focus:ring-teal-500 disabled:cursor-not-allowed disabled:opacity-50"
                 >
                   {isSending ? <span className="h-3 w-3 animate-spin rounded-full border-2 border-white/40 border-t-white" aria-hidden /> : null}
-                  {isSending ? "Enviando..." : "Enviar correo"}
+                  {isSending ? "Enviando..." : sendButtonLabel}
                 </button>
               ) : null}
             </div>

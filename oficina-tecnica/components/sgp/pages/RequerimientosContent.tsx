@@ -433,6 +433,17 @@ export default function RequerimientosPage() {
         "can_save_requirement_detail",
         detailRqModulePermissions?.can_edit === true || legacyCanEditRequirementDetail,
       ));
+  const canViewRequirementPrices =
+    dataSource === "demo" ||
+    (dataSource === "supabase" &&
+      requirementPermissionsReady &&
+      resolveSensitivePermission(
+        detailRqModulePermissions,
+        "detalle_rq",
+        "can_view_prices",
+        detailRqModulePermissions?.can_view_prices === true || isElevatedRequirementUser,
+      ));
+  const canSendManagementRequirementEmail = canEditRequirementDetail && canSaveRequirementDetail;
   const canViewRequirementDetailActions =
     dataSource === "demo" ||
     resolveViewGroupPermission(detailRqModulePermissions, "detalle_rq", "detail_rq_actions", true);
@@ -1561,6 +1572,8 @@ export default function RequerimientosPage() {
         canAddCatalogResource={canAddCatalogResourceToRequirement}
         isCreatingRecurso={savingResource}
         hiddenItemColumnKeys={hiddenRequirementItemColumnKeys}
+        canViewPrices={canViewRequirementPrices}
+        canSendManagementEmail={canSendManagementRequirementEmail}
         currentUser={currentObservationUser}
         userDirectory={observationUserDirectory}
         loadingUsers={loadingObservationUsers}

@@ -9,6 +9,18 @@ import {
 import { readHistoricalImportQuality } from "@/lib/sgp/historicalImportQuality";
 import { supabase } from "@/lib/sgp/supabaseClient";
 import { listCatalogItems } from "@/lib/sgp/catalogsRepository";
+import {
+  CURRENT_RQ_CODE_PATTERN,
+  findExactProjectForQuotation,
+  nextProjectCodeForYear,
+  nextRqCorrelativeForQuotation,
+  normalizeProjectTag,
+  normalizeString,
+  normalizeToken,
+  planProjectTagForQuotation,
+  sameText,
+  type RequirementCodeRelatedRow,
+} from "@/lib/sgp/requirementCodeGenerator";
 
 export type RequirementsDataSource = "supabase" | "demo";
 
@@ -26,6 +38,7 @@ type SupabaseRequerimiento = {
   cotizacion_codigo: string | null;
   codigo_cliente: string | null;
   codigo_unidad: string | null;
+  codigo_proyecto_adjudicado: string | null;
   proyecto_servicio: string | null;
   oc: string | null;
   anio: number | null;
@@ -42,6 +55,13 @@ type SupabaseRequerimiento = {
   metadata: Record<string, unknown> | null;
   created_at: string;
   updated_at: string;
+};
+
+type RequirementProjectReservationRow = {
+  codigo: string | null;
+  codigo_proyecto_adjudicado: string | null;
+  anio: number | null;
+  deleted_at?: string | null;
 };
 
 type RequirementCodeMetadata = {
@@ -65,7 +85,7 @@ type RequirementCodeParts = {
   codigoUnidad: string;
   projectTag: string;
   anio: number;
-  source: "metadata" | "related_requirement" | "catalog";
+  source: "metadata" | "related_requirement" | "exact_project" | "new_project";
 };
 
 type RequirementCodeCatalogs = {
@@ -74,8 +94,6 @@ type RequirementCodeCatalogs = {
   proyectos: ProyectoAdjudicado[];
 };
 
-const CURRENT_RQ_CODE_PATTERN = /^RQ-(\d{4})-([A-Z0-9]+)-([A-Z0-9]+)-(P\d{3})-(\d{3})$/;
-const HISTORICAL_RQ_CODE_PATTERN = /^RQ-[A-Z0-9]+-(\d{1,4})_(\d{4})$/;
 const CONTROLLED_CLIENT_CODE_ALIASES: Record<string, string> = {
   NEXA: "NEXA",
 };
@@ -90,6 +108,7 @@ const REQUIREMENTS_SELECT = `
   cotizacion_codigo,
   codigo_cliente,
   codigo_unidad,
+  codigo_proyecto_adjudicado,
   proyecto_servicio,
   oc,
   anio,
@@ -113,25 +132,6 @@ function hasSupabaseConfig(): boolean {
   return Boolean(process.env.NEXT_PUBLIC_SUPABASE_URL && process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY);
 }
 
-function normalizeString(value: unknown): string {
-  if (value === null || value === undefined) return "";
-  return String(value).trim();
-}
-
-function normalizeToken(value: unknown): string {
-  return normalizeString(value)
-    .normalize("NFD")
-    .replace(/[\u0300-\u036f]/g, "")
-    .toUpperCase()
-    .replace(/[^A-Z0-9]/g, "");
-}
-
-function sameText(left: unknown, right: unknown): boolean {
-  const normalizedLeft = normalizeString(left);
-  const normalizedRight = normalizeString(right);
-  return Boolean(normalizedLeft && normalizedRight) && normalizedLeft.localeCompare(normalizedRight, "es", { sensitivity: "base" }) === 0;
-}
-
 function readCotizacionField(cotizacion: CotizacionWithRequirementMetadata, modernKey: string, legacyKey: keyof Cotizacion): string {
   const record = cotizacion as unknown as Record<string, unknown>;
   return normalizeString(record[legacyKey] ?? record[modernKey]);
@@ -150,16 +150,6 @@ function getRqCreationYear(cotizacion: CotizacionWithRequirementMetadata): numbe
     getYearFromDate(readCotizacionField(cotizacion, "fecha_entrega", "fecha_entrega")) ??
     new Date().getFullYear()
   );
-}
-
-function normalizeProjectTag(value: unknown): string {
-  const token = normalizeToken(value);
-  if (!token) return "";
-  return token.startsWith("P") ? token : `P${token}`;
-}
-
-function escapeRegExp(value: string): string {
-  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
 function resolveControlledClientCode(value: unknown): string {
@@ -196,67 +186,104 @@ async function loadRequirementCodeCatalogs(): Promise<RequirementCodeCatalogs> {
   };
 }
 
-function nextProjectCodeForYear(projects: ProyectoAdjudicado[], anio: number): string {
-  const values = projects
-    .filter((item) => Number(item.anio) === anio)
-    .map((item) => Number(normalizeString(item.codigo_proyecto).replace(/^P/i, "")))
-    .filter((item) => Number.isFinite(item));
-  const next = (values.length > 0 ? Math.max(...values) : 0) + 1;
-  return `P${String(next).padStart(3, "0")}`;
+async function loadRequirementProjectReservationRows(anio: number): Promise<RequirementProjectReservationRow[]> {
+  const byKey = new Map<string, RequirementProjectReservationRow>();
+  const queries = [
+    supabase
+      .from("requerimientos")
+      .select("codigo,codigo_proyecto_adjudicado,anio,deleted_at")
+      .eq("anio", anio),
+    supabase
+      .from("requerimientos")
+      .select("codigo,codigo_proyecto_adjudicado,anio,deleted_at")
+      .ilike("codigo", `RQ-${anio}-%`),
+  ];
+
+  for (const query of queries) {
+    const { data, error } = await query;
+    if (error) throw error;
+    (data ?? []).forEach((row) => {
+      const reservation = row as RequirementProjectReservationRow;
+      const key = `${normalizeString(reservation.codigo)}|${normalizeString(reservation.codigo_proyecto_adjudicado)}|${normalizeString(reservation.anio)}`;
+      byKey.set(key, reservation);
+    });
+  }
+
+  return Array.from(byKey.values());
 }
 
 async function ensureProjectTagForQuotation(
   cotizacion: CotizacionWithRequirementMetadata,
   catalogs: RequirementCodeCatalogs,
+  reservedRequirements: RequirementProjectReservationRow[],
   codigoCliente: string,
   codigoUnidad: string,
   anio: number,
-): Promise<string> {
+): Promise<{ ok: true; projectTag: string; created: boolean } | { ok: false; message: string }> {
   const cotizacionCodigo = readCotizacionField(cotizacion, "codigo", "codigo");
   const cliente = readCotizacionField(cotizacion, "cliente_nombre", "cliente");
   const unidad = readCotizacionField(cotizacion, "unidad_trabajo_nombre", "unidad_trabajo");
   const oc = readCotizacionField(cotizacion, "oc", "oc");
 
-  const existing = catalogs.proyectos.find(
-    (item) =>
-      (Number(item.anio) === anio && sameText(item.cotizacion, cotizacionCodigo)) ||
-      (normalizeToken(item.codigo_cliente) === codigoCliente &&
-        normalizeToken(item.codigo_unidad) === codigoUnidad &&
-        (sameText(item.cliente, cliente) || sameText(item.unidad_trabajo, unidad))),
-  );
+  const existing = findExactProjectForQuotation(catalogs.proyectos, cotizacionCodigo, anio);
   const existingTag = normalizeProjectTag(existing?.codigo_proyecto);
-  if (existingTag) return existingTag;
+  if (existingTag) return { ok: true, projectTag: existingTag, created: false };
 
-  const generatedProjectCode = nextProjectCodeForYear(catalogs.proyectos, anio);
-  const payload: ProyectoAdjudicado = {
-    id: `pa-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`,
-    anio,
-    codigo_proyecto: generatedProjectCode,
-    cotizacion: cotizacionCodigo,
-    oc,
-    cliente,
-    codigo_cliente: codigoCliente,
-    unidad_trabajo: unidad,
-    codigo_unidad: codigoUnidad,
-    fecha_adjudicacion:
-      readCotizacionField(cotizacion, "fecha_oc", "fecha_oc") ||
-      readCotizacionField(cotizacion, "fecha_entregada", "fecha_entregada") ||
-      readCotizacionField(cotizacion, "fecha_entrega", "fecha_entrega") ||
-      new Date().toISOString().slice(0, 10),
-    estado: "Activo",
-    activo: true,
-  };
-
-  const { error } = await supabase.from("proyectos_adjudicados").insert(payload);
-  if (error && process.env.NODE_ENV === "development") {
-    console.warn("[requirementsRepository] No se pudo registrar proyecto adjudicado automático", {
+  let currentCatalogs = catalogs;
+  let currentReservedRequirements = reservedRequirements;
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    const generatedProjectCode = nextProjectCodeForYear(currentCatalogs.proyectos, anio, currentReservedRequirements);
+    const payload: ProyectoAdjudicado = {
+      id: `pa-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`,
+      anio,
+      codigo_proyecto: generatedProjectCode,
       cotizacion: cotizacionCodigo,
-      generatedProjectCode,
-      error,
-    });
+      oc,
+      cliente,
+      codigo_cliente: codigoCliente,
+      unidad_trabajo: unidad,
+      codigo_unidad: codigoUnidad,
+      fecha_adjudicacion:
+        readCotizacionField(cotizacion, "fecha_oc", "fecha_oc") ||
+        readCotizacionField(cotizacion, "fecha_entregada", "fecha_entregada") ||
+        readCotizacionField(cotizacion, "fecha_entrega", "fecha_entrega") ||
+        new Date().toISOString().slice(0, 10),
+      estado: "Activo",
+      activo: true,
+    };
+
+    const { error } = await supabase.from("proyectos_adjudicados").insert(payload);
+    if (!error) return { ok: true, projectTag: generatedProjectCode, created: true };
+
+    if (process.env.NODE_ENV === "development") {
+      console.warn("[requirementsRepository] No se pudo registrar proyecto adjudicado automático", {
+        cotizacion: cotizacionCodigo,
+        generatedProjectCode,
+        attempt: attempt + 1,
+        error,
+      });
+    }
+
+    if (error.code !== "23505") {
+      return {
+        ok: false,
+        message: `No se pudo registrar el proyecto adjudicado automático ${generatedProjectCode}: ${error.message}`,
+      };
+    }
+
+    [currentCatalogs, currentReservedRequirements] = await Promise.all([
+      loadRequirementCodeCatalogs(),
+      loadRequirementProjectReservationRows(anio),
+    ]);
+    const concurrentExact = findExactProjectForQuotation(currentCatalogs.proyectos, cotizacionCodigo, anio);
+    const concurrentExactTag = normalizeProjectTag(concurrentExact?.codigo_proyecto);
+    if (concurrentExactTag) return { ok: true, projectTag: concurrentExactTag, created: false };
   }
 
-  return generatedProjectCode;
+  return {
+    ok: false,
+    message: "No se pudo reservar un P### único para la cotización. Reintente para recalcular el siguiente código disponible.",
+  };
 }
 
 function resolveClientUnitCodesFromQuotation(
@@ -310,6 +337,7 @@ function mapSupabaseRequerimiento(row: SupabaseRequerimiento): Requerimiento & {
     cotizacion_codigo: normalizeString(row.cotizacion_codigo),
     codigo_cliente: normalizeString(row.codigo_cliente),
     codigo_unidad: normalizeString(row.codigo_unidad),
+    codigo_proyecto_adjudicado: normalizeString(row.codigo_proyecto_adjudicado),
     proyecto_servicio: normalizeString(row.proyecto_servicio),
     oc: normalizeString(row.oc),
     anio: typeof row.anio === "number" ? row.anio : undefined,
@@ -358,21 +386,20 @@ async function fetchAllRequerimientos(): Promise<{ rows: SupabaseRequerimiento[]
 export function resolveRequirementCodePartsFromQuotation(
   cotizacion: CotizacionWithRequirementMetadata,
   catalogs: RequirementCodeCatalogs = getDefaultRequirementCodeCatalogs(),
+  reservedRequirements: RequirementProjectReservationRow[] = [],
 ): ({ ok: true } & RequirementCodeParts) | { ok: false; message: string } {
   const meta = cotizacion.metadata || {};
   const cotizacionCodigo = readCotizacionField(cotizacion, "codigo", "codigo");
-  const { cliente, unidad, codigoCliente: codigo_cliente, codigoUnidad: codigo_unidad } =
-    resolveClientUnitCodesFromQuotation(cotizacion, catalogs);
-  const projectFromCatalog = catalogs.proyectos
-    .find(
-      (item) =>
-        sameText(item.cotizacion, cotizacionCodigo) ||
-        (normalizeToken(item.codigo_cliente) === codigo_cliente && normalizeToken(item.codigo_unidad) === codigo_unidad) ||
-        (sameText(item.cliente, cliente) && sameText(item.unidad_trabajo, unidad)),
-    )?.codigo_proyecto;
-  const project_tag = normalizeProjectTag(meta.codigo_proyecto_adjudicado || meta.project_tag || projectFromCatalog);
-  const source: RequirementCodeParts["source"] =
-    meta.codigo_cliente || meta.codigo_unidad || meta.codigo_proyecto_adjudicado || meta.project_tag ? "metadata" : "catalog";
+  const anio = getRqCreationYear(cotizacion);
+  const { codigoCliente: codigo_cliente, codigoUnidad: codigo_unidad } = resolveClientUnitCodesFromQuotation(cotizacion, catalogs);
+  const projectPlan = planProjectTagForQuotation({
+    cotizacionCodigo,
+    anio,
+    metadata: meta,
+    projects: catalogs.proyectos,
+    reservedRequirements,
+  });
+  const project_tag = projectPlan.action === "reuse" ? projectPlan.projectTag : "";
 
   if (!codigo_cliente || !codigo_unidad || !project_tag) {
     const missing = [];
@@ -391,27 +418,26 @@ export function resolveRequirementCodePartsFromQuotation(
     codigoCliente: codigo_cliente,
     codigoUnidad: codigo_unidad,
     projectTag: project_tag,
-    anio: getRqCreationYear(cotizacion),
-    source,
+    anio,
+    source: projectPlan.source,
   };
 }
 
-function resolveRequirementCodePartsFromRelatedRequirements(
+function resolveRequirementCodePartsFromRelatedRows(
   relatedRequirements: Array<{ codigo: string | null }>,
+  anio: number,
 ): RequirementCodeParts | null {
-  const currentYear = new Date().getFullYear();
-  const matches = relatedRequirements
+  const latest = relatedRequirements
     .map((item) => CURRENT_RQ_CODE_PATTERN.exec(normalizeString(item.codigo)))
     .filter((match): match is RegExpExecArray => Boolean(match))
-    .filter((match) => Number(match[1]) === currentYear);
-  if (matches.length === 0) return null;
-  matches.sort((left, right) => Number(right[5]) - Number(left[5]));
-  const latest = matches[0];
+    .filter((match) => Number(match[1]) === anio)
+    .sort((left, right) => Number(right[5]) - Number(left[5]))[0];
+  if (!latest) return null;
   return {
     codigoCliente: latest[2],
     codigoUnidad: latest[3],
     projectTag: latest[4],
-    anio: currentYear,
+    anio,
     source: "related_requirement",
   };
 }
@@ -420,12 +446,13 @@ function resolveRequirementCodePartsForNewFormat(
   cotizacion: CotizacionWithRequirementMetadata,
   relatedRequirements: Array<{ codigo: string | null }>,
   catalogs: RequirementCodeCatalogs = getDefaultRequirementCodeCatalogs(),
+  reservedRequirements: RequirementProjectReservationRow[] = [],
 ): { ok: true; parts: RequirementCodeParts } | { ok: false; message: string } {
-  const parts = resolveRequirementCodePartsFromQuotation(cotizacion, catalogs);
-  if (parts.ok) return { ok: true, parts };
-
-  const relatedParts = resolveRequirementCodePartsFromRelatedRequirements(relatedRequirements);
+  const relatedParts = resolveRequirementCodePartsFromRelatedRows(relatedRequirements, getRqCreationYear(cotizacion));
   if (relatedParts) return { ok: true, parts: relatedParts };
+
+  const parts = resolveRequirementCodePartsFromQuotation(cotizacion, catalogs, reservedRequirements);
+  if (parts.ok) return { ok: true, parts };
 
   return {
     ok: false,
@@ -446,10 +473,9 @@ async function getNextRqCorrelativoSupabase(prefix: string, relatedRequirements:
   ok: false;
   message: string;
 }> {
-  const currentYear = new Date().getFullYear();
   const { data, error } = await supabase
     .from("requerimientos")
-    .select("codigo")
+    .select("id, codigo, cotizacion_id, deleted_at")
     .ilike("codigo", `${prefix}-%`)
     .order("codigo", { ascending: false });
 
@@ -466,56 +492,31 @@ async function getNextRqCorrelativoSupabase(prefix: string, relatedRequirements:
     };
   }
 
-  const exactNewCodePattern = new RegExp(`^${escapeRegExp(prefix)}-(\\d{3})$`);
-  const newFormatConsidered = (data ?? []).flatMap((row) => {
-    const codigo = normalizeString(row.codigo);
-    const match = exactNewCodePattern.exec(codigo);
-    if (!match) return [];
-    const correlativo = parseInt(match[1], 10);
-    return Number.isFinite(correlativo) ? [{ codigo, correlativo, reason: "new-format-prefix" }] : [];
+  const result = nextRqCorrelativeForQuotation({
+    prefix,
+    relatedRequirements: relatedRequirements as RequirementCodeRelatedRow[],
   });
-  const historicalCurrentYearConsidered = relatedRequirements.flatMap((row) => {
-    const codigo = normalizeString(row.codigo);
-    const match = HISTORICAL_RQ_CODE_PATTERN.exec(codigo);
-    if (!match) return [];
-    const correlativo = parseInt(match[1], 10);
-    const year = parseInt(match[2], 10);
-    if (year !== currentYear || !Number.isFinite(correlativo)) return [];
-    return [{ codigo, correlativo, reason: "historical-current-year" }];
-  });
-  const considered = [...newFormatConsidered, ...historicalCurrentYearConsidered];
   const ignoredCodes = Array.from(
     new Set([
+      ...result.ignoredCodes,
       ...(data ?? [])
         .map((row) => normalizeString(row.codigo))
-        .filter((codigo) => codigo && !exactNewCodePattern.test(codigo)),
-      ...relatedRequirements
-        .map((row) => normalizeString(row.codigo))
-        .filter((codigo) => {
-          if (!codigo) return false;
-          const historicalMatch = HISTORICAL_RQ_CODE_PATTERN.exec(codigo);
-          if (historicalMatch) return Number(historicalMatch[2]) !== currentYear;
-          return !exactNewCodePattern.test(codigo);
-        }),
+        .filter((codigo) => codigo && !result.existingCodes.includes(codigo)),
     ]),
   );
-
-  const max = Math.max(...considered.map((item) => item.correlativo), 0);
-  const correlativo = String(max + 1).padStart(3, "0");
 
   if (process.env.NODE_ENV === "development") {
     console.log("[requirementsRepository] RQ correlativo", {
       prefix,
-      currentYear,
-      consideredCodes: considered,
-      existingCodes: considered.map((item) => item.codigo),
+      consideredCodes: result.existingCodes,
+      existingCodes: result.existingCodes,
       ignoredCodes,
-      maxCorrelativo: max,
-      nextCorrelativo: correlativo,
+      maxCorrelativo: result.maxCorrelativo,
+      nextCorrelativo: result.correlativo,
     });
   }
 
-  return { ok: true, correlativo, existingCodes: considered.map((item) => item.codigo), ignoredCodes, maxCorrelativo: max };
+  return { ok: true, correlativo: result.correlativo, existingCodes: result.existingCodes, ignoredCodes, maxCorrelativo: result.maxCorrelativo };
 }
 
 /**
@@ -531,9 +532,8 @@ export async function createRequirementFromWonQuotationSupabase(
 
   const { data: relatedRequirements, error: relatedRequirementsError } = await supabase
     .from("requerimientos")
-    .select("id, codigo")
+    .select("id, codigo, deleted_at")
     .eq("cotizacion_id", cotizacion.id)
-    .is("deleted_at", null)
     .order("codigo", { ascending: true });
 
   if (relatedRequirementsError) {
@@ -553,27 +553,38 @@ export async function createRequirementFromWonQuotationSupabase(
   // 1. Resolver partes del código vigente desde catálogos reales de Supabase.
   // Los RQ históricos no se reutilizan.
   const catalogs = await loadRequirementCodeCatalogs();
-  let partsResult = resolveRequirementCodePartsForNewFormat(cotizacion, relatedRequirements ?? [], catalogs);
+  const anio = getRqCreationYear(cotizacion);
+  let reservedProjectRequirements: RequirementProjectReservationRow[] = [];
+  try {
+    reservedProjectRequirements = await loadRequirementProjectReservationRows(anio);
+  } catch (error) {
+    return {
+      ok: false,
+      message: `No se pudo leer los P### reservados en requerimientos para el año ${anio}: ${error instanceof Error ? error.message : String(error)}`,
+    };
+  }
+  let partsResult = resolveRequirementCodePartsForNewFormat(cotizacion, relatedRequirements ?? [], catalogs, reservedProjectRequirements);
 
   if (!partsResult.ok && partsResult.message.includes("Código de Proyecto")) {
     const baseCodes = resolveClientUnitCodesFromQuotation(cotizacion, catalogs);
     if (baseCodes.codigoCliente && baseCodes.codigoUnidad) {
-      const anio = getRqCreationYear(cotizacion);
       const generatedProjectTag = await ensureProjectTagForQuotation(
         cotizacion,
         catalogs,
+        reservedProjectRequirements,
         baseCodes.codigoCliente,
         baseCodes.codigoUnidad,
         anio,
       );
+      if (!generatedProjectTag.ok) return { ok: false, message: generatedProjectTag.message };
       partsResult = {
         ok: true,
         parts: {
           codigoCliente: baseCodes.codigoCliente,
           codigoUnidad: baseCodes.codigoUnidad,
-          projectTag: normalizeProjectTag(generatedProjectTag),
+          projectTag: normalizeProjectTag(generatedProjectTag.projectTag),
           anio,
-          source: "catalog",
+          source: generatedProjectTag.created ? "new_project" : "exact_project",
         },
       };
     }

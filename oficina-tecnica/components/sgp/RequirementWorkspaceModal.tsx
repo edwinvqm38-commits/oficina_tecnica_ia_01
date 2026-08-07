@@ -11,7 +11,7 @@ import { StatusBadge } from "@/components/sgp/StatusBadge";
 import { FieldLabelIcon, type IconName } from "@/components/sgp/ui/FieldLabelIcon";
 import { FieldLockButton } from "@/components/sgp/ui/FieldLockButton";
 import { DateTextInput } from "@/components/sgp/ui/DateTextInput";
-import { EmailThreadButton } from "@/components/sgp/EmailThreadButton";
+import { EmailThreadButton, copyEmailHtmlWithFallback } from "@/components/sgp/EmailThreadButton";
 import {
   RequirementObservationPanel,
   canReassignObservation,
@@ -32,6 +32,7 @@ import {
   type RequirementObservation,
 } from "@/components/sgp/RequirementObservationPanel";
 import type { EstadoRequerimiento, Recurso, Requerimiento } from "@/lib/sgp/demoData";
+import { buildPublicAppUrl } from "@/lib/app/publicUrl";
 import { formatCurrencyNumber, formatDate } from "@/lib/sgp/utils";
 
 type ResourceTypeSummary = {
@@ -86,6 +87,7 @@ type RequirementWorkspaceModalProps = {
   hiddenItemColumnKeys?: string[];
   hiddenBusinessFields?: string[];
   canViewPrices?: boolean;
+  canSendManagementEmail?: boolean;
   currentUser?: ObservationUser | null;
   userDirectory?: ObservationUser[];
   loadingUsers?: boolean;
@@ -102,7 +104,7 @@ type LabelValueRowProps = {
   valueClassName?: string;
 };
 
-type WorkspaceActionIconName = "cancel" | "save" | "close";
+type WorkspaceActionIconName = "cancel" | "save" | "close" | "copy" | "menu";
 type WorkspaceTab = "recursos" | "observaciones";
 
 type ObservationEmailAttachment = {
@@ -185,6 +187,106 @@ function formatEmailQuantity(value: number): string {
   return Number.isFinite(value) ? formatCurrencyNumber(value) : "-";
 }
 
+function cleanLower(value: string | null | undefined): string {
+  return String(value ?? "").trim().toLowerCase();
+}
+
+function itemLooksPending(item: EditableRequirementItem): boolean {
+  const state = cleanLower(item.estado);
+  return state.includes("pend") || state.includes("observ") || state.includes("rechaz");
+}
+
+function itemLooksInProgress(item: EditableRequirementItem): boolean {
+  const state = cleanLower(item.estado);
+  const logistics = cleanLower(item.logistica_compra);
+  return state.includes("proceso") || logistics.includes("proceso") || logistics.includes("compra");
+}
+
+function itemLooksAttended(item: EditableRequirementItem): boolean {
+  const state = cleanLower(item.estado);
+  return state.includes("atendid") || state.includes("complet") || state.includes("cerrad") || Boolean(item.guia_remision.trim());
+}
+
+function itemLooksDelivered(item: EditableRequirementItem): boolean {
+  const state = cleanLower(item.estado);
+  return state.includes("entreg") || Boolean(item.fecha_entrega.trim()) || Boolean(item.guia_remision.trim());
+}
+
+function itemHasQuotedData(item: EditableRequirementItem): boolean {
+  return Boolean(item.fecha_coti.trim()) || item.precio_unitario > 0 || item.costo_total_presupuestado > 0;
+}
+
+function itemHasCostData(item: EditableRequirementItem): boolean {
+  return item.precio_unitario > 0 || item.costo_total_presupuestado > 0;
+}
+
+function daysUntilLabel(rawDate: string): string {
+  const formatted = formatDate(rawDate);
+  if (!formatted) return "-";
+  const [day, month, year] = formatted.split("/");
+  const due = new Date(Number(year), Number(month) - 1, Number(day));
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  due.setHours(0, 0, 0, 0);
+  const diffDays = Math.ceil((due.getTime() - today.getTime()) / 86_400_000);
+  if (diffDays < 0) return `Atrasado ${Math.abs(diffDays)} d`;
+  if (diffDays === 0) return "Vence hoy";
+  return `${diffDays} d restantes`;
+}
+
+function buildRequirementEmailMetrics(
+  items: EditableRequirementItem[],
+  fechaEntrega: string,
+  canViewPrices: boolean,
+  totalsByCurrency: Record<string, number>,
+) {
+  const total = items.length;
+  const attended = items.filter(itemLooksAttended).length;
+  const pending = items.filter(itemLooksPending).length;
+  const inProgress = items.filter(itemLooksInProgress).length;
+  const delivered = items.filter(itemLooksDelivered).length;
+  const quoted = items.filter(itemHasQuotedData).length;
+  const withCost = items.filter(itemHasCostData).length;
+  const progress = total > 0 ? Math.round((attended / total) * 100) : 0;
+  return {
+    total,
+    attended,
+    pending,
+    inProgress,
+    delivered,
+    quoted,
+    withCost,
+    missingCost: Math.max(0, total - withCost),
+    withOcOs: items.filter((item) => item.oc_os_recurso.trim().length > 0).length,
+    withGuia: items.filter((item) => item.guia_remision.trim().length > 0).length,
+    progress,
+    daysLabel: daysUntilLabel(fechaEntrega),
+    totalCostLabel: canViewPrices ? formatTotalsByCurrency(totalsByCurrency) : "",
+  };
+}
+
+function emailKpiCell(label: string, value: string | number): string {
+  return `
+    <td style="width:25%;padding:0 6px 8px 0;vertical-align:top;">
+      <table role="presentation" cellpadding="0" cellspacing="0" style="width:100%;border-collapse:collapse;border:1px solid #dbe3ea;background:#ffffff;">
+        <tr><td style="padding:8px 9px 2px;font-size:10px;line-height:13px;color:#64748b;text-transform:uppercase;font-weight:700;">${escapeEmailHtml(label)}</td></tr>
+        <tr><td style="padding:0 9px 9px;font-size:15px;line-height:18px;color:#0f172a;font-weight:700;">${escapeEmailHtml(value)}</td></tr>
+      </table>
+    </td>`;
+}
+
+function compactEmailRows(rows: Array<[string, string | number | null | undefined]>): string {
+  return rows
+    .map(
+      ([label, value]) => `
+        <tr>
+          <td style="width:34%;padding:7px 9px;border:1px solid #e5e7eb;background:#f8fafc;font-size:11px;line-height:15px;color:#475569;font-weight:700;">${escapeEmailHtml(label)}</td>
+          <td style="padding:7px 9px;border:1px solid #e5e7eb;font-size:11px;line-height:15px;color:#111827;">${escapeEmailHtml(value)}</td>
+        </tr>`,
+    )
+    .join("");
+}
+
 function buildRequirementEmailPlainBody(input: {
   title: string;
   link: string;
@@ -192,20 +294,28 @@ function buildRequirementEmailPlainBody(input: {
   proyecto: string;
   cliente: string;
   unidadTrabajo: string;
+  cotizacionCodigo: string;
+  cotizacionOc: string;
   solicitante: string;
   fechaSolicitud: string;
+  fechaEntrega: string;
+  updatedAt: string;
   estado: string;
   items: EditableRequirementItem[];
+  totalsByCurrency: Record<string, number>;
+  canViewPrices: boolean;
 }): string {
+  const metrics = buildRequirementEmailMetrics(input.items, input.fechaEntrega, false, input.totalsByCurrency);
   const resourceLines = input.items.length
     ? input.items
         .map((item, index) =>
           [
             `${index + 1}. ${cleanEmailValue(item.descripcion)}`,
-            `   Código fabricante: ${cleanEmailValue(item.codigo_fabricante)}`,
             `   Tipo recurso: ${cleanEmailValue(item.tipo_recurso)}`,
             `   Información adicional: ${cleanEmailValue(item.informacion_adicional)}`,
             `   Cantidad solicitada: ${formatEmailQuantity(item.cantidad)} ${cleanEmailValue(item.unidad, "")}`.trim(),
+            `   Estado: ${cleanEmailValue(item.estado)}`,
+            `   Fecha requerida/entrega: ${cleanEmailValue(formatDate(item.fecha_entrega) || formatDate(input.fechaEntrega))}`,
           ].join("\n"),
         )
         .join("\n\n")
@@ -214,15 +324,27 @@ function buildRequirementEmailPlainBody(input: {
   return [
     "Hola,",
     "",
-    `Se comparte ${input.title.toLowerCase()} para revisión/seguimiento.`,
+    "Se remite el requerimiento para revisión, atención y seguimiento.",
     "",
     `Código RQ: ${cleanEmailValue(input.codigo)}`,
     `Proyecto: ${cleanEmailValue(input.proyecto)}`,
     `Cliente: ${cleanEmailValue(input.cliente)}`,
     `Unidad de trabajo: ${cleanEmailValue(input.unidadTrabajo)}`,
     `Solicitante: ${cleanEmailValue(input.solicitante)}`,
+    `Cotización: ${cleanEmailValue(input.cotizacionCodigo)}`,
+    `OC: ${cleanEmailValue(input.cotizacionOc)}`,
     `Fecha solicitud: ${cleanEmailValue(input.fechaSolicitud)}`,
+    `Fecha entrega comprometida: ${cleanEmailValue(input.fechaEntrega)}`,
     `Estado: ${cleanEmailValue(input.estado)}`,
+    `Actualización: ${cleanEmailValue(input.updatedAt)}`,
+    "",
+    "Indicadores:",
+    `Recursos: ${metrics.total}`,
+    `Atendidos: ${metrics.attended}`,
+    `Pendientes: ${metrics.pending}`,
+    `Entregados: ${metrics.delivered}`,
+    `Avance: ${metrics.progress}%`,
+    `Plazo: ${metrics.daysLabel}`,
     "",
     "Detalle de recursos:",
     resourceLines,
@@ -240,33 +362,39 @@ function buildRequirementEmailHtmlBody(input: {
   proyecto: string;
   cliente: string;
   unidadTrabajo: string;
+  cotizacionCodigo: string;
+  cotizacionOc: string;
   solicitante: string;
   fechaSolicitud: string;
+  fechaEntrega: string;
+  updatedAt: string;
   estado: string;
   items: EditableRequirementItem[];
+  totalsByCurrency: Record<string, number>;
+  canViewPrices: boolean;
 }): string {
-  const summaryCells = [
+  const metrics = buildRequirementEmailMetrics(input.items, input.fechaEntrega, false, input.totalsByCurrency);
+  const dataRows = compactEmailRows([
     ["Cliente", input.cliente],
     ["Proyecto", input.proyecto],
     ["Unidad de trabajo", input.unidadTrabajo],
     ["Solicitante", input.solicitante],
-    ["Total de recursos", input.items.length],
+    ["Cotización", input.cotizacionCodigo],
+    ["OC", input.cotizacionOc],
+    ["Fecha solicitud", input.fechaSolicitud],
+    ["Fecha entrega", input.fechaEntrega],
     ["Estado", input.estado],
-  ]
-    .map(
-      ([label, value]) => `
-        <td style="width:33.333%;padding:0 6px 8px 0;vertical-align:top;">
-          <table role="presentation" cellpadding="0" cellspacing="0" style="width:100%;border-collapse:collapse;border:1px solid #e5e7eb;background:#ffffff;">
-            <tr>
-              <td style="padding:7px 9px 2px;font-size:10px;line-height:14px;color:#6b7280;text-transform:uppercase;letter-spacing:.2px;">${escapeEmailHtml(label)}</td>
-            </tr>
-            <tr>
-              <td style="padding:0 9px 8px;font-size:12px;line-height:16px;color:#111827;font-weight:700;">${escapeEmailHtml(value)}</td>
-            </tr>
-          </table>
-        </td>`,
-    )
-    .join("");
+  ]);
+  const kpiCells = [
+    ["Recursos", metrics.total],
+    ["Atendidos", metrics.attended],
+    ["Pendientes", metrics.pending],
+    ["Avance", `${metrics.progress}%`],
+    ["Entregados", metrics.delivered],
+    ["Con OC/OS", metrics.withOcOs],
+    ["Con guía", metrics.withGuia],
+    ["Plazo", metrics.daysLabel],
+  ].map(([label, value]) => emailKpiCell(String(label), value)).join("");
 
   const resourceRows = input.items.length
     ? input.items
@@ -274,15 +402,16 @@ function buildRequirementEmailHtmlBody(input: {
           (item, index) => `
             <tr style="background:${index % 2 === 0 ? "#ffffff" : "#fbfcfd"};">
               <td style="padding:6px 7px;border:1px solid #e5e7eb;text-align:right;font-size:11px;line-height:15px;color:#374151;">${index + 1}</td>
-              <td style="padding:6px 7px;border:1px solid #e5e7eb;font-size:11px;line-height:15px;color:#111827;font-weight:600;">${escapeEmailHtml(item.codigo_fabricante)}</td>
               <td style="padding:6px 7px;border:1px solid #e5e7eb;font-size:11px;line-height:15px;color:#374151;">${escapeEmailHtml(item.tipo_recurso)}</td>
               <td style="padding:6px 7px;border:1px solid #e5e7eb;font-size:11px;line-height:15px;color:#111827;">${escapeEmailHtml(item.descripcion)}</td>
               <td style="padding:6px 7px;border:1px solid #e5e7eb;text-align:right;font-size:11px;line-height:15px;color:#111827;font-weight:700;">${escapeEmailHtml(formatEmailQuantity(item.cantidad))}</td>
               <td style="padding:6px 7px;border:1px solid #e5e7eb;font-size:11px;line-height:15px;color:#374151;">${escapeEmailHtml(item.unidad)}</td>
+              <td style="padding:6px 7px;border:1px solid #e5e7eb;font-size:11px;line-height:15px;color:#374151;">${escapeEmailHtml(item.estado)}</td>
+              <td style="padding:6px 7px;border:1px solid #e5e7eb;font-size:11px;line-height:15px;color:#374151;">${escapeEmailHtml(formatDate(item.fecha_entrega) || formatDate(input.fechaEntrega) || "-")}</td>
             </tr>`,
         )
         .join("")
-    : `<tr><td colspan="6" style="padding:10px;border:1px solid #e5e7eb;color:#6b7280;font-size:12px;">Sin recursos registrados.</td></tr>`;
+    : `<tr><td colspan="7" style="padding:10px;border:1px solid #e5e7eb;color:#6b7280;font-size:12px;">Sin recursos registrados.</td></tr>`;
 
   return `<!doctype html>
 <html>
@@ -291,7 +420,7 @@ function buildRequirementEmailHtmlBody(input: {
     <div style="max-width:920px;margin:0 auto;padding:22px 14px;">
     <table role="presentation" cellpadding="0" cellspacing="0" style="width:100%;border-collapse:collapse;background:#ffffff;border:1px solid #d9dee5;">
       <tr>
-        <td style="padding:18px 22px;background:#0f172a;color:#ffffff;">
+        <td style="padding:18px 22px;background:#102a43;color:#ffffff;">
           <table role="presentation" cellpadding="0" cellspacing="0" style="width:100%;border-collapse:collapse;">
             <tr>
               <td style="vertical-align:top;">
@@ -299,8 +428,8 @@ function buildRequirementEmailHtmlBody(input: {
                 <div style="margin-top:4px;font-size:22px;line-height:27px;color:#ffffff;font-weight:700;">${escapeEmailHtml(input.codigo)}</div>
               </td>
               <td style="vertical-align:top;text-align:right;">
-                <div style="display:inline-block;margin-bottom:6px;padding:4px 8px;border:1px solid #334155;background:#1e293b;color:#f8fafc;font-size:11px;line-height:14px;font-weight:700;">Estado: ${escapeEmailHtml(input.estado)}</div>
-                <div style="font-size:12px;line-height:16px;color:#cbd5e1;">Fecha: ${escapeEmailHtml(input.fechaSolicitud)}</div>
+                <div style="display:inline-block;margin-bottom:6px;padding:4px 8px;border:1px solid #31536f;background:#1f3f5b;color:#f8fafc;font-size:11px;line-height:14px;font-weight:700;">Estado: ${escapeEmailHtml(input.estado)}</div>
+                <div style="font-size:12px;line-height:16px;color:#dbeafe;">Actualización: ${escapeEmailHtml(input.updatedAt)}</div>
               </td>
             </tr>
           </table>
@@ -308,9 +437,12 @@ function buildRequirementEmailHtmlBody(input: {
       </tr>
       <tr>
         <td style="padding:18px 22px 8px;background:#ffffff;">
-          <p style="margin:0 0 14px;font-size:13px;line-height:18px;color:#374151;">Se comparte el requerimiento para revisión y seguimiento del equipo de proyecto.</p>
+          <p style="margin:0 0 14px;font-size:13px;line-height:18px;color:#374151;">Se remite el requerimiento para revisión, atención y seguimiento.</p>
+          <table role="presentation" cellpadding="0" cellspacing="0" style="width:100%;border-collapse:collapse;margin-bottom:10px;font-size:12px;">
+            ${dataRows}
+          </table>
           <table role="presentation" cellpadding="0" cellspacing="0" style="width:100%;border-collapse:collapse;">
-            <tr>${summaryCells}</tr>
+            <tr>${kpiCells}</tr>
           </table>
         </td>
       </tr>
@@ -319,13 +451,14 @@ function buildRequirementEmailHtmlBody(input: {
           <div style="margin:0 0 8px;font-size:13px;line-height:17px;color:#111827;font-weight:700;">Detalle de recursos</div>
           <table cellpadding="0" cellspacing="0" style="width:100%;border-collapse:collapse;border:1px solid #e5e7eb;">
             <thead>
-              <tr style="background:#f3f4f6;">
-                <th style="width:38px;padding:7px;border:1px solid #e5e7eb;text-align:right;font-size:10px;line-height:13px;color:#374151;text-transform:uppercase;">N°</th>
-                <th style="width:140px;padding:7px;border:1px solid #e5e7eb;text-align:left;font-size:10px;line-height:13px;color:#374151;text-transform:uppercase;">Código fabricante</th>
+                <tr style="background:#f3f4f6;">
+                  <th style="width:38px;padding:7px;border:1px solid #e5e7eb;text-align:right;font-size:10px;line-height:13px;color:#374151;text-transform:uppercase;">N°</th>
                 <th style="width:120px;padding:7px;border:1px solid #e5e7eb;text-align:left;font-size:10px;line-height:13px;color:#374151;text-transform:uppercase;">Tipo recurso</th>
                 <th style="padding:7px;border:1px solid #e5e7eb;text-align:left;font-size:10px;line-height:13px;color:#374151;text-transform:uppercase;">Descripción</th>
                 <th style="width:80px;padding:7px;border:1px solid #e5e7eb;text-align:right;font-size:10px;line-height:13px;color:#374151;text-transform:uppercase;">Cantidad</th>
                 <th style="width:70px;padding:7px;border:1px solid #e5e7eb;text-align:left;font-size:10px;line-height:13px;color:#374151;text-transform:uppercase;">Unidad</th>
+                <th style="width:95px;padding:7px;border:1px solid #e5e7eb;text-align:left;font-size:10px;line-height:13px;color:#374151;text-transform:uppercase;">Estado</th>
+                <th style="width:105px;padding:7px;border:1px solid #e5e7eb;text-align:left;font-size:10px;line-height:13px;color:#374151;text-transform:uppercase;">Fecha entrega</th>
               </tr>
             </thead>
             <tbody>${resourceRows}</tbody>
@@ -342,6 +475,340 @@ function buildRequirementEmailHtmlBody(input: {
         </td>
       </tr>
     </table>
+    </div>
+  </body>
+</html>`;
+}
+
+function priorityWeight(priority: ObservationPriority): number {
+  if (priority === "critical") return 4;
+  if (priority === "high") return 3;
+  if (priority === "medium") return 2;
+  return 1;
+}
+
+function buildManagementAreaRows(input: {
+  area: string;
+  responsable: string;
+  estado: string;
+  metrics: ReturnType<typeof buildRequirementEmailMetrics>;
+  items: EditableRequirementItem[];
+}): Array<[string, string, string, string]> {
+  const rows: Array<[string, string, string, string]> = [];
+  rows.push([
+    cleanEmailValue(input.area, "Oficina Técnica"),
+    cleanEmailValue(input.responsable, "-"),
+    cleanEmailValue(input.estado),
+    input.metrics.pending > 0 ? `${input.metrics.pending} recursos pendientes` : "Sin pendientes registrados",
+  ]);
+
+  const logisticsItems = input.items.filter((item) => item.logistica_compra.trim().length > 0);
+  if (logisticsItems.length > 0) {
+    const pendingLogistics = logisticsItems.filter((item) => !itemLooksAttended(item) && !item.guia_remision.trim()).length;
+    rows.push([
+      "Logística",
+      "-",
+      `${logisticsItems.length} recursos con dato logístico`,
+      pendingLogistics > 0 ? `${pendingLogistics} por completar` : "Sin pendientes logísticos registrados",
+    ]);
+  }
+
+  const purchaseItems = input.items.filter((item) => item.oc_os_recurso.trim().length > 0 || item.fecha_compra.trim().length > 0);
+  if (purchaseItems.length > 0) {
+    rows.push([
+      "Compras",
+      "-",
+      `${purchaseItems.length} recursos con OC/OS o fecha de compra`,
+      input.metrics.withOcOs < input.metrics.total ? `${input.metrics.total - input.metrics.withOcOs} sin OC/OS` : "OC/OS completo",
+    ]);
+  }
+
+  const warehouseItems = input.items.filter((item) => item.guia_remision.trim().length > 0 || item.fecha_entrega.trim().length > 0);
+  if (warehouseItems.length > 0) {
+    rows.push([
+      "Almacén / entrega",
+      "-",
+      `${warehouseItems.length} recursos con entrega o guía`,
+      input.metrics.delivered < input.metrics.total ? `${input.metrics.total - input.metrics.delivered} sin entrega registrada` : "Entregas completas",
+    ]);
+  }
+
+  return rows;
+}
+
+function buildManagementAlerts(input: {
+  fechaEntrega: string;
+  observacionesGenerales: string;
+  observations: RequirementObservation[];
+  items: EditableRequirementItem[];
+  canViewPrices: boolean;
+}): string[] {
+  const alerts: string[] = [];
+  const deadline = daysUntilLabel(input.fechaEntrega);
+  if (deadline.startsWith("Atrasado") || deadline === "Vence hoy") alerts.push(`Plazo comprometido: ${deadline}.`);
+
+  input.observations
+    .filter((observation) => observation.status !== "resolved")
+    .sort((left, right) => priorityWeight(right.priority) - priorityWeight(left.priority))
+    .slice(0, 4)
+    .forEach((observation) => {
+      alerts.push(`${observationStatusLabel(observation.status)} / ${observation.priority}: ${observation.itemCode || "-"} - ${observation.description}`);
+    });
+
+  input.items
+    .filter((item) => item.observaciones_item.trim().length > 0)
+    .slice(0, 3)
+    .forEach((item) => alerts.push(`Recurso ${item.codigo_recurso || "-"}: ${item.observaciones_item}`));
+
+  if (input.canViewPrices) {
+    const missingCost = input.items.filter((item) => !itemHasCostData(item)).length;
+    if (missingCost > 0) alerts.push(`${missingCost} recursos sin costo/precio registrado.`);
+  }
+
+  if (input.observacionesGenerales.trim()) alerts.push(`Observación general: ${input.observacionesGenerales.trim()}`);
+  return alerts.slice(0, 8);
+}
+
+function criticalResourceRows(input: {
+  items: EditableRequirementItem[];
+  observations: RequirementObservation[];
+  fechaEntrega: string;
+  canViewPrices: boolean;
+}): EditableRequirementItem[] {
+  const observedItemIds = new Set(
+    input.observations
+      .filter((observation) => observation.status !== "resolved")
+      .map((observation) => observation.itemId),
+  );
+  const generalDeadline = daysUntilLabel(input.fechaEntrega);
+  return input.items
+    .filter((item) => {
+      if (observedItemIds.has(item.id)) return true;
+      if (itemLooksPending(item) || itemLooksInProgress(item)) return true;
+      if (!item.fecha_entrega.trim() && (generalDeadline.startsWith("Atrasado") || generalDeadline === "Vence hoy")) return true;
+      return input.canViewPrices && !itemHasCostData(item);
+    })
+    .slice(0, 6);
+}
+
+function buildManagementEmailPlainBody(input: {
+  title: string;
+  link: string;
+  codigo: string;
+  proyecto: string;
+  cliente: string;
+  unidadTrabajo: string;
+  cotizacionCodigo: string;
+  cotizacionOc: string;
+  solicitante: string;
+  responsable: string;
+  fechaSolicitud: string;
+  fechaEntrega: string;
+  updatedAt: string;
+  estado: string;
+  area: string;
+  observacionesGenerales: string;
+  items: EditableRequirementItem[];
+  observations: RequirementObservation[];
+  totalsByCurrency: Record<string, number>;
+  canViewPrices: boolean;
+}): string {
+  const metrics = buildRequirementEmailMetrics(input.items, input.fechaEntrega, input.canViewPrices, input.totalsByCurrency);
+  const unresolvedObservations = input.observations.filter((observation) => observation.status !== "resolved").length;
+  const alerts = buildManagementAlerts(input);
+  const areas = buildManagementAreaRows({
+    area: input.area,
+    responsable: input.responsable,
+    estado: input.estado,
+    metrics,
+    items: input.items,
+  });
+  const criticalRows = criticalResourceRows(input);
+
+  return [
+    "Hola,",
+    "",
+    `Estado ejecutivo del requerimiento ${cleanEmailValue(input.codigo)}.`,
+    `Situación: avance ${metrics.progress}% (${metrics.attended}/${metrics.total} atendidos), ${metrics.pending} pendientes y ${unresolvedObservations} observaciones abiertas.`,
+    input.canViewPrices && metrics.totalCostLabel ? `Costo registrado: ${metrics.totalCostLabel}.` : "Costos omitidos por permisos del remitente.",
+    "",
+    "Datos generales:",
+    `Cliente: ${cleanEmailValue(input.cliente)}`,
+    `Proyecto: ${cleanEmailValue(input.proyecto)}`,
+    `Unidad de trabajo: ${cleanEmailValue(input.unidadTrabajo)}`,
+    `Cotización: ${cleanEmailValue(input.cotizacionCodigo)}`,
+    `OC: ${cleanEmailValue(input.cotizacionOc)}`,
+    `Solicitante: ${cleanEmailValue(input.solicitante)}`,
+    `Responsable: ${cleanEmailValue(input.responsable)}`,
+    `Fecha solicitud: ${cleanEmailValue(input.fechaSolicitud)}`,
+    `Fecha entrega comprometida: ${cleanEmailValue(input.fechaEntrega)}`,
+    `Actualización: ${cleanEmailValue(input.updatedAt)}`,
+    "",
+    "KPIs:",
+    `Recursos totales: ${metrics.total}`,
+    `Avance: ${metrics.progress}%`,
+    `Atendidos: ${metrics.attended}`,
+    `Pendientes: ${metrics.pending}`,
+    `En proceso: ${metrics.inProgress}`,
+    `Cotizados/con precio: ${metrics.quoted}`,
+    `Entregados: ${metrics.delivered}`,
+    `Plazo: ${metrics.daysLabel}`,
+    ...(input.canViewPrices ? [`Recursos sin costo: ${metrics.missingCost}`, `Costo total registrado: ${metrics.totalCostLabel || "-"}`] : []),
+    "",
+    "Avance por área:",
+    ...areas.map(([area, owner, status, pending]) => `- ${area}: ${status}. Responsable: ${owner}. Pendiente: ${pending}.`),
+    "",
+    "Observaciones y alertas:",
+    ...(alerts.length ? alerts.map((alert) => `- ${alert}`) : ["- Sin alertas u observaciones abiertas registradas."]),
+    "",
+    "Recursos críticos:",
+    ...(criticalRows.length
+      ? criticalRows.map((item, index) =>
+          `${index + 1}. ${cleanEmailValue(item.descripcion)} | Estado: ${cleanEmailValue(item.estado)} | Pendiente: ${cleanEmailValue(item.observaciones_item, "Seguimiento operativo")}${
+            input.canViewPrices ? ` | Costo: ${cleanEmailValue(item.moneda)} ${formatEmailQuantity(item.costo_total_presupuestado)}` : ""
+          }`,
+        )
+      : ["Sin recursos críticos registrados."]),
+    "",
+    `Abrir requerimiento: ${input.link}`,
+  ].join("\n");
+}
+
+function buildManagementEmailHtmlBody(input: Parameters<typeof buildManagementEmailPlainBody>[0]): string {
+  const metrics = buildRequirementEmailMetrics(input.items, input.fechaEntrega, input.canViewPrices, input.totalsByCurrency);
+  const unresolvedObservations = input.observations.filter((observation) => observation.status !== "resolved").length;
+  const alerts = buildManagementAlerts(input);
+  const areas = buildManagementAreaRows({
+    area: input.area,
+    responsable: input.responsable,
+    estado: input.estado,
+    metrics,
+    items: input.items,
+  });
+  const criticalRows = criticalResourceRows(input);
+  const summaryText = `Avance ${metrics.progress}% (${metrics.attended}/${metrics.total} atendidos), ${metrics.pending} pendientes y ${unresolvedObservations} observaciones abiertas.`;
+  const kpis = [
+    ["Recursos", metrics.total],
+    ["Avance", `${metrics.progress}%`],
+    ["Atendidos", metrics.attended],
+    ["Pendientes", metrics.pending],
+    ["En proceso", metrics.inProgress],
+    ["Cotizados", metrics.quoted],
+    ["Entregados", metrics.delivered],
+    ["Plazo", metrics.daysLabel],
+    ...(input.canViewPrices ? ([["Sin costo", metrics.missingCost], ["Costo", metrics.totalCostLabel || "-"]] as Array<[string, string | number]>) : []),
+  ].map(([label, value]) => emailKpiCell(String(label), value)).join("");
+  const areaRows = areas
+    .map(
+      ([area, owner, status, pending]) => `
+        <tr>
+          <td style="padding:7px;border:1px solid #e5e7eb;font-size:11px;font-weight:700;color:#111827;">${escapeEmailHtml(area)}</td>
+          <td style="padding:7px;border:1px solid #e5e7eb;font-size:11px;color:#374151;">${escapeEmailHtml(owner)}</td>
+          <td style="padding:7px;border:1px solid #e5e7eb;font-size:11px;color:#374151;">${escapeEmailHtml(status)}</td>
+          <td style="padding:7px;border:1px solid #e5e7eb;font-size:11px;color:#374151;">${escapeEmailHtml(pending)}</td>
+        </tr>`,
+    )
+    .join("");
+  const alertRows = alerts.length
+    ? alerts.map((alert) => `<li style="margin:0 0 6px;color:#374151;font-size:12px;line-height:17px;">${escapeEmailHtml(alert)}</li>`).join("")
+    : `<li style="margin:0;color:#64748b;font-size:12px;line-height:17px;">Sin alertas u observaciones abiertas registradas.</li>`;
+  const criticalHtmlRows = criticalRows.length
+    ? criticalRows
+        .map(
+          (item, index) => `
+            <tr style="background:${index % 2 === 0 ? "#ffffff" : "#fbfcfd"};">
+              <td style="padding:6px 7px;border:1px solid #e5e7eb;text-align:right;font-size:11px;color:#374151;">${index + 1}</td>
+              <td style="padding:6px 7px;border:1px solid #e5e7eb;font-size:11px;color:#111827;font-weight:700;">${escapeEmailHtml(item.tipo_recurso)}</td>
+              <td style="padding:6px 7px;border:1px solid #e5e7eb;font-size:11px;color:#111827;">${escapeEmailHtml(item.descripcion)}</td>
+              <td style="padding:6px 7px;border:1px solid #e5e7eb;font-size:11px;color:#374151;">${escapeEmailHtml(item.estado)}</td>
+              <td style="padding:6px 7px;border:1px solid #e5e7eb;font-size:11px;color:#374151;">${escapeEmailHtml(item.observaciones_item || "Seguimiento operativo")}</td>
+              ${
+                input.canViewPrices
+                  ? `<td style="padding:6px 7px;border:1px solid #e5e7eb;text-align:right;font-size:11px;color:#111827;font-weight:700;">${escapeEmailHtml(`${item.moneda || ""} ${formatEmailQuantity(item.costo_total_presupuestado)}`)}</td>`
+                  : ""
+              }
+            </tr>`,
+        )
+        .join("")
+    : `<tr><td colspan="${input.canViewPrices ? 6 : 5}" style="padding:10px;border:1px solid #e5e7eb;color:#64748b;font-size:12px;">Sin recursos críticos registrados.</td></tr>`;
+
+  return `<!doctype html>
+<html>
+  <body style="margin:0;padding:0;background:#f1f5f9;font-family:Arial,Helvetica,sans-serif;color:#111827;">
+    <div style="display:none;max-height:0;overflow:hidden;color:#f1f5f9;">Estado gerencial RQ ${escapeEmailHtml(input.codigo)} - ${escapeEmailHtml(summaryText)}</div>
+    <div style="max-width:940px;margin:0 auto;padding:22px 14px;">
+      <table role="presentation" cellpadding="0" cellspacing="0" style="width:100%;border-collapse:collapse;background:#ffffff;border:1px solid #d7dee8;">
+        <tr>
+          <td style="padding:18px 22px;background:#17324d;color:#ffffff;">
+            <div style="font-size:11px;line-height:14px;letter-spacing:1.1px;text-transform:uppercase;color:#cbd5e1;font-weight:700;">ESTADO A GERENCIA</div>
+            <div style="margin-top:4px;font-size:22px;line-height:27px;color:#ffffff;font-weight:700;">${escapeEmailHtml(input.codigo)}</div>
+            <div style="margin-top:8px;font-size:13px;line-height:18px;color:#e2e8f0;">${escapeEmailHtml(summaryText)}</div>
+          </td>
+        </tr>
+        <tr>
+          <td style="padding:16px 22px 6px;background:#ffffff;">
+            <table role="presentation" cellpadding="0" cellspacing="0" style="width:100%;border-collapse:collapse;margin-bottom:10px;font-size:12px;">
+              ${compactEmailRows([
+                ["Cliente", input.cliente],
+                ["Proyecto", input.proyecto],
+                ["Unidad de trabajo", input.unidadTrabajo],
+                ["Cotización", input.cotizacionCodigo],
+                ["OC", input.cotizacionOc],
+                ["Responsable", input.responsable],
+                ["Fecha solicitud", input.fechaSolicitud],
+                ["Fecha entrega comprometida", input.fechaEntrega],
+                ["Actualización", input.updatedAt],
+              ])}
+            </table>
+            <table role="presentation" cellpadding="0" cellspacing="0" style="width:100%;border-collapse:collapse;">
+              <tr>${kpis}</tr>
+            </table>
+          </td>
+        </tr>
+        <tr>
+          <td style="padding:8px 22px;background:#ffffff;">
+            <div style="margin:0 0 8px;font-size:13px;line-height:17px;color:#111827;font-weight:700;">Avance por área</div>
+            <table cellpadding="0" cellspacing="0" style="width:100%;border-collapse:collapse;border:1px solid #e5e7eb;">
+              <thead>
+                <tr style="background:#f8fafc;">
+                  <th style="padding:7px;border:1px solid #e5e7eb;text-align:left;font-size:10px;color:#475569;text-transform:uppercase;">Área</th>
+                  <th style="padding:7px;border:1px solid #e5e7eb;text-align:left;font-size:10px;color:#475569;text-transform:uppercase;">Responsable</th>
+                  <th style="padding:7px;border:1px solid #e5e7eb;text-align:left;font-size:10px;color:#475569;text-transform:uppercase;">Estado</th>
+                  <th style="padding:7px;border:1px solid #e5e7eb;text-align:left;font-size:10px;color:#475569;text-transform:uppercase;">Pendiente principal</th>
+                </tr>
+              </thead>
+              <tbody>${areaRows}</tbody>
+            </table>
+          </td>
+        </tr>
+        <tr>
+          <td style="padding:10px 22px;background:#ffffff;">
+            <div style="margin:0 0 8px;font-size:13px;line-height:17px;color:#111827;font-weight:700;">Observaciones y alertas</div>
+            <ul style="margin:0;padding-left:18px;">${alertRows}</ul>
+          </td>
+        </tr>
+        <tr>
+          <td style="padding:8px 22px 18px;background:#ffffff;">
+            <div style="margin:0 0 8px;font-size:13px;line-height:17px;color:#111827;font-weight:700;">Recursos críticos</div>
+            <table cellpadding="0" cellspacing="0" style="width:100%;border-collapse:collapse;border:1px solid #e5e7eb;">
+              <thead>
+                <tr style="background:#f8fafc;">
+                  <th style="width:38px;padding:7px;border:1px solid #e5e7eb;text-align:right;font-size:10px;color:#475569;text-transform:uppercase;">N°</th>
+                  <th style="width:130px;padding:7px;border:1px solid #e5e7eb;text-align:left;font-size:10px;color:#475569;text-transform:uppercase;">Tipo</th>
+                  <th style="padding:7px;border:1px solid #e5e7eb;text-align:left;font-size:10px;color:#475569;text-transform:uppercase;">Descripción</th>
+                  <th style="width:95px;padding:7px;border:1px solid #e5e7eb;text-align:left;font-size:10px;color:#475569;text-transform:uppercase;">Estado</th>
+                  <th style="width:180px;padding:7px;border:1px solid #e5e7eb;text-align:left;font-size:10px;color:#475569;text-transform:uppercase;">Observación</th>
+                  ${input.canViewPrices ? `<th style="width:115px;padding:7px;border:1px solid #e5e7eb;text-align:right;font-size:10px;color:#475569;text-transform:uppercase;">Costo</th>` : ""}
+                </tr>
+              </thead>
+              <tbody>${criticalHtmlRows}</tbody>
+            </table>
+            <p style="margin:18px 0 0;">
+              <a href="${escapeEmailHtml(input.link)}" style="display:inline-block;background:#0f766e;color:#ffffff;text-decoration:none;padding:10px 14px;border-radius:4px;font-size:13px;line-height:16px;font-weight:700;">Revisar requerimiento en plataforma</a>
+            </p>
+          </td>
+        </tr>
+      </table>
     </div>
   </body>
 </html>`;
@@ -411,6 +878,21 @@ function WorkspaceActionIcon({ name }: { name: WorkspaceActionIconName }) {
       </svg>
     );
   }
+  if (name === "copy") {
+    return (
+      <svg viewBox="0 0 24 24" className="h-[14px] w-[14px]" aria-hidden>
+        <rect {...common} x="8" y="8" width="10" height="10" rx="1.5" />
+        <path {...common} d="M6 14H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h7a2 2 0 0 1 2 2v1" />
+      </svg>
+    );
+  }
+  if (name === "menu") {
+    return (
+      <svg viewBox="0 0 24 24" className="h-[14px] w-[14px]" aria-hidden>
+        <path {...common} d="M4 7h16M4 12h16M4 17h16" />
+      </svg>
+    );
+  }
   return (
     <svg viewBox="0 0 24 24" className="h-[14px] w-[14px]" aria-hidden>
       <path {...common} d="m8 8 8 8M16 8l-8 8" />
@@ -419,7 +901,7 @@ function WorkspaceActionIcon({ name }: { name: WorkspaceActionIconName }) {
 }
 
 function workspaceActionButtonClassName(iconOnly = false): string {
-  return `inline-flex h-6 min-h-6 items-center justify-center gap-1 rounded border border-stone-200 text-[11px] leading-none text-stone-500 hover:bg-stone-100 hover:border-stone-300 active:bg-stone-200 ${
+  return `inline-flex h-6 min-h-6 shrink-0 items-center justify-center gap-1 rounded border border-stone-200 text-[11px] leading-none text-stone-500 hover:bg-stone-100 hover:border-stone-300 active:bg-stone-200 ${
     iconOnly ? "w-6 px-0" : "px-1.5 whitespace-nowrap"
   } disabled:cursor-not-allowed disabled:opacity-50`;
 }
@@ -643,6 +1125,7 @@ export function RequirementWorkspaceModal({
   hiddenItemColumnKeys = [],
   hiddenBusinessFields = [],
   canViewPrices = true,
+  canSendManagementEmail = false,
   currentUser = null,
   userDirectory = [],
   loadingUsers = false,
@@ -657,6 +1140,7 @@ export function RequirementWorkspaceModal({
   const [selectedObservationItemIds, setSelectedObservationItemIds] = useState<string[]>([]);
   const [filteredObservationItemIds, setFilteredObservationItemIds] = useState<string[]>([]);
   const [selectedObservationId, setSelectedObservationId] = useState<string | null>(null);
+  const [copyStatusMessage, setCopyStatusMessage] = useState("");
   const generalSnapshotRef = useRef("");
   const localEvidenceUrlSetRef = useRef<Set<string>>(new Set());
   const hiddenBusinessFieldSet = useMemo(
@@ -725,6 +1209,7 @@ export function RequirementWorkspaceModal({
       setSelectedObservationItemIds([]);
       setFilteredObservationItemIds([]);
       setSelectedObservationId(null);
+      setCopyStatusMessage("");
       generalSnapshotRef.current = "";
     }
   }, [open, draft?.id, revokeAllLocalEvidenceUrls]);
@@ -836,11 +1321,6 @@ export function RequirementWorkspaceModal({
     () => collectObservationEmailAttachments(filteredEmailObservations),
     [filteredEmailObservations],
   );
-  const allObservationEmailAttachments = useMemo(
-    () => collectObservationEmailAttachments(observations),
-    [observations],
-  );
-
   useEffect(() => {
     if (!selectedItem) {
       setSelectedObservationId(null);
@@ -1173,12 +1653,18 @@ export function RequirementWorkspaceModal({
         proyecto,
         cliente,
         unidadTrabajo,
+        cotizacionCodigo,
+        cotizacionOc,
         solicitante: draft?.solicitante_rq ?? "",
         fechaSolicitud: formatDate(draft?.fecha_solicitud ?? "") || "-",
+        fechaEntrega: formatDate(draft?.fecha_requerida ?? "") || "-",
+        updatedAt: nowPreviewTimestamp(),
         estado: draft?.estado ?? "",
         items,
+        totalsByCurrency,
+        canViewPrices,
       }),
-    [cliente, draft?.codigo, draft?.estado, draft?.fecha_solicitud, draft?.solicitante_rq, items, proyecto, unidadTrabajo],
+    [canViewPrices, cliente, cotizacionCodigo, cotizacionOc, draft?.codigo, draft?.estado, draft?.fecha_requerida, draft?.fecha_solicitud, draft?.solicitante_rq, items, proyecto, totalsByCurrency, unidadTrabajo],
   );
 
   const buildRequirementHtmlEmail = useCallback(
@@ -1190,12 +1676,72 @@ export function RequirementWorkspaceModal({
         proyecto,
         cliente,
         unidadTrabajo,
+        cotizacionCodigo,
+        cotizacionOc,
         solicitante: draft?.solicitante_rq ?? "",
         fechaSolicitud: formatDate(draft?.fecha_solicitud ?? "") || "-",
+        fechaEntrega: formatDate(draft?.fecha_requerida ?? "") || "-",
+        updatedAt: nowPreviewTimestamp(),
         estado: draft?.estado ?? "",
         items,
+        totalsByCurrency,
+        canViewPrices,
       }),
-    [cliente, draft?.codigo, draft?.estado, draft?.fecha_solicitud, draft?.solicitante_rq, items, proyecto, unidadTrabajo],
+    [canViewPrices, cliente, cotizacionCodigo, cotizacionOc, draft?.codigo, draft?.estado, draft?.fecha_requerida, draft?.fecha_solicitud, draft?.solicitante_rq, items, proyecto, totalsByCurrency, unidadTrabajo],
+  );
+
+  const buildManagementPlainEmail = useCallback(
+    ({ title, link }: { title: string; link: string }) =>
+      buildManagementEmailPlainBody({
+        title,
+        link,
+        codigo: draft?.codigo ?? "",
+        proyecto,
+        cliente,
+        unidadTrabajo,
+        cotizacionCodigo,
+        cotizacionOc,
+        solicitante: draft?.solicitante_rq ?? "",
+        responsable: draft?.responsable ?? "",
+        fechaSolicitud: formatDate(draft?.fecha_solicitud ?? "") || "-",
+        fechaEntrega: formatDate(draft?.fecha_requerida ?? "") || "-",
+        updatedAt: nowPreviewTimestamp(),
+        estado: draft?.estado ?? "",
+        area: draft?.area ?? "",
+        observacionesGenerales: draft?.observaciones ?? "",
+        items,
+        observations,
+        totalsByCurrency,
+        canViewPrices,
+      }),
+    [canViewPrices, cliente, cotizacionCodigo, cotizacionOc, draft?.area, draft?.codigo, draft?.estado, draft?.fecha_requerida, draft?.fecha_solicitud, draft?.observaciones, draft?.responsable, draft?.solicitante_rq, items, observations, proyecto, totalsByCurrency, unidadTrabajo],
+  );
+
+  const buildManagementHtmlEmail = useCallback(
+    ({ title, link }: { title: string; link: string }) =>
+      buildManagementEmailHtmlBody({
+        title,
+        link,
+        codigo: draft?.codigo ?? "",
+        proyecto,
+        cliente,
+        unidadTrabajo,
+        cotizacionCodigo,
+        cotizacionOc,
+        solicitante: draft?.solicitante_rq ?? "",
+        responsable: draft?.responsable ?? "",
+        fechaSolicitud: formatDate(draft?.fecha_solicitud ?? "") || "-",
+        fechaEntrega: formatDate(draft?.fecha_requerida ?? "") || "-",
+        updatedAt: nowPreviewTimestamp(),
+        estado: draft?.estado ?? "",
+        area: draft?.area ?? "",
+        observacionesGenerales: draft?.observaciones ?? "",
+        items,
+        observations,
+        totalsByCurrency,
+        canViewPrices,
+      }),
+    [canViewPrices, cliente, cotizacionCodigo, cotizacionOc, draft?.area, draft?.codigo, draft?.estado, draft?.fecha_requerida, draft?.fecha_solicitud, draft?.observaciones, draft?.responsable, draft?.solicitante_rq, items, observations, proyecto, totalsByCurrency, unidadTrabajo],
   );
 
   const buildObservationPlainEmail = useCallback(
@@ -1288,82 +1834,217 @@ export function RequirementWorkspaceModal({
     generalSnapshotRef.current = generalComparable;
   }
 
+  const draftCode = draft.codigo;
   const requirementEmailSubject = [
     cotizacionCodigo,
     cotizacionOc || "SIN OC",
-    draft.codigo,
+    draftCode,
     proyecto,
   ].map((part) => String(part || "-").trim() || "-").join(" / ");
   const requirementEmailRows = [
-    { label: "Código RQ", value: draft.codigo },
+    { label: "Código RQ", value: draftCode },
     { label: "Proyecto", value: proyecto },
     { label: "Cliente", value: cliente },
     { label: "Unidad de trabajo", value: unidadTrabajo },
     { label: "Solicitante", value: draft.solicitante_rq },
     { label: "Fecha solicitud", value: formatDate(draft.fecha_solicitud) || "-" },
+    { label: "Fecha entrega", value: formatDate(draft.fecha_requerida) || "-" },
     { label: "Estado", value: draft.estado },
+  ];
+  const managementEmailRows = [
+    ...requirementEmailRows,
+    { label: "Responsable", value: draft.responsable },
+    { label: "Avance", value: `${statusIndicators.progress}%` },
+    { label: "Pendientes", value: statusIndicators.pending },
+    { label: "Observaciones abiertas", value: observations.filter((observation) => observation.status !== "resolved").length },
+    ...(canViewPrices ? [{ label: "Costo registrado", value: formatTotalsByCurrency(totalsByCurrency) }] : []),
   ];
   const isResourceCatalogVisible = catalogPanelOpen && canUseResourceCatalog && canEditItems;
   const isObservationPanelVisible = activeWorkspaceTab === "recursos" && Boolean(selectedItem) && !isResourceCatalogVisible;
   const hasWorkspaceSidePanel = isResourceCatalogVisible || isObservationPanelVisible;
+  const requirementLinkPath = `/requerimientos?rqCode=${encodeURIComponent(draftCode)}`;
+  const requirementLink = buildPublicAppUrl(requirementLinkPath);
+  const requirementTitle = `Requerimiento ${draftCode}`;
+  const managementSubject = `Estado a Gerencia / ${draftCode} / ${proyecto || "-"}`;
+  const managementTitle = `Estado gerencial ${draftCode}`;
+  const managementPreviewDescription = canSendManagementEmail
+    ? "Preview seguro: esta accion no envia Gmail; copia el HTML para revision manual."
+    : "Preview seguro: disponible como consulta/copia; el envio Gmail gerencial queda reservado para una fase futura.";
+
+  async function copyPreparedEmailHtml(
+    html: string,
+    plain: string,
+    successMessage: string,
+  ) {
+    try {
+      await copyEmailHtmlWithFallback(html, plain);
+      setCopyStatusMessage(successMessage);
+      window.setTimeout(() => setCopyStatusMessage(""), 2600);
+    } catch {
+      setCopyStatusMessage("No se pudo copiar. Revisa permisos del portapapeles.");
+      window.setTimeout(() => setCopyStatusMessage(""), 3200);
+    }
+  }
+
+  function copyRequirementHtml() {
+    const plain = buildRequirementPlainEmail({ title: requirementTitle, link: requirementLink });
+    const html = buildRequirementHtmlEmail({ title: requirementTitle, link: requirementLink });
+    void copyPreparedEmailHtml(html, plain, "Requerimiento copiado");
+  }
+
+  function copyManagementHtml() {
+    const plain = buildManagementPlainEmail({ title: managementTitle, link: requirementLink });
+    const html = buildManagementHtmlEmail({ title: managementTitle, link: requirementLink });
+    void copyPreparedEmailHtml(html, plain, "Reporte gerencial copiado");
+  }
+
+  function copySelectedObservationsHtml() {
+    if (selectedEmailObservations.length === 0) return;
+    const title = `Observaciones seleccionadas ${draftCode}`;
+    const link = buildPublicAppUrl(`${requirementLinkPath}&scope=seleccionados`);
+    const plain = buildSelectedObservationPlainEmail({ title, link });
+    const html = buildSelectedObservationHtmlEmail({ title, link });
+    void copyPreparedEmailHtml(html, plain, "Observaciones seleccionadas copiadas");
+  }
+
+  function copyFilteredObservationsHtml() {
+    if (filteredEmailObservations.length === 0) return;
+    const title = `Observaciones filtradas ${draftCode}`;
+    const link = buildPublicAppUrl(`${requirementLinkPath}&scope=filtrados`);
+    const plain = buildFilteredObservationPlainEmail({ title, link });
+    const html = buildFilteredObservationHtmlEmail({ title, link });
+    void copyPreparedEmailHtml(html, plain, "Observaciones filtradas copiadas");
+  }
+
+  function copyAllObservationsHtml() {
+    if (observations.length === 0) return;
+    const title = `Observaciones ${draftCode}`;
+    const link = buildPublicAppUrl(`${requirementLinkPath}&tab=observaciones`);
+    const plain = buildObservationPlainEmail({ title, link });
+    const html = buildObservationHtmlEmail({ title, link });
+    void copyPreparedEmailHtml(html, plain, "Observaciones copiadas");
+  }
+
   const workspaceActions = (
-    <div className="flex min-w-0 flex-wrap items-center justify-end gap-1.5">
-      <EmailThreadButton
-        kind="requirement"
-        entityCode={draft.codigo}
-        subject={requirementEmailSubject}
-        title={`Requerimiento ${draft.codigo}`}
-        linkPath={`/requerimientos?rqCode=${encodeURIComponent(draft.codigo)}`}
-        summaryRows={requirementEmailRows}
-        buildPlainBody={buildRequirementPlainEmail}
-        buildHtmlBody={buildRequirementHtmlEmail}
-        showHtmlPreview
-        sendEnabled
-        className={workspaceActionButtonClassName()}
-        buttonLabel="Correo"
-      />
-      <button onClick={onCancel} className={workspaceActionButtonClassName()}>
-        <WorkspaceActionIcon name="cancel" />
-        <span>Cancelar</span>
-      </button>
-      <button onClick={() => void handleSaveTable(items)} disabled={isSaving} className={workspaceActionButtonClassName()}>
-        <WorkspaceActionIcon name="save" />
-        <span>{isSaving ? "Guardando..." : "Guardar"}</span>
-      </button>
-      <button
-        onClick={onClose}
-        title="Cerrar"
-        aria-label="Cerrar"
-        className={workspaceActionButtonClassName(true)}
-      >
-        <WorkspaceActionIcon name="close" />
-      </button>
+    <div className="relative flex min-w-0 max-w-full flex-wrap items-center justify-end gap-1.5">
+      <div className="flex shrink-0 items-center justify-end gap-1.5">
+        <EmailThreadButton
+          kind="requirement"
+          entityCode={draftCode}
+          subject={requirementEmailSubject}
+          title={requirementTitle}
+          linkPath={requirementLinkPath}
+          summaryRows={requirementEmailRows}
+          buildPlainBody={buildRequirementPlainEmail}
+          buildHtmlBody={buildRequirementHtmlEmail}
+          showHtmlPreview
+          sendEnabled
+          emailPurpose="operational_request"
+          className={workspaceActionButtonClassName()}
+          buttonLabel="Enviar RQ"
+          modalTitle="Enviar requerimiento"
+          sendButtonLabel="Enviar requerimiento"
+        />
+        <details className="relative shrink-0">
+          <summary className={`${workspaceActionButtonClassName()} cursor-pointer list-none`}>
+            <WorkspaceActionIcon name="menu" />
+            <span>Acciones RQ</span>
+          </summary>
+          <div className="absolute right-0 z-20 mt-1 w-48 rounded border border-stone-200 bg-white p-1 shadow-lg">
+            <button
+              type="button"
+              onClick={copyRequirementHtml}
+              className="flex w-full items-center gap-1.5 rounded px-2 py-1.5 text-left text-[11px] font-medium text-stone-600 hover:bg-stone-50"
+            >
+              <WorkspaceActionIcon name="copy" />
+              <span className="whitespace-nowrap">Copiar RQ</span>
+            </button>
+            <EmailThreadButton
+              kind="requirement"
+              emailPurpose="management_status"
+              entityCode={draftCode}
+              subject={managementSubject}
+              title={managementTitle}
+              linkPath={requirementLinkPath}
+              summaryRows={managementEmailRows}
+              buildPlainBody={buildManagementPlainEmail}
+              buildHtmlBody={buildManagementHtmlEmail}
+              showHtmlPreview
+              previewOnly
+              className="flex w-full items-center gap-1.5 rounded px-2 py-1.5 text-left text-[11px] font-medium text-stone-600 hover:bg-stone-50"
+              buttonLabel="Reporte gerencial"
+              modalTitle="Reporte gerencial"
+              modalDescription={managementPreviewDescription}
+            />
+            <button
+              type="button"
+              onClick={copyManagementHtml}
+              title="Copiar reporte gerencial"
+              className="flex w-full items-center gap-1.5 rounded px-2 py-1.5 text-left text-[11px] font-medium text-stone-600 hover:bg-stone-50"
+            >
+              <WorkspaceActionIcon name="copy" />
+              <span className="whitespace-nowrap">Copiar reporte</span>
+            </button>
+          </div>
+        </details>
+        <details className="relative shrink-0">
+          <summary className={`${workspaceActionButtonClassName()} cursor-pointer list-none`}>
+            <WorkspaceActionIcon name="menu" />
+            <span>Observaciones</span>
+          </summary>
+          <div className="absolute right-0 z-20 mt-1 w-52 rounded border border-stone-200 bg-white p-1 shadow-lg">
+            <button
+              type="button"
+              onClick={copySelectedObservationsHtml}
+              disabled={selectedEmailObservations.length === 0}
+              className="block w-full rounded px-2 py-1.5 text-left text-[11px] font-medium text-stone-600 hover:bg-stone-50 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              Copiar seleccionadas ({selectedEmailObservations.length})
+            </button>
+            <button
+              type="button"
+              onClick={copyFilteredObservationsHtml}
+              disabled={filteredEmailObservations.length === 0}
+              className="block w-full rounded px-2 py-1.5 text-left text-[11px] font-medium text-stone-600 hover:bg-stone-50 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              Copiar filtradas ({filteredEmailObservations.length})
+            </button>
+            <button
+              type="button"
+              onClick={copyAllObservationsHtml}
+              disabled={observations.length === 0}
+              className="block w-full rounded px-2 py-1.5 text-left text-[11px] font-medium text-stone-600 hover:bg-stone-50 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              Copiar todas ({observations.length})
+            </button>
+          </div>
+        </details>
+      </div>
+      <div className="flex shrink-0 items-center justify-end gap-1.5">
+        <button onClick={onCancel} className={workspaceActionButtonClassName()}>
+          <WorkspaceActionIcon name="cancel" />
+          <span>Cancelar</span>
+        </button>
+        <button onClick={() => void handleSaveTable(items)} disabled={isSaving} className={workspaceActionButtonClassName()}>
+          <WorkspaceActionIcon name="save" />
+          <span>{isSaving ? "Guardando..." : "Guardar"}</span>
+        </button>
+        <button
+          onClick={onClose}
+          title="Cerrar"
+          aria-label="Cerrar"
+          className={workspaceActionButtonClassName(true)}
+        >
+          <WorkspaceActionIcon name="close" />
+        </button>
+      </div>
+      {copyStatusMessage ? (
+        <span className="pointer-events-none absolute right-0 top-full z-30 mt-1 rounded border border-emerald-200 bg-emerald-50 px-2 py-1 text-[11px] font-semibold text-emerald-700 shadow-sm" aria-live="polite">
+          {copyStatusMessage}
+        </span>
+      ) : null}
     </div>
   );
-  const observationEmailRows = [
-    { label: "Código RQ", value: draft.codigo },
-    { label: "Proyecto", value: proyecto },
-    { label: "Cliente", value: cliente },
-    { label: "Observaciones", value: observations.length },
-    { label: "Respuestas", value: observations.reduce((total, observation) => total + observation.responses.length, 0) },
-    { label: "Evidencias locales", value: observations.reduce((total, observation) => total + observationEvidenceCount(observation), 0) },
-  ];
-  const selectedObservationEmailRows = [
-    { label: "Código RQ", value: draft.codigo },
-    { label: "Proyecto", value: proyecto },
-    { label: "Cliente", value: cliente },
-    { label: "Recursos seleccionados", value: selectedObservationItems.length },
-    { label: "Observaciones", value: selectedEmailObservations.length },
-    { label: "Adjuntos preparados", value: selectedEmailAttachments.length },
-  ];
-  const filteredObservationEmailRows = [
-    { label: "Código RQ", value: draft.codigo },
-    { label: "Proyecto", value: proyecto },
-    { label: "Cliente", value: cliente },
-    { label: "Recursos filtrados", value: filteredObservedItems.length },
-    { label: "Observaciones", value: filteredEmailObservations.length },
-    { label: "Adjuntos preparados", value: filteredEmailAttachments.length },
-  ];
   const tabButtonClassName = (tab: WorkspaceTab) =>
     `inline-flex h-7 items-center rounded border px-2 text-[11px] font-semibold ${
       activeWorkspaceTab === tab
@@ -1386,39 +2067,8 @@ export function RequirementWorkspaceModal({
           </span>
         </div>
       </div>
-      <div className="flex flex-wrap items-center justify-end gap-1.5">
-        <EmailThreadButton
-          kind="requirement"
-          entityCode={`${draft.codigo}-observaciones-seleccionadas`}
-          subject={`Observaciones SGP seleccionadas / ${draft.codigo} / ${proyecto || "-"}`}
-          title={`Observaciones seleccionadas ${draft.codigo}`}
-          linkPath={`/requerimientos?rqCode=${encodeURIComponent(draft.codigo)}&scope=seleccionados`}
-          summaryRows={selectedObservationEmailRows}
-          buildPlainBody={buildSelectedObservationPlainEmail}
-          buildHtmlBody={buildSelectedObservationHtmlEmail}
-          showHtmlPreview
-          previewOnly
-          disabled={selectedObservationItems.length === 0}
-          attachments={selectedEmailAttachments}
-          className={workspaceActionButtonClassName()}
-          buttonLabel={`Enviar seleccionados (${selectedObservationItems.length})`}
-        />
-        <EmailThreadButton
-          kind="requirement"
-          entityCode={`${draft.codigo}-observaciones-filtradas`}
-          subject={`Observaciones SGP filtradas / ${draft.codigo} / ${proyecto || "-"}`}
-          title={`Observaciones filtradas ${draft.codigo}`}
-          linkPath={`/requerimientos?rqCode=${encodeURIComponent(draft.codigo)}&scope=filtrados`}
-          summaryRows={filteredObservationEmailRows}
-          buildPlainBody={buildFilteredObservationPlainEmail}
-          buildHtmlBody={buildFilteredObservationHtmlEmail}
-          showHtmlPreview
-          previewOnly
-          disabled={filteredObservedItems.length === 0}
-          attachments={filteredEmailAttachments}
-          className={workspaceActionButtonClassName()}
-          buttonLabel={`Enviar filtrados (${filteredObservedItems.length})`}
-        />
+      <div className="text-[10.5px] font-medium text-stone-500">
+        Usa el menú Observaciones de la barra superior para copiar seleccionadas, filtradas o todas.
       </div>
     </div>
   );
@@ -1467,21 +2117,9 @@ export function RequirementWorkspaceModal({
           >
             Abrir RQ
           </a>
-          <EmailThreadButton
-            kind="requirement"
-            entityCode={`${draft.codigo}-observaciones`}
-            subject={`Observaciones SGP / ${draft.codigo} / ${proyecto || "-"}`}
-            title={`Observaciones ${draft.codigo}`}
-            linkPath={`/requerimientos?rqCode=${encodeURIComponent(draft.codigo)}&tab=observaciones`}
-            summaryRows={observationEmailRows}
-            buildPlainBody={buildObservationPlainEmail}
-            buildHtmlBody={buildObservationHtmlEmail}
-            showHtmlPreview
-            previewOnly
-            attachments={allObservationEmailAttachments}
-            className={workspaceActionButtonClassName()}
-            buttonLabel="Correo preview"
-          />
+          <span className="rounded border border-stone-200 bg-stone-50 px-2 py-1.5 text-[11px] font-medium text-stone-500">
+            Copia disponible en Observaciones
+          </span>
         </div>
       </div>
       <div className="grid min-h-0 flex-1 grid-cols-1 gap-2 overflow-hidden p-2 lg:grid-cols-[minmax(360px,0.9fr)_minmax(0,1.1fr)]">
@@ -1651,7 +2289,7 @@ export function RequirementWorkspaceModal({
               <div className="flex min-w-0 flex-col">
                 <div className="mb-1 flex min-h-6 items-center justify-between gap-2">
                   <FieldLabelIcon icon="file-text" label="Datos generales" className="text-[11px] font-medium" />
-                  <div className="flex min-w-0 flex-wrap items-center justify-end gap-1.5">
+                  <div className="flex min-w-0 flex-col items-end gap-1">
                     {hasWorkspaceSidePanel ? workspaceActions : null}
                     <FieldLockButton
                       locked={!isGeneralInfoEditing}

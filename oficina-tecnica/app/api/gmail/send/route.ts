@@ -12,6 +12,7 @@ import { assertRateLimit } from "@/lib/api/serverAuth";
 export const runtime = "nodejs";
 
 type EntityType = "quotation" | "requirement";
+type EmailPurpose = "operational_request" | "management_status" | "observation_trace";
 type RecipientKind = "to" | "cc" | "bcc";
 type AttemptStatus = "pending" | "sent" | "failed" | "partial";
 type SendResultStatus = "success" | "pending" | "partial";
@@ -26,6 +27,7 @@ type SendPayload = {
   htmlBody?: string;
   entityType?: EntityType;
   entityCode?: string;
+  emailPurpose?: EmailPurpose;
   idempotencyKey?: string;
 };
 
