@@ -12,7 +12,7 @@ import { assertRateLimit } from "@/lib/api/serverAuth";
 export const runtime = "nodejs";
 
 type EntityType = "quotation" | "requirement";
-type EmailPurpose = "operational_request" | "management_status" | "observation_trace";
+type EmailPurpose = "operational_request" | "management_report" | "observation_trace";
 type RecipientKind = "to" | "cc" | "bcc";
 type AttemptStatus = "pending" | "sent" | "failed" | "partial";
 type SendResultStatus = "success" | "pending" | "partial";
@@ -100,7 +100,7 @@ function isEmailIntegrationSchemaError(error: unknown): boolean {
     || code === "42703"
     || code === "PGRST204"
     || /does not exist|could not find|no existe|schema cache/i.test(text);
-  const mentionsEmailIntegration = /email_send_attempts|references_header|last_error/i.test(text);
+  const mentionsEmailIntegration = /email_send_attempts|references_header|last_error|email_purpose/i.test(text);
   return mentionsMissingObject && mentionsEmailIntegration;
 }
 
@@ -162,6 +162,35 @@ function sendResultResponse(
 function parseEntityType(value: unknown): EntityType {
   if (value === "quotation" || value === "requirement") return value;
   throw new ApiError(400, "Tipo de entidad inválido.");
+}
+
+function parseEmailPurpose(value: unknown): EmailPurpose {
+
+
+
+
+  const purpose = String(value ?? "").trim().toLowerCase();
+  if (
+    !purpose
+    || purpose === "operational_request"
+    || purpose === "requirement"
+    || purpose === "operational"
+  ) {
+    return "operational_request";
+  }
+  if (
+    purpose === "management_report"
+    || purpose === "management_status"
+  ) {
+    return "management_report";
+  }
+  if (
+    purpose === "observation_trace"
+    || purpose === "observations"
+  ) {
+    return "observation_trace";
+  }
+  throw new ApiError(400, "Propósito de correo inválido.");
 }
 
 function moduleKeyForEntity(entityType: EntityType): "cotizaciones" | "requerimientos" {
@@ -242,6 +271,7 @@ async function findThread(
     accountId: string;
     entityType: EntityType;
     entityCode: string;
+    emailPurpose: EmailPurpose;
   },
 ): Promise<EmailThreadRow | null> {
   const { data, error } = await supabase
@@ -251,6 +281,7 @@ async function findThread(
     .eq("gmail_account_id", input.accountId)
     .eq("entity_type", input.entityType)
     .eq("entity_code", input.entityCode)
+    .eq("email_purpose", input.emailPurpose)
     .order("updated_at", { ascending: false })
     .limit(1)
     .maybeSingle();
@@ -281,6 +312,7 @@ async function createPendingAttempt(
     accountId: string;
     entityType: EntityType;
     entityCode: string;
+    emailPurpose: EmailPurpose;
     subject: string;
     idempotencyKey: string;
     recipients: Array<{ email: string; type: RecipientKind }>;
@@ -293,6 +325,7 @@ async function createPendingAttempt(
       gmail_account_id: input.accountId,
       entity_type: input.entityType,
       entity_code: input.entityCode,
+      email_purpose: input.emailPurpose,
       subject: input.subject,
       idempotency_key: input.idempotencyKey,
       status: "pending",
@@ -417,6 +450,7 @@ export async function GET(request: NextRequest) {
     const entityType = parseEntityType(url.searchParams.get("entityType"));
     const entityCode = String(url.searchParams.get("entityCode") ?? "").trim();
     const accountId = String(url.searchParams.get("accountId") ?? "").trim();
+    const emailPurpose = parseEmailPurpose(url.searchParams.get("emailPurpose"));
     if (!entityCode) throw new ApiError(400, "Falta el código de la entidad.");
     if (!accountId) throw new ApiError(400, "Selecciona una cuenta Gmail de origen.");
 
@@ -430,7 +464,7 @@ export async function GET(request: NextRequest) {
     if (canUse !== true) throw new ApiError(403, "No tienes permiso para consultar hilos de este módulo.");
 
     const account = await findOwnedAccount(supabase, userEmail, accountId);
-    const thread = await findThread(supabase, { userEmail: canonicalUserEmail, accountId: account.id, entityType, entityCode });
+    const thread = await findThread(supabase, { userEmail: canonicalUserEmail, accountId: account.id, entityType, entityCode, emailPurpose });
     return NextResponse.json({
       exists: Boolean(thread?.gmail_thread_id),
       threadId: thread?.gmail_thread_id ?? null,
@@ -455,6 +489,7 @@ export async function POST(request: NextRequest) {
     const plainBody = normalizeBody(payload.plainBody, "texto plano", MAX_PLAIN_BODY_CHARS);
     const htmlBody = normalizeBody(payload.htmlBody, "HTML", MAX_HTML_BODY_CHARS);
     const entityType = parseEntityType(payload.entityType);
+    const emailPurpose = parseEmailPurpose(payload.emailPurpose);
     const entityCode = String(payload.entityCode ?? "").trim();
     const accountId = String(payload.accountId ?? "").trim();
     const idempotencyKey = String(payload.idempotencyKey ?? "").trim();
@@ -482,6 +517,7 @@ export async function POST(request: NextRequest) {
       accountId: account.id,
       entityType,
       entityCode,
+      emailPurpose,
       subject,
       idempotencyKey,
       recipients: recipientsForStorage,
@@ -490,7 +526,7 @@ export async function POST(request: NextRequest) {
     if (replay) return replayAttemptResponse(attempt);
 
     pendingAttemptId = attempt.id;
-    const existingThread = await findThread(supabase, { userEmail: canonicalUserEmail, accountId: account.id, entityType, entityCode });
+    const existingThread = await findThread(supabase, { userEmail: canonicalUserEmail, accountId: account.id, entityType, entityCode, emailPurpose });
     const tokenData = await refreshGmailAccessToken(account.refresh_token);
     const tokenExpiresAt = tokenData.expires_in
       ? new Date(Date.now() + tokenData.expires_in * 1000).toISOString()
@@ -545,6 +581,7 @@ export async function POST(request: NextRequest) {
         gmail_account_id: account.id,
         entity_type: entityType,
         entity_code: entityCode,
+        email_purpose: emailPurpose,
         subject: subjectForSend,
         gmail_thread_id: sent.threadId,
         last_message_id: messageId,
@@ -553,7 +590,7 @@ export async function POST(request: NextRequest) {
         last_sent_at: now,
         recipients: recipientsForStorage,
       },
-      { onConflict: "user_email,gmail_account_id,entity_type,entity_code" },
+      { onConflict: "user_email,gmail_account_id,entity_type,entity_code,email_purpose" },
     );
 
     if (threadError) {

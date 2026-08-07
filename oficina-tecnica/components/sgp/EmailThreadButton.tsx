@@ -1,12 +1,13 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { authFetch } from "@/lib/api/authFetch";
 import { buildPublicAppUrl } from "@/lib/app/publicUrl";
 import { FieldLabelIcon } from "@/components/sgp/ui/FieldLabelIcon";
 
 export type EmailThreadKind = "quotation" | "requirement";
-export type EmailPurpose = "operational_request" | "management_status" | "observation_trace";
+export type EmailPurpose = "operational_request" | "management_report" | "observation_trace";
 
 type EmailThreadButtonProps = {
   kind: EmailThreadKind;
@@ -382,6 +383,7 @@ export function EmailThreadButton({
         accountId,
         entityType: kind,
         entityCode,
+        emailPurpose,
       });
       const response = await authJson<ThreadState>(`/api/gmail/send?${params.toString()}`);
       setThreadState(response);
@@ -396,7 +398,7 @@ export function EmailThreadButton({
     } finally {
       setIsLoadingThread(false);
     }
-  }, [entityCode, kind]);
+  }, [emailPurpose, entityCode, kind]);
 
   async function loadGmailData(options?: { preserveStatus?: boolean }) {
     setIsLoading(true);
@@ -660,6 +662,233 @@ export function EmailThreadButton({
     setIsPreviewFullscreen(false);
   }
 
+  const modal = open ? (
+    <div className="fixed inset-0 z-[120] isolate flex items-center justify-center overflow-hidden bg-black/30 p-2 sm:p-4">
+      <div
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby={modalTitleId}
+        className={`relative z-10 flex min-h-0 min-w-0 flex-col overflow-hidden rounded-lg border border-border bg-panel shadow-xl ${
+          isPreviewFullscreen
+            ? "h-[96vh] max-h-[96vh] w-[98vw] max-w-[98vw]"
+            : "h-[90vh] max-h-[90vh] w-[calc(100vw-1rem)] max-w-[1180px] md:min-w-[760px] sm:w-[92vw]"
+        }`}
+      >
+        <div className="flex flex-none items-center justify-between gap-2 border-b border-border px-3 py-2">
+          <div className="min-w-0">
+            <p id={modalTitleId} className="truncate text-[12px] font-semibold text-stone-800">
+              {modalTitle || "Vista previa de correo HTML"}
+            </p>
+            <p className="truncate text-[10.5px] text-stone-500">
+              {modalDescription ||
+                (canSend
+                  ? "El remitente es una cuenta Gmail conectada del usuario autenticado."
+                  : "Modo preview: no se consultan cuentas, contactos ni se envia Gmail real.")}
+            </p>
+          </div>
+          <div className="flex shrink-0 items-center gap-1.5">
+            {showHtmlPreview ? (
+              <button
+                type="button"
+                onClick={() => setIsPreviewFullscreen((current) => !current)}
+                className="inline-flex h-7 items-center gap-1.5 rounded border border-stone-200 bg-white px-2 text-[11px] font-medium text-stone-600 hover:bg-stone-100 focus:outline-none focus:ring-2 focus:ring-teal-500"
+                aria-label={isPreviewFullscreen ? "Salir de pantalla completa" : "Pantalla completa"}
+                title={isPreviewFullscreen ? "Salir de pantalla completa" : "Pantalla completa"}
+              >
+                <FieldLabelIcon icon="layout-grid" label={isPreviewFullscreen ? "Salir de pantalla completa" : "Pantalla completa"} />
+              </button>
+            ) : null}
+            <button
+              type="button"
+              onClick={closeModal}
+              disabled={isSending}
+              className="h-7 rounded border border-stone-200 bg-white px-2 text-[11px] text-stone-600 hover:bg-stone-100 focus:outline-none focus:ring-2 focus:ring-teal-500 disabled:cursor-not-allowed disabled:opacity-50"
+              aria-label="Cerrar"
+              title="Cerrar"
+            >
+              Cerrar
+            </button>
+          </div>
+        </div>
+        <div className="flex min-h-0 flex-1 flex-col gap-2 overflow-hidden p-3">
+          <div className="flex-none space-y-2">
+            {canSend ? (
+              <>
+                <label className="block text-[11px] font-medium text-stone-600">
+                  De
+                  <div className="mt-1 flex gap-2">
+                    <select
+                      value={selectedAccountId}
+                      onChange={(event) => setSelectedAccountId(event.target.value)}
+                      disabled={isLoading || isSending}
+                      className="h-8 min-w-0 flex-1 rounded border border-stone-200 bg-white px-2 text-[12px] outline-none focus:border-teal-500 disabled:cursor-not-allowed disabled:bg-stone-50"
+                    >
+                      {accounts.length ? (
+                        accounts.map((account) => (
+                          <option key={account.id} value={account.id}>
+                            {account.display_name || account.google_email} · {account.google_email}
+                          </option>
+                        ))
+                      ) : (
+                        <option value="">Sin Gmail conectado</option>
+                      )}
+                    </select>
+                    <button
+                      type="button"
+                      onClick={() => void connectGmail()}
+                      disabled={isSending}
+                      className="rounded border border-teal-700 bg-white px-3 text-[11px] font-semibold text-teal-700 hover:bg-teal-50 focus:outline-none focus:ring-2 focus:ring-teal-500 disabled:cursor-not-allowed disabled:opacity-50"
+                    >
+                      {accounts.length ? "Cambiar" : "Conectar Gmail"}
+                    </button>
+                  </div>
+                </label>
+                <RecipientInput
+                  field="to"
+                  label="Para"
+                  values={recipients.to}
+                  draft={recipientDrafts.to}
+                  disabled={isSending}
+                  listId={contactListId}
+                  onDraftChange={changeRecipientDraft}
+                  onCommit={commitRecipientDraft}
+                  onRemove={removeRecipient}
+                />
+                <button
+                  type="button"
+                  onClick={() => setShowCcBcc((current) => !current)}
+                  disabled={isSending}
+                  className="text-[11px] font-semibold text-teal-700 underline-offset-2 hover:underline focus:outline-none focus:ring-2 focus:ring-teal-500 disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  {showCcBcc ? "Ocultar CC/CCO" : "Mostrar CC/CCO"}
+                </button>
+                {showCcBcc ? (
+                  <div className="grid grid-cols-1 gap-2 md:grid-cols-2">
+                    <RecipientInput
+                      field="cc"
+                      label="CC"
+                      optional
+                      values={recipients.cc}
+                      draft={recipientDrafts.cc}
+                      disabled={isSending}
+                      listId={contactListId}
+                      onDraftChange={changeRecipientDraft}
+                      onCommit={commitRecipientDraft}
+                      onRemove={removeRecipient}
+                    />
+                    <RecipientInput
+                      field="bcc"
+                      label="CCO"
+                      optional
+                      values={recipients.bcc}
+                      draft={recipientDrafts.bcc}
+                      disabled={isSending}
+                      listId={contactListId}
+                      onDraftChange={changeRecipientDraft}
+                      onCommit={commitRecipientDraft}
+                      onRemove={removeRecipient}
+                    />
+                  </div>
+                ) : null}
+                <datalist id={contactListId}>
+                  {directoryOptions.map((option) => (
+                    <option key={option.id} value={option.email}>
+                      {option.label} · {option.source === "user" ? "usuario" : "contacto"}
+                    </option>
+                  ))}
+                </datalist>
+                <div className="flex flex-wrap items-center justify-between gap-2 rounded border border-stone-200 bg-stone-50 px-2 py-1.5 text-[11px]">
+                  <span className="font-semibold text-stone-700">{threadLabel}</span>
+                  {selectedAccount ? <span className="text-stone-500">Desde {selectedAccount.google_email}</span> : null}
+                </div>
+              </>
+            ) : null}
+            <label className="block text-[11px] font-medium text-stone-600">
+              Asunto
+              <input value={subject} readOnly className="mt-1 h-8 w-full rounded border border-stone-200 bg-stone-50 px-2 text-[12px]" />
+            </label>
+            <label className="block text-[11px] font-medium text-stone-600">
+              Link
+              <input value={link} readOnly className="mt-1 h-8 w-full rounded border border-stone-200 bg-stone-50 px-2 text-[12px]" />
+            </label>
+          </div>
+          {showHtmlPreview ? (
+            <div className="flex min-h-0 flex-1 flex-col text-[11px] font-medium text-stone-600">
+              <div className="flex-none">Vista previa HTML</div>
+              <div className="relative z-0 mt-1 flex min-h-[280px] flex-1 overflow-hidden rounded border border-stone-200 bg-white md:min-h-[500px]">
+                <iframe
+                  title={`Vista previa HTML - ${title}`}
+                  srcDoc={htmlBody}
+                  sandbox=""
+                  className="relative z-0 h-full w-full border-0 bg-white"
+                />
+              </div>
+            </div>
+          ) : null}
+          {attachments.length ? (
+            <div className="flex-none text-[11px] font-medium text-stone-600">
+              Adjuntos preparados
+              <div className="mt-1 max-h-[110px] overflow-auto rounded border border-stone-200 bg-white">
+                {attachments.map((attachment, index) => (
+                  <div key={`${attachment.name}-${index}`} className="border-b border-stone-100 px-2 py-1.5 last:border-b-0">
+                    <p className="truncate text-[11px] font-semibold text-stone-700" title={attachment.name}>
+                      {attachment.name}
+                    </p>
+                    <p className="mt-0.5 text-[10px] text-stone-500">
+                      {attachment.type || "archivo"}
+                      {attachment.size ? ` · ${Math.ceil(attachment.size / 1024)} KB` : ""}
+                      {attachment.url ? " · Drive" : ""}
+                    </p>
+                  </div>
+                ))}
+              </div>
+            </div>
+          ) : null}
+        </div>
+        {status ? (
+          <div
+            className={`mx-3 mb-3 flex-none rounded border px-3 py-2 text-[11px] leading-relaxed ${statusClassName(status.kind)}`}
+            aria-live="polite"
+          >
+            {status.text}
+          </div>
+        ) : null}
+        <div className="flex flex-none flex-wrap items-center justify-end gap-2 border-t border-border px-3 py-2">
+          {threadState?.gmailUrl ? (
+            <a
+              href={threadState.gmailUrl}
+              target="_blank"
+              rel="noreferrer"
+              className="rounded border border-stone-200 bg-white px-3 py-1.5 text-[11px] text-stone-700 hover:bg-stone-50 focus:outline-none focus:ring-2 focus:ring-teal-500"
+            >
+              Abrir en Gmail
+            </a>
+          ) : null}
+          <button
+            type="button"
+            onClick={() => void copyHtml()}
+            disabled={isSending}
+            className="rounded border border-stone-200 bg-white px-3 py-1.5 text-[11px] text-stone-700 hover:bg-stone-50 focus:outline-none focus:ring-2 focus:ring-teal-500 disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            Copiar HTML
+          </button>
+          {canSend ? (
+            <button
+              type="button"
+              onClick={() => void sendGmail()}
+              disabled={isSending || isLoading || !selectedAccountId}
+              className="inline-flex items-center gap-2 rounded border border-teal-700 bg-teal-700 px-3 py-1.5 text-[11px] font-semibold text-white hover:bg-teal-800 focus:outline-none focus:ring-2 focus:ring-teal-500 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              {isSending ? <span className="h-3 w-3 animate-spin rounded-full border-2 border-white/40 border-t-white" aria-hidden /> : null}
+              {isSending ? "Enviando..." : sendButtonLabel}
+            </button>
+          ) : null}
+        </div>
+      </div>
+    </div>
+  ) : null;
+  const portalRoot = typeof document === "undefined" ? null : document.body;
+
   return (
     <>
       <button
@@ -672,228 +901,7 @@ export function EmailThreadButton({
         <span aria-hidden>✉</span>
         <span>{buttonLabel}</span>
       </button>
-      {open ? (
-        <div className="fixed inset-0 z-[90] flex items-center justify-center overflow-hidden bg-black/30 p-2 sm:p-4">
-          <div
-            role="dialog"
-            aria-modal="true"
-            aria-labelledby={modalTitleId}
-            className={`flex min-h-0 min-w-0 flex-col overflow-hidden rounded-lg border border-border bg-panel shadow-xl ${
-              isPreviewFullscreen
-                ? "h-[96vh] max-h-[96vh] w-[98vw] max-w-[98vw]"
-                : "h-[90vh] max-h-[90vh] w-[calc(100vw-1rem)] max-w-[1180px] md:min-w-[760px] sm:w-[92vw]"
-            }`}
-          >
-            <div className="flex flex-none items-center justify-between gap-2 border-b border-border px-3 py-2">
-              <div className="min-w-0">
-                <p id={modalTitleId} className="truncate text-[12px] font-semibold text-stone-800">
-                  {modalTitle || "Vista previa de correo HTML"}
-                </p>
-                <p className="truncate text-[10.5px] text-stone-500">
-                  {modalDescription ||
-                    (canSend
-                      ? "El remitente es una cuenta Gmail conectada del usuario autenticado."
-                      : "Modo preview: no se consultan cuentas, contactos ni se envia Gmail real.")}
-                </p>
-              </div>
-              <div className="flex shrink-0 items-center gap-1.5">
-                {showHtmlPreview ? (
-                  <button
-                    type="button"
-                    onClick={() => setIsPreviewFullscreen((current) => !current)}
-                    className="inline-flex h-7 items-center gap-1.5 rounded border border-stone-200 bg-white px-2 text-[11px] font-medium text-stone-600 hover:bg-stone-100 focus:outline-none focus:ring-2 focus:ring-teal-500"
-                    aria-label={isPreviewFullscreen ? "Salir de pantalla completa" : "Pantalla completa"}
-                    title={isPreviewFullscreen ? "Salir de pantalla completa" : "Pantalla completa"}
-                  >
-                    <FieldLabelIcon icon="layout-grid" label={isPreviewFullscreen ? "Salir de pantalla completa" : "Pantalla completa"} />
-                  </button>
-                ) : null}
-                <button
-                  type="button"
-                  onClick={closeModal}
-                  disabled={isSending}
-                  className="h-7 rounded border border-stone-200 bg-white px-2 text-[11px] text-stone-600 hover:bg-stone-100 focus:outline-none focus:ring-2 focus:ring-teal-500 disabled:cursor-not-allowed disabled:opacity-50"
-                  aria-label="Cerrar"
-                  title="Cerrar"
-                >
-                  Cerrar
-                </button>
-              </div>
-            </div>
-            <div className="flex min-h-0 flex-1 flex-col gap-2 overflow-hidden p-3">
-              <div className="flex-none space-y-2">
-                {canSend ? (
-                  <>
-                    <label className="block text-[11px] font-medium text-stone-600">
-                      De
-                      <div className="mt-1 flex gap-2">
-                        <select
-                          value={selectedAccountId}
-                          onChange={(event) => setSelectedAccountId(event.target.value)}
-                          disabled={isLoading || isSending}
-                          className="h-8 min-w-0 flex-1 rounded border border-stone-200 bg-white px-2 text-[12px] outline-none focus:border-teal-500 disabled:cursor-not-allowed disabled:bg-stone-50"
-                        >
-                          {accounts.length ? (
-                            accounts.map((account) => (
-                              <option key={account.id} value={account.id}>
-                                {account.display_name || account.google_email} · {account.google_email}
-                              </option>
-                            ))
-                          ) : (
-                            <option value="">Sin Gmail conectado</option>
-                          )}
-                        </select>
-                        <button
-                          type="button"
-                          onClick={() => void connectGmail()}
-                          disabled={isSending}
-                          className="rounded border border-teal-700 bg-white px-3 text-[11px] font-semibold text-teal-700 hover:bg-teal-50 focus:outline-none focus:ring-2 focus:ring-teal-500 disabled:cursor-not-allowed disabled:opacity-50"
-                        >
-                          {accounts.length ? "Cambiar" : "Conectar Gmail"}
-                        </button>
-                      </div>
-                    </label>
-                    <RecipientInput
-                      field="to"
-                      label="Para"
-                      values={recipients.to}
-                      draft={recipientDrafts.to}
-                      disabled={isSending}
-                      listId={contactListId}
-                      onDraftChange={changeRecipientDraft}
-                      onCommit={commitRecipientDraft}
-                      onRemove={removeRecipient}
-                    />
-                    <button
-                      type="button"
-                      onClick={() => setShowCcBcc((current) => !current)}
-                      disabled={isSending}
-                      className="text-[11px] font-semibold text-teal-700 underline-offset-2 hover:underline focus:outline-none focus:ring-2 focus:ring-teal-500 disabled:cursor-not-allowed disabled:opacity-50"
-                    >
-                      {showCcBcc ? "Ocultar CC/CCO" : "Mostrar CC/CCO"}
-                    </button>
-                    {showCcBcc ? (
-                      <div className="grid grid-cols-1 gap-2 md:grid-cols-2">
-                        <RecipientInput
-                          field="cc"
-                          label="CC"
-                          optional
-                          values={recipients.cc}
-                          draft={recipientDrafts.cc}
-                          disabled={isSending}
-                          listId={contactListId}
-                          onDraftChange={changeRecipientDraft}
-                          onCommit={commitRecipientDraft}
-                          onRemove={removeRecipient}
-                        />
-                        <RecipientInput
-                          field="bcc"
-                          label="CCO"
-                          optional
-                          values={recipients.bcc}
-                          draft={recipientDrafts.bcc}
-                          disabled={isSending}
-                          listId={contactListId}
-                          onDraftChange={changeRecipientDraft}
-                          onCommit={commitRecipientDraft}
-                          onRemove={removeRecipient}
-                        />
-                      </div>
-                    ) : null}
-                    <datalist id={contactListId}>
-                      {directoryOptions.map((option) => (
-                        <option key={option.id} value={option.email}>
-                          {option.label} · {option.source === "user" ? "usuario" : "contacto"}
-                        </option>
-                      ))}
-                    </datalist>
-                    <div className="flex flex-wrap items-center justify-between gap-2 rounded border border-stone-200 bg-stone-50 px-2 py-1.5 text-[11px]">
-                      <span className="font-semibold text-stone-700">{threadLabel}</span>
-                      {selectedAccount ? <span className="text-stone-500">Desde {selectedAccount.google_email}</span> : null}
-                    </div>
-                  </>
-                ) : null}
-                <label className="block text-[11px] font-medium text-stone-600">
-                  Asunto
-                  <input value={subject} readOnly className="mt-1 h-8 w-full rounded border border-stone-200 bg-stone-50 px-2 text-[12px]" />
-                </label>
-                <label className="block text-[11px] font-medium text-stone-600">
-                  Link
-                  <input value={link} readOnly className="mt-1 h-8 w-full rounded border border-stone-200 bg-stone-50 px-2 text-[12px]" />
-                </label>
-              </div>
-              {showHtmlPreview ? (
-                <div className="flex min-h-0 flex-1 flex-col text-[11px] font-medium text-stone-600">
-                  <div className="flex-none">Vista previa HTML</div>
-                  <div className="mt-1 flex min-h-[280px] flex-1 overflow-hidden rounded border border-stone-200 bg-stone-50 md:min-h-[500px]">
-                    <div className="flex h-full w-full justify-center overflow-auto p-3">
-                      <div className="h-full min-w-0" dangerouslySetInnerHTML={{ __html: htmlBody }} />
-                    </div>
-                  </div>
-                </div>
-              ) : null}
-              {attachments.length ? (
-                <div className="flex-none text-[11px] font-medium text-stone-600">
-                  Adjuntos preparados
-                  <div className="mt-1 max-h-[110px] overflow-auto rounded border border-stone-200 bg-white">
-                    {attachments.map((attachment, index) => (
-                      <div key={`${attachment.name}-${index}`} className="border-b border-stone-100 px-2 py-1.5 last:border-b-0">
-                        <p className="truncate text-[11px] font-semibold text-stone-700" title={attachment.name}>
-                          {attachment.name}
-                        </p>
-                        <p className="mt-0.5 text-[10px] text-stone-500">
-                          {attachment.type || "archivo"}
-                          {attachment.size ? ` · ${Math.ceil(attachment.size / 1024)} KB` : ""}
-                          {attachment.url ? " · Drive" : ""}
-                        </p>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              ) : null}
-            </div>
-            {status ? (
-              <div
-                className={`mx-3 mb-3 flex-none rounded border px-3 py-2 text-[11px] leading-relaxed ${statusClassName(status.kind)}`}
-                aria-live="polite"
-              >
-                {status.text}
-              </div>
-            ) : null}
-            <div className="flex flex-none flex-wrap items-center justify-end gap-2 border-t border-border px-3 py-2">
-              {threadState?.gmailUrl ? (
-                <a
-                  href={threadState.gmailUrl}
-                  target="_blank"
-                  rel="noreferrer"
-                  className="rounded border border-stone-200 bg-white px-3 py-1.5 text-[11px] text-stone-700 hover:bg-stone-50 focus:outline-none focus:ring-2 focus:ring-teal-500"
-                >
-                  Abrir en Gmail
-                </a>
-              ) : null}
-              <button
-                type="button"
-                onClick={() => void copyHtml()}
-                disabled={isSending}
-                className="rounded border border-stone-200 bg-white px-3 py-1.5 text-[11px] text-stone-700 hover:bg-stone-50 focus:outline-none focus:ring-2 focus:ring-teal-500 disabled:cursor-not-allowed disabled:opacity-50"
-              >
-                Copiar HTML
-              </button>
-              {canSend ? (
-                <button
-                  type="button"
-                  onClick={() => void sendGmail()}
-                  disabled={isSending || isLoading || !selectedAccountId}
-                  className="inline-flex items-center gap-2 rounded border border-teal-700 bg-teal-700 px-3 py-1.5 text-[11px] font-semibold text-white hover:bg-teal-800 focus:outline-none focus:ring-2 focus:ring-teal-500 disabled:cursor-not-allowed disabled:opacity-50"
-                >
-                  {isSending ? <span className="h-3 w-3 animate-spin rounded-full border-2 border-white/40 border-t-white" aria-hidden /> : null}
-                  {isSending ? "Enviando..." : sendButtonLabel}
-                </button>
-              ) : null}
-            </div>
-          </div>
-        </div>
-      ) : null}
+      {portalRoot && modal ? createPortal(modal, portalRoot) : null}
     </>
   );
 }

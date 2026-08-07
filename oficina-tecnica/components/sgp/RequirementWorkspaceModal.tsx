@@ -40,6 +40,16 @@ type ResourceTypeSummary = {
   total: number;
 };
 
+type ManagementEconomicSummary = {
+  base: number;
+  oferta: number;
+  real: number;
+  margen_ofertado: number;
+  porcentaje_margen_ofertado: number;
+  margen_real: number;
+  porcentaje_margen_real: number;
+};
+
 type RequirementWorkspaceModalProps = {
   open: boolean;
   zIndexClassName?: string;
@@ -56,6 +66,7 @@ type RequirementWorkspaceModalProps = {
   items: EditableRequirementItem[];
   resourceTypeSummary: ResourceTypeSummary[];
   totalsByCurrency: Record<string, number>;
+  managementEconomicSummary?: ManagementEconomicSummary | null;
   resourceTypeOptions: string[];
   currencyOptions: string[];
   statusOptions: string[];
@@ -87,6 +98,7 @@ type RequirementWorkspaceModalProps = {
   hiddenItemColumnKeys?: string[];
   hiddenBusinessFields?: string[];
   canViewPrices?: boolean;
+  canSendRequirementEmail?: boolean;
   canSendManagementEmail?: boolean;
   currentUser?: ObservationUser | null;
   userDirectory?: ObservationUser[];
@@ -273,6 +285,102 @@ function emailKpiCell(label: string, value: string | number): string {
         <tr><td style="padding:0 9px 9px;font-size:15px;line-height:18px;color:#0f172a;font-weight:700;">${escapeEmailHtml(value)}</td></tr>
       </table>
     </td>`;
+}
+
+type ManagementKpiTone = "info" | "success" | "warning" | "danger" | "neutral";
+
+function managementKpiStyle(tone: ManagementKpiTone): { border: string; background: string; label: string; value: string } {
+  if (tone === "success") return { border: "#bbf7d0", background: "#f0fdf4", label: "#166534", value: "#14532d" };
+  if (tone === "warning") return { border: "#fde68a", background: "#fffbeb", label: "#92400e", value: "#78350f" };
+  if (tone === "danger") return { border: "#fecaca", background: "#fff1f2", label: "#be123c", value: "#881337" };
+  if (tone === "neutral") return { border: "#e5e7eb", background: "#f8fafc", label: "#475569", value: "#111827" };
+  return { border: "#bfdbfe", background: "#eff6ff", label: "#1d4ed8", value: "#172554" };
+}
+
+function managementKpiCell(label: string, value: string | number, tone: ManagementKpiTone): string {
+  const style = managementKpiStyle(tone);
+  return `
+    <td style="width:20%;padding:4px;vertical-align:top;">
+      <table role="presentation" cellpadding="0" cellspacing="0" style="width:100%;height:64px;border-collapse:collapse;border:1px solid ${style.border};background:${style.background};">
+        <tr><td style="height:22px;padding:7px 8px 1px;font-size:9.5px;line-height:12px;color:${style.label};text-transform:uppercase;font-weight:700;white-space:nowrap;">${escapeEmailHtml(label)}</td></tr>
+        <tr><td style="height:34px;padding:0 8px 8px;font-size:15px;line-height:18px;color:${style.value};font-weight:700;">${escapeEmailHtml(value)}</td></tr>
+      </table>
+    </td>`;
+}
+
+function managementKpiGridHtml(kpis: Array<{ label: string; value: string | number; tone: ManagementKpiTone }>): string {
+  const visible = kpis.slice(0, 10);
+  const rows = [visible.slice(0, 5), visible.slice(5, 10)];
+  return rows
+    .filter((row) => row.length > 0)
+    .map((row) => {
+      const filled = [...row];
+      while (filled.length < 5) filled.push({ label: "", value: "", tone: "neutral" });
+      return `<tr>${filled.map((item) => item.label ? managementKpiCell(item.label, item.value, item.tone) : `<td style="width:20%;padding:4px;"></td>`).join("")}</tr>`;
+    })
+    .join("");
+}
+
+function resourceTypeReportRows(input: {
+  items: EditableRequirementItem[];
+  resourceTypeSummary: ResourceTypeSummary[];
+  canViewPrices: boolean;
+  currency: string;
+}): Array<{ tipo: string; cantidad: number; presencia: string; total: string }> {
+  const countByType = new Map<string, number>();
+  const labelByType = new Map<string, string>();
+  input.items.forEach((item) => {
+    const label = cleanEmailValue(item.tipo_recurso, "Sin tipo");
+    const key = cleanLower(label);
+    labelByType.set(key, label);
+    countByType.set(key, (countByType.get(key) ?? 0) + 1);
+  });
+
+  input.resourceTypeSummary.forEach((row) => {
+    const label = cleanEmailValue(row.tipo_recurso, "Sin tipo");
+    labelByType.set(cleanLower(label), label);
+  });
+
+  return Array.from(labelByType.entries())
+    .map(([key, label]) => {
+      const summaryTotal = input.resourceTypeSummary.find((row) => cleanLower(row.tipo_recurso) === key)?.total ?? 0;
+      const count = countByType.get(key) ?? 0;
+      return {
+        tipo: label,
+        cantidad: count,
+        presencia: count > 0 ? "Incluido" : "Sin ítems",
+        totalValue: summaryTotal,
+        total: input.canViewPrices ? `${input.currency} ${formatCurrencyNumber(summaryTotal)}` : "Oculto",
+      };
+    })
+    .filter((row) => row.cantidad > 0 || row.totalValue > 0)
+    .map((row) => ({
+      tipo: row.tipo,
+      cantidad: row.cantidad,
+      presencia: row.presencia,
+      total: row.total,
+    }))
+    .sort((a, b) => b.cantidad - a.cantidad || a.tipo.localeCompare(b.tipo, "es", { sensitivity: "base" }));
+}
+
+function economicValueLabel(value: number | null | undefined, currency: string, canViewPrices: boolean, isPercent = false): string {
+  if (!canViewPrices) return "Oculto";
+  if (!Number.isFinite(value)) return "-";
+  if (isPercent) return `${formatCurrencyNumber(Number(value) * 100)}%`;
+  return `${currency} ${formatCurrencyNumber(Number(value))}`;
+}
+
+function hasEconomicSummaryData(summary: ManagementEconomicSummary | null | undefined): boolean {
+  if (!summary) return false;
+  return [
+    summary.base,
+    summary.oferta,
+    summary.real,
+    summary.margen_ofertado,
+    summary.porcentaje_margen_ofertado,
+    summary.margen_real,
+    summary.porcentaje_margen_real,
+  ].some((value) => Number.isFinite(value) && Math.abs(Number(value)) > 0);
 }
 
 function compactEmailRows(rows: Array<[string, string | number | null | undefined]>): string {
@@ -611,6 +719,9 @@ function buildManagementEmailPlainBody(input: {
   items: EditableRequirementItem[];
   observations: RequirementObservation[];
   totalsByCurrency: Record<string, number>;
+  resourceTypeSummary: ResourceTypeSummary[];
+  cotizacionMoneda: "PEN" | "USD";
+  managementEconomicSummary?: ManagementEconomicSummary | null;
   canViewPrices: boolean;
 }): string {
   const metrics = buildRequirementEmailMetrics(input.items, input.fechaEntrega, input.canViewPrices, input.totalsByCurrency);
@@ -624,6 +735,14 @@ function buildManagementEmailPlainBody(input: {
     items: input.items,
   });
   const criticalRows = criticalResourceRows(input);
+  const resourceTypeRows = resourceTypeReportRows({
+    items: input.items,
+    resourceTypeSummary: input.resourceTypeSummary,
+    canViewPrices: input.canViewPrices,
+    currency: input.cotizacionMoneda,
+  });
+  const hasEconomicData = hasEconomicSummaryData(input.managementEconomicSummary);
+  const economic = input.managementEconomicSummary;
 
   return [
     "Hola,",
@@ -654,6 +773,22 @@ function buildManagementEmailPlainBody(input: {
     `Entregados: ${metrics.delivered}`,
     `Plazo: ${metrics.daysLabel}`,
     ...(input.canViewPrices ? [`Recursos sin costo: ${metrics.missingCost}`, `Costo total registrado: ${metrics.totalCostLabel || "-"}`] : []),
+    "",
+    "Resumen por tipo de recurso:",
+    ...(resourceTypeRows.length
+      ? resourceTypeRows.map((row) => `- ${row.tipo}: ${row.cantidad} ítem(s), ${row.presencia}, total ${row.total}.`)
+      : ["- Sin tipos de recurso registrados."]),
+    "",
+    "Resumen económico:",
+    hasEconomicData && economic
+      ? `Base: ${economicValueLabel(economic.base, input.cotizacionMoneda, input.canViewPrices)} | Oferta: ${economicValueLabel(economic.oferta, input.cotizacionMoneda, input.canViewPrices)} | Real: ${economicValueLabel(economic.real, input.cotizacionMoneda, input.canViewPrices)}`
+      : "No disponible",
+    hasEconomicData && economic
+      ? `Marg. ofertado: ${economicValueLabel(economic.margen_ofertado, input.cotizacionMoneda, input.canViewPrices)} (${economicValueLabel(economic.porcentaje_margen_ofertado, input.cotizacionMoneda, input.canViewPrices, true)})`
+      : "",
+    hasEconomicData && economic
+      ? `Marg. real: ${economicValueLabel(economic.margen_real, input.cotizacionMoneda, input.canViewPrices)} (${economicValueLabel(economic.porcentaje_margen_real, input.cotizacionMoneda, input.canViewPrices, true)})`
+      : "",
     "",
     "Avance por área:",
     ...areas.map(([area, owner, status, pending]) => `- ${area}: ${status}. Responsable: ${owner}. Pendiente: ${pending}.`),
@@ -687,17 +822,54 @@ function buildManagementEmailHtmlBody(input: Parameters<typeof buildManagementEm
   });
   const criticalRows = criticalResourceRows(input);
   const summaryText = `Avance ${metrics.progress}% (${metrics.attended}/${metrics.total} atendidos), ${metrics.pending} pendientes y ${unresolvedObservations} observaciones abiertas.`;
-  const kpis = [
-    ["Recursos", metrics.total],
-    ["Avance", `${metrics.progress}%`],
-    ["Atendidos", metrics.attended],
-    ["Pendientes", metrics.pending],
-    ["En proceso", metrics.inProgress],
-    ["Cotizados", metrics.quoted],
-    ["Entregados", metrics.delivered],
-    ["Plazo", metrics.daysLabel],
-    ...(input.canViewPrices ? ([["Sin costo", metrics.missingCost], ["Costo", metrics.totalCostLabel || "-"]] as Array<[string, string | number]>) : []),
-  ].map(([label, value]) => emailKpiCell(String(label), value)).join("");
+  const kpis = managementKpiGridHtml([
+    { label: "Recursos", value: metrics.total, tone: "info" },
+    { label: "Avance", value: `${metrics.progress}%`, tone: metrics.progress >= 80 ? "success" : metrics.progress >= 45 ? "warning" : "danger" },
+    { label: "Atendidos", value: metrics.attended, tone: "success" },
+    { label: "Pendientes", value: metrics.pending, tone: metrics.pending > 0 ? "warning" : "success" },
+    { label: "En proceso", value: metrics.inProgress, tone: "info" },
+    { label: "Cotizados", value: metrics.quoted, tone: "neutral" },
+    { label: "Entregados", value: metrics.delivered, tone: "success" },
+    { label: "Plazo", value: metrics.daysLabel, tone: metrics.daysLabel.startsWith("Atrasado") || metrics.daysLabel === "Vence hoy" ? "danger" : "neutral" },
+    ...(input.canViewPrices
+      ? [
+          { label: "Sin costo", value: metrics.missingCost, tone: metrics.missingCost > 0 ? "warning" : "success" },
+          { label: "Costo", value: metrics.totalCostLabel || "-", tone: "neutral" },
+        ] satisfies Array<{ label: string; value: string | number; tone: ManagementKpiTone }>
+      : []),
+  ]);
+  const resourceTypeRows = resourceTypeReportRows({
+    items: input.items,
+    resourceTypeSummary: input.resourceTypeSummary,
+    canViewPrices: input.canViewPrices,
+    currency: input.cotizacionMoneda,
+  });
+  const resourceTypeHtmlRows = resourceTypeRows.length
+    ? resourceTypeRows
+        .map(
+          (row, index) => `
+            <tr style="background:${index % 2 === 0 ? "#ffffff" : "#fbfcfd"};">
+              <td style="padding:7px;border:1px solid #e5e7eb;font-size:11px;color:#111827;font-weight:700;">${escapeEmailHtml(row.tipo)}</td>
+              <td style="width:80px;padding:7px;border:1px solid #e5e7eb;text-align:right;font-size:11px;color:#374151;">${row.cantidad}</td>
+              <td style="width:95px;padding:7px;border:1px solid #e5e7eb;font-size:11px;color:#374151;">${escapeEmailHtml(row.presencia)}</td>
+              <td style="width:125px;padding:7px;border:1px solid #e5e7eb;text-align:right;font-size:11px;color:#111827;font-weight:700;">${escapeEmailHtml(row.total)}</td>
+            </tr>`,
+        )
+        .join("")
+    : `<tr><td colspan="4" style="padding:10px;border:1px solid #e5e7eb;color:#64748b;font-size:12px;">Sin tipos de recurso registrados.</td></tr>`;
+  const hasEconomicData = hasEconomicSummaryData(input.managementEconomicSummary);
+  const economic = input.managementEconomicSummary;
+  const economicHtmlRows = hasEconomicData && economic
+    ? compactEmailRows([
+        ["Base", economicValueLabel(economic.base, input.cotizacionMoneda, input.canViewPrices)],
+        ["Oferta", economicValueLabel(economic.oferta, input.cotizacionMoneda, input.canViewPrices)],
+        ["Real", economicValueLabel(economic.real, input.cotizacionMoneda, input.canViewPrices)],
+        ["Marg. ofertado", economicValueLabel(economic.margen_ofertado, input.cotizacionMoneda, input.canViewPrices)],
+        ["% marg. ofertado", economicValueLabel(economic.porcentaje_margen_ofertado, input.cotizacionMoneda, input.canViewPrices, true)],
+        ["Marg. real", economicValueLabel(economic.margen_real, input.cotizacionMoneda, input.canViewPrices)],
+        ["% marg. real", economicValueLabel(economic.porcentaje_margen_real, input.cotizacionMoneda, input.canViewPrices, true)],
+      ])
+    : `<tr><td colspan="2" style="padding:10px;border:1px solid #e5e7eb;color:#64748b;font-size:12px;">No disponible</td></tr>`;
   const areaRows = areas
     .map(
       ([area, owner, status, pending]) => `
@@ -761,7 +933,31 @@ function buildManagementEmailHtmlBody(input: Parameters<typeof buildManagementEm
               ])}
             </table>
             <table role="presentation" cellpadding="0" cellspacing="0" style="width:100%;border-collapse:collapse;">
-              <tr>${kpis}</tr>
+              ${kpis}
+            </table>
+          </td>
+        </tr>
+        <tr>
+          <td style="padding:8px 22px;background:#ffffff;">
+            <div style="margin:0 0 8px;font-size:13px;line-height:17px;color:#111827;font-weight:700;">Resumen por tipo de recurso</div>
+            <table cellpadding="0" cellspacing="0" style="width:100%;border-collapse:collapse;border:1px solid #e5e7eb;">
+              <thead>
+                <tr style="background:#f8fafc;">
+                  <th style="padding:7px;border:1px solid #e5e7eb;text-align:left;font-size:10px;color:#475569;text-transform:uppercase;">Tipo de recurso</th>
+                  <th style="width:80px;padding:7px;border:1px solid #e5e7eb;text-align:right;font-size:10px;color:#475569;text-transform:uppercase;">Cantidad</th>
+                  <th style="width:95px;padding:7px;border:1px solid #e5e7eb;text-align:left;font-size:10px;color:#475569;text-transform:uppercase;">Presencia</th>
+                  <th style="width:125px;padding:7px;border:1px solid #e5e7eb;text-align:right;font-size:10px;color:#475569;text-transform:uppercase;">Total</th>
+                </tr>
+              </thead>
+              <tbody>${resourceTypeHtmlRows}</tbody>
+            </table>
+          </td>
+        </tr>
+        <tr>
+          <td style="padding:8px 22px;background:#ffffff;">
+            <div style="margin:0 0 8px;font-size:13px;line-height:17px;color:#111827;font-weight:700;">Resumen económico</div>
+            <table role="presentation" cellpadding="0" cellspacing="0" style="width:100%;border-collapse:collapse;font-size:12px;">
+              ${economicHtmlRows}
             </table>
           </td>
         </tr>
@@ -1094,6 +1290,7 @@ export function RequirementWorkspaceModal({
   items,
   resourceTypeSummary,
   totalsByCurrency,
+  managementEconomicSummary = null,
   resourceTypeOptions,
   currencyOptions,
   statusOptions,
@@ -1125,6 +1322,7 @@ export function RequirementWorkspaceModal({
   hiddenItemColumnKeys = [],
   hiddenBusinessFields = [],
   canViewPrices = true,
+  canSendRequirementEmail = true,
   canSendManagementEmail = false,
   currentUser = null,
   userDirectory = [],
@@ -1712,9 +1910,12 @@ export function RequirementWorkspaceModal({
         items,
         observations,
         totalsByCurrency,
+        resourceTypeSummary,
+        cotizacionMoneda,
+        managementEconomicSummary,
         canViewPrices,
       }),
-    [canViewPrices, cliente, cotizacionCodigo, cotizacionOc, draft?.area, draft?.codigo, draft?.estado, draft?.fecha_requerida, draft?.fecha_solicitud, draft?.observaciones, draft?.responsable, draft?.solicitante_rq, items, observations, proyecto, totalsByCurrency, unidadTrabajo],
+    [canViewPrices, cliente, cotizacionCodigo, cotizacionMoneda, cotizacionOc, draft?.area, draft?.codigo, draft?.estado, draft?.fecha_requerida, draft?.fecha_solicitud, draft?.observaciones, draft?.responsable, draft?.solicitante_rq, items, managementEconomicSummary, observations, proyecto, resourceTypeSummary, totalsByCurrency, unidadTrabajo],
   );
 
   const buildManagementHtmlEmail = useCallback(
@@ -1739,9 +1940,12 @@ export function RequirementWorkspaceModal({
         items,
         observations,
         totalsByCurrency,
+        resourceTypeSummary,
+        cotizacionMoneda,
+        managementEconomicSummary,
         canViewPrices,
       }),
-    [canViewPrices, cliente, cotizacionCodigo, cotizacionOc, draft?.area, draft?.codigo, draft?.estado, draft?.fecha_requerida, draft?.fecha_solicitud, draft?.observaciones, draft?.responsable, draft?.solicitante_rq, items, observations, proyecto, totalsByCurrency, unidadTrabajo],
+    [canViewPrices, cliente, cotizacionCodigo, cotizacionMoneda, cotizacionOc, draft?.area, draft?.codigo, draft?.estado, draft?.fecha_requerida, draft?.fecha_solicitud, draft?.observaciones, draft?.responsable, draft?.solicitante_rq, items, managementEconomicSummary, observations, proyecto, resourceTypeSummary, totalsByCurrency, unidadTrabajo],
   );
 
   const buildObservationPlainEmail = useCallback(
@@ -1867,9 +2071,8 @@ export function RequirementWorkspaceModal({
   const requirementTitle = `Requerimiento ${draftCode}`;
   const managementSubject = `Estado a Gerencia / ${draftCode} / ${proyecto || "-"}`;
   const managementTitle = `Estado gerencial ${draftCode}`;
-  const managementPreviewDescription = canSendManagementEmail
-    ? "Preview seguro: esta accion no envia Gmail; copia el HTML para revision manual."
-    : "Preview seguro: disponible como consulta/copia; el envio Gmail gerencial queda reservado para una fase futura.";
+  const canSendManagementReportEmail = canSendRequirementEmail || canSendManagementEmail;
+  const managementPreviewDescription = "Preview seguro: esta acción no envía Gmail; usa Enviar reporte gerencial para el envío real.";
 
   async function copyPreparedEmailHtml(
     html: string,
@@ -1950,7 +2153,7 @@ export function RequirementWorkspaceModal({
             <WorkspaceActionIcon name="menu" />
             <span>Acciones RQ</span>
           </summary>
-          <div className="absolute right-0 z-20 mt-1 w-48 rounded border border-stone-200 bg-white p-1 shadow-lg">
+          <div className="absolute right-0 z-20 mt-1 w-56 rounded border border-stone-200 bg-white p-1 shadow-lg">
             <button
               type="button"
               onClick={copyRequirementHtml}
@@ -1961,7 +2164,7 @@ export function RequirementWorkspaceModal({
             </button>
             <EmailThreadButton
               kind="requirement"
-              emailPurpose="management_status"
+              emailPurpose="management_report"
               entityCode={draftCode}
               subject={managementSubject}
               title={managementTitle}
@@ -1975,6 +2178,26 @@ export function RequirementWorkspaceModal({
               buttonLabel="Reporte gerencial"
               modalTitle="Reporte gerencial"
               modalDescription={managementPreviewDescription}
+            />
+            <EmailThreadButton
+              kind="requirement"
+              emailPurpose="management_report"
+              entityCode={draftCode}
+              subject={managementSubject}
+              title={managementTitle}
+              linkPath={requirementLinkPath}
+              summaryRows={managementEmailRows}
+              buildPlainBody={buildManagementPlainEmail}
+              buildHtmlBody={buildManagementHtmlEmail}
+              showHtmlPreview
+              sendEnabled={canSendManagementReportEmail}
+              disabled={!canSendManagementReportEmail}
+              disabledTitle="No tienes permiso para enviar el reporte gerencial."
+              className="flex w-full items-center gap-1.5 rounded px-2 py-1.5 text-left text-[11px] font-medium text-stone-600 hover:bg-stone-50 disabled:cursor-not-allowed disabled:opacity-50"
+              buttonLabel="Enviar reporte gerencial"
+              modalTitle="Enviar reporte gerencial"
+              modalDescription="Envío Gmail real en hilo gerencial independiente para este RQ."
+              sendButtonLabel="Enviar reporte gerencial"
             />
             <button
               type="button"

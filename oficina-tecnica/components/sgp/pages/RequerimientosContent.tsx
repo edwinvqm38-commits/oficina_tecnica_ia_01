@@ -56,6 +56,16 @@ type ResourceTypeSummary = {
   total: number;
 };
 
+type ManagementEconomicSummary = {
+  base: number;
+  oferta: number;
+  real: number;
+  margen_ofertado: number;
+  porcentaje_margen_ofertado: number;
+  margen_real: number;
+  porcentaje_margen_real: number;
+};
+
 const DEFAULT_PAGE_SIZE = 12;
 const REQUERIMIENTOS_UI_STATE_KEY = "opsia:requerimientos:ui-state";
 const ROWS_PER_PAGE_OPTIONS = [12, 20, 40, 60, 80, 100] as const;
@@ -108,6 +118,61 @@ function computeCurrencyTcAndTotal(
 
 function normalizeTipoRecurso(value: string): string {
   return value.trim().toLowerCase();
+}
+
+function finiteMoney(value: number | null | undefined): number {
+  return Number.isFinite(value) ? Number(value) : 0;
+}
+
+function computeManagementEconomicSummary(
+  cotizacion: Cotizacion | null,
+  items: EditableRequirementItem[],
+): ManagementEconomicSummary | null {
+  if (!cotizacion) return null;
+
+  const realByType = new Map<string, number>();
+  items.forEach((item) => {
+    const key = normalizeTipoRecurso(item.tipo_recurso);
+    if (!key) return;
+    realByType.set(key, (realByType.get(key) ?? 0) + finiteMoney(item.costo_total_presupuestado));
+  });
+
+  const rows = cotizacion.resumen_economico ?? [];
+  let base = 0;
+  let oferta = 0;
+  let margenOfertado = 0;
+
+  rows.forEach((row) => {
+    const rowBase = finiteMoney(row.base);
+    const rowOferta = finiteMoney(row.oferta);
+    base += rowBase;
+    oferta += rowOferta;
+    margenOfertado += row.margen_ofertado_manual === null || row.margen_ofertado_manual === undefined
+      ? rowOferta - rowBase
+      : finiteMoney(row.margen_ofertado_manual);
+  });
+
+  if (oferta === 0 && finiteMoney(cotizacion.monto) > 0) {
+    oferta = finiteMoney(cotizacion.monto);
+    margenOfertado = oferta - base;
+  }
+
+  const real = Array.from(realByType.values()).reduce((acc, value) => acc + value, 0);
+  const margenReal = oferta - real;
+
+  if ([base, oferta, real, margenOfertado, margenReal].every((value) => Math.abs(value) === 0)) {
+    return null;
+  }
+
+  return {
+    base: Number(base.toFixed(2)),
+    oferta: Number(oferta.toFixed(2)),
+    real: Number(real.toFixed(2)),
+    margen_ofertado: Number(margenOfertado.toFixed(2)),
+    porcentaje_margen_ofertado: base > 0 ? margenOfertado / base : 0,
+    margen_real: Number(margenReal.toFixed(2)),
+    porcentaje_margen_real: base > 0 ? margenReal / base : 0,
+  };
 }
 
 function normalizeRequirementDates(row: Requerimiento): Requerimiento {
@@ -443,6 +508,11 @@ export default function RequerimientosPage() {
         "can_view_prices",
         detailRqModulePermissions?.can_view_prices === true || isElevatedRequirementUser,
       ));
+  const canSendRequirementEmail =
+    dataSource === "demo" ||
+    (dataSource === "supabase" &&
+      requirementPermissionsReady &&
+      (requirementModulePermissions?.can_edit === true || isElevatedRequirementUser));
   const canSendManagementRequirementEmail = canEditRequirementDetail && canSaveRequirementDetail;
   const canViewRequirementDetailActions =
     dataSource === "demo" ||
@@ -1369,6 +1439,11 @@ export default function RequerimientosPage() {
     return { [cotizacionMoneda]: requirementTotal };
   }, [cotizacionMoneda, requirementTotal]);
 
+  const managementEconomicSummary = useMemo(
+    () => computeManagementEconomicSummary(selectedCotizacion, workspaceItems),
+    [selectedCotizacion, workspaceItems],
+  );
+
   const totalFilteredRows = filteredRowsCount ?? tableRows.length;
   const totalPages = Math.max(1, Math.ceil(totalFilteredRows / pageSize));
   const pageStartIndex = (page - 1) * pageSize;
@@ -1544,6 +1619,7 @@ export default function RequerimientosPage() {
         items={workspaceItems}
         resourceTypeSummary={resourceTypeSummary}
         totalsByCurrency={requirementTotalsByCurrency}
+        managementEconomicSummary={managementEconomicSummary}
         resourceTypeOptions={resourceTypeCatalog}
         currencyOptions={demoData.listCatalogMonedas().map((item) => item.codigo)}
         statusOptions={demoData.listCatalogEstadoDetalleRq().map((item) => item.nombre)}
@@ -1573,6 +1649,7 @@ export default function RequerimientosPage() {
         isCreatingRecurso={savingResource}
         hiddenItemColumnKeys={hiddenRequirementItemColumnKeys}
         canViewPrices={canViewRequirementPrices}
+        canSendRequirementEmail={canSendRequirementEmail}
         canSendManagementEmail={canSendManagementRequirementEmail}
         currentUser={currentObservationUser}
         userDirectory={observationUserDirectory}
