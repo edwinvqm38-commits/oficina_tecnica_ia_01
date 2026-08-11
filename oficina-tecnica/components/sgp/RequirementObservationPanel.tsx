@@ -756,11 +756,14 @@ export function RequirementObservationPanel({
                   </div>
                   <p className="mt-2 whitespace-pre-wrap text-[11px] text-stone-700">{selectedObservation.description}</p>
                   <EvidenceChips files={selectedObservation.initialEvidence} userDirectory={userDirectory} />
+                  <div className="mt-2 rounded border border-stone-200 bg-white px-2 py-1 text-[10.5px] font-medium text-stone-500">
+                    Respuestas {selectedObservation.responses.length} · Evidencias {observationEvidenceCount(selectedObservation)} · Evidencia requerida: {selectedObservation.requiresEvidence ? "Sí" : "No"}
+                  </div>
                 </div>
 
-                <div className="space-y-1.5">
+                <div className="divide-y divide-stone-200 overflow-hidden rounded border border-stone-200 bg-white">
                   {selectedObservation.responses.map((response) => (
-                    <div key={response.id} className="rounded border border-stone-200 bg-white p-2">
+                    <div key={response.id} className="px-2 py-1.5">
                       <div className="flex flex-wrap items-center justify-between gap-2 text-[10px] text-stone-500">
                         <span className="font-semibold text-stone-700">
                           {userLabel(userDirectory, response.authorUserId)}
@@ -773,7 +776,7 @@ export function RequirementObservationPanel({
                     </div>
                   ))}
                   {selectedObservation.responses.length === 0 ? (
-                    <p className="rounded border border-stone-200 bg-stone-50 px-2 py-3 text-center text-[11px] text-stone-400">
+                    <p className="px-2 py-3 text-center text-[11px] text-stone-400">
                       Aún no hay respuestas.
                     </p>
                   ) : null}
@@ -921,9 +924,9 @@ export function RequirementObservationPanel({
                   </div>
                 ) : null}
 
-                <details className="rounded border border-stone-200 bg-stone-50">
+                <details className="overflow-hidden rounded border border-stone-200 bg-white">
                   <summary className="cursor-pointer px-2 py-1.5 text-[11px] font-semibold text-stone-700 focus:outline-none focus:ring-2 focus:ring-stone-300">
-                    Ver actividad
+                    Actividad ({selectedObservation.statusHistory.length})
                   </summary>
                   <div className="max-h-[150px] overflow-auto border-t border-stone-200 bg-white">
                     {selectedObservation.statusHistory.map((entry) => (

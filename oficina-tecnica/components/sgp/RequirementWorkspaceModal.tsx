@@ -2340,8 +2340,8 @@ export function RequirementWorkspaceModal({
           >
             Abrir RQ
           </a>
-          <span className="rounded border border-stone-200 bg-stone-50 px-2 py-1.5 text-[11px] font-medium text-stone-500">
-            Copia disponible en Observaciones
+          <span className="inline-flex h-6 min-h-6 items-center gap-1 whitespace-nowrap rounded border border-stone-200 bg-stone-50 px-1.5 text-[11px] font-medium text-stone-500">
+            ✓ Disponible para copiar desde Observaciones
           </span>
         </div>
       </div>
