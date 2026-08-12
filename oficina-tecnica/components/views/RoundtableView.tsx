@@ -1,6 +1,7 @@
 "use client";
 
 import { memo, useEffect, useMemo, useRef, useState } from "react";
+import dynamic from "next/dynamic";
 import { PageHeader } from "../shell/PageHeader";
 import { useStore, useSkillsWithOverrides } from "../../lib/store/StoreProvider";
 import { agentById, AGENTS, PROJECTS } from "../../lib/data";
@@ -19,7 +20,7 @@ import {
   type ContextResolverResponse,
 } from "../../lib/chat/contextResolverClient";
 import { buildUserContentWithVision, buildVisionAttachmentNote } from "../../lib/chat/visionContent";
-import { MdText } from "../chat/MdText";
+import { MdText, type InternalEntityLink } from "../chat/MdText";
 import { HelpPanel } from "../chat/HelpPanel";
 import { ChatAutoInput } from "../chat/ChatAutoInput";
 import { useSession } from "../../lib/auth/useSession";
@@ -53,6 +54,15 @@ const NO_RESPONDER_RE = /\[(?:no\s+responder|sin\s+ia|solo\s+humanos?)\]/i;
 const SOCIAL_GREETING_RE = /^(hola|buenos\s+d[ií]as|buen\s+d[ií]a|buenas\s+tardes|buenas\s+noches|saludos)\b/i;
 const COORDINATION_RE = /\b(coordina|coordine|coordinar|coordinaci[oó]n|gestiona|gestione|gestionar|organiza|organice|organizar|lidera|lidere|liderar|asigna|asigne|asignar|delega|delegue|delegar|objetivo|plan\s+de\s+acci[oó]n|haz\s+seguimiento|seguimiento\s+con\s+el\s+equipo|equipo\s+ia)\b/i;
 const APP_DELIVERY_RE = /\b(p[aá]same|env[ií]ame|m[aá]ndame|comp[aá]rteme|dame)\b.*\b(aplicaci[oó]n|app|html|archivo)\b.*\b(probar|probarlo|aqu[ií]|mesa)\b/i;
+
+const EmbeddedRequerimientosContent = dynamic(
+  () => import("../sgp/pages/RequerimientosContent"),
+  { ssr: false },
+);
+const EmbeddedCotizacionesContent = dynamic(
+  () => import("../sgp/pages/CotizacionesContent"),
+  { ssr: false },
+);
 
 type LlmUsageSnapshot = {
   count: number;
@@ -442,10 +452,10 @@ function agentsForMessage(text: string, targetIds: string[], hasAttachments = fa
     return allActive.includes(TEAM_COORDINATOR) ? [TEAM_COORDINATOR] : allActive;
   }
 
-  // Technical message → all agents with keyword hits; if none, IC+PM
+  // Technical message without explicit @mention → one principal specialist.
   const relevant = scored.filter((s) => s.hits > 0).sort((a, b) => b.hits - a.hits);
-  if (relevant.length > 0) return relevant.map((s) => s.id);
-  return ["ic", "pm"];
+  if (relevant.length > 0) return [relevant[0].id];
+  return allActive.includes(TEAM_COORDINATOR) ? [TEAM_COORDINATOR] : allActive.slice(0, 1);
 }
 
 function agentsForCoordination(text: string, targetIds: string[]): string[] {
@@ -813,9 +823,10 @@ type RTMessageProps = {
   userEmail?: string; userName?: string; currentUserEmail?: string; status?: "pending" | "sent" | "failed";
   userDirectory?: UserDirectory;
   onMenuPrompt?: (prompt: string) => void;
+  onInternalEntityOpen?: (entity: InternalEntityLink) => void;
 };
 
-const RTMessage = memo(function RTMessage({ role, text, time, agentId, modelLabel, modelSuggestion, isError, attachments, userEmail, userName, currentUserEmail, status, userDirectory, onMenuPrompt }: RTMessageProps) {
+const RTMessage = memo(function RTMessage({ role, text, time, agentId, modelLabel, modelSuggestion, isError, attachments, userEmail, userName, currentUserEmail, status, userDirectory, onMenuPrompt, onInternalEntityOpen }: RTMessageProps) {
   const isUser = role === "gg";
   const agent = agentId ? agentById(agentId) : null;
   const isOwn = isUser && (!userEmail || userEmail === currentUserEmail);
@@ -856,7 +867,7 @@ const RTMessage = memo(function RTMessage({ role, text, time, agentId, modelLabe
           )}
           {menuAgentId
             ? <AgentMenuPanel agentId={menuAgentId} onPrompt={onMenuPrompt} />
-            : <MdText text={text} variant={isOwn ? "inverted" : "default"} userDirectory={userDirectory} />}
+            : <MdText text={text} variant={isOwn ? "inverted" : "default"} userDirectory={userDirectory} onInternalEntityOpen={onInternalEntityOpen} />}
         </div>
         <div style={{ fontSize: 10, color: "var(--t3)", marginTop: 3, display: "flex", gap: 6, alignItems: "center", justifyContent: isOwn ? "flex-end" : "flex-start" }}>
           <span>{time}</span>
@@ -891,8 +902,56 @@ const RTMessage = memo(function RTMessage({ role, text, time, agentId, modelLabe
     && prev.status === next.status
     && prev.attachments === next.attachments
     && prev.userDirectory === next.userDirectory
+    && prev.onInternalEntityOpen === next.onInternalEntityOpen
     && (!menuMessage || prev.onMenuPrompt === next.onMenuPrompt);
 });
+
+function InternalEntityWorkspace({ entity, onClose }: { entity: InternalEntityLink; onClose: () => void }) {
+  const title = entity.type === "requirement" ? "Requerimiento" : "Cotización";
+
+  return (
+    <>
+      <div
+        style={{
+          position: "fixed",
+          right: "clamp(14px, 3vw, 42px)",
+          top: "clamp(12px, 2vh, 24px)",
+          zIndex: 75,
+          display: "flex",
+          alignItems: "center",
+          gap: 8,
+          maxWidth: "min(560px, calc(100vw - 28px))",
+          border: "1px solid var(--border)",
+          borderRadius: 8,
+          background: "var(--bg-card)",
+          boxShadow: "0 10px 30px rgba(15,23,42,.18)",
+          padding: "7px 8px",
+        }}
+      >
+        <div style={{ minWidth: 0, flex: 1 }}>
+          <div style={{ fontSize: 10, color: "var(--t3)", fontWeight: 800 }}>{title}</div>
+          <div style={{ fontFamily: "var(--mono)", fontSize: 11, fontWeight: 800, color: "var(--t1)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+            {entity.code}
+          </div>
+        </div>
+        <a className="btn btn--ghost btn--sm" href={entity.href} style={{ fontSize: 10.5, textDecoration: "none", whiteSpace: "nowrap" }}>
+          Abrir módulo completo
+        </a>
+      </div>
+      {entity.type === "requirement" ? (
+        <EmbeddedRequerimientosContent
+          key={`rq-${entity.code}`}
+          embeddedWorkspace={{ rqCode: entity.code, onClose }}
+        />
+      ) : (
+        <EmbeddedCotizacionesContent
+          key={`cot-${entity.code}`}
+          embeddedWorkspace={{ quotationCode: entity.code, onClose }}
+        />
+      )}
+    </>
+  );
+}
 
 // "Usuarios en la mesa": lightweight directory of approved users with
 // online/away/offline status derived from the dedicated presence channel.
@@ -957,6 +1016,7 @@ export function RoundtableView() {
   const [visibleCount, setVisibleCount] = useState(VISIBLE_MESSAGES_STEP);
   const [narrow, setNarrow] = useState(false);
   const [usersDrawerOpen, setUsersDrawerOpen] = useState(false);
+  const [internalEntityOverlay, setInternalEntityOverlay] = useState<InternalEntityLink | null>(null);
   const [llmUsage, setLlmUsage] = useState<LlmUsageSnapshot>(() => loadLlmUsage());
   const scrollRef = useRef<HTMLDivElement>(null);
 
@@ -1022,6 +1082,15 @@ export function RoundtableView() {
     window.addEventListener("resize", onResize);
     return () => window.removeEventListener("resize", onResize);
   }, []);
+
+  useEffect(() => {
+    if (!internalEntityOverlay) return;
+    function onKeyDown(event: KeyboardEvent) {
+      if (event.key === "Escape") setInternalEntityOverlay(null);
+    }
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [internalEntityOverlay]);
 
   // Mention notifications (Req 4): scan synced messages for "@todos" or
   // "@<MyFullName>" not sent by the current user, and notify locally —
@@ -1170,12 +1239,6 @@ export function RoundtableView() {
       && !continuation
       && coordinationRequested;
     const coordinationAgents = coordinatedMode ? agentsForCoordination(parsed.cleanText, parsed.targetAgentIds) : [];
-    const handResponders = coordinatedMode
-      ? [TEAM_COORDINATOR, ...coordinationAgents.filter((id) => id !== TEAM_COORDINATOR)]
-      : responders;
-
-    setHands(handResponders.map((id) => ({ agentId: id, modelLabel: routing.modelLabel })));
-
     // Recent conversation in Mesa de trabajo, shared by everyone in the
     // room. Passed as REAL chat turns (not flattened into the system
     // prompt) so the model treats it as the actual recent exchange when
@@ -1244,7 +1307,7 @@ export function RoundtableView() {
       }
     }
 
-    if (deterministicAnswer && !hasAttachments) {
+    if (deterministicAnswer && !hasAttachments && responders.length === 1) {
       const agId = responders[0] ?? TEAM_COORDINATOR;
       const label = "supabase/direct";
       appendChat(ROUNDTABLE_THREAD, { role: "agent", agentId: agId, text: deterministicAnswer, modelLabel: label });
@@ -1263,6 +1326,9 @@ export function RoundtableView() {
       setHands([]);
       setBusy(false);
       return;
+    }
+    if (deterministicAnswer && !hasAttachments) {
+      autoCodeCtx += `\n\n--- RESPUESTA ESTRUCTURADA DIRECTA DISPONIBLE ---\n${deterministicAnswer}\n--- FIN RESPUESTA ESTRUCTURADA DIRECTA ---`;
     }
 
     // File attachments from ChatAutoInput
@@ -1315,6 +1381,7 @@ export function RoundtableView() {
       ];
 
       try {
+        setHands([{ agentId: agId, modelLabel: agRouting.modelLabel }]);
         const { response, actualConfig } = await sendChatWithFallback(messages, agRouting.config, agRouting.complexity);
         const label = `${actualConfig.provider}/${response.model}`;
         markLlmUse(label);
@@ -1350,6 +1417,8 @@ export function RoundtableView() {
           isError: true,
         });
         return null;
+      } finally {
+        setHands((h) => h.filter((x) => x.agentId !== agId));
       }
     }
 
@@ -1379,7 +1448,6 @@ export function RoundtableView() {
             specialistBrief
           );
           if (result) specialistResults.push({ agentId: agId, content: result.content });
-          setHands((h) => h.filter((x) => x.agentId !== agId));
           await new Promise((r) => setTimeout(r, 200));
         }
       }
@@ -1432,6 +1500,7 @@ export function RoundtableView() {
       const agRouting = routeRequest(parsed.cleanText);
 
       try {
+        setHands([{ agentId: agId, modelLabel: agRouting.modelLabel }]);
         const { response, actualConfig } = await sendChatWithFallback(messages, agRouting.config, agRouting.complexity);
         const label = `${actualConfig.provider}/${response.model}`;
         markLlmUse(label);
@@ -1466,9 +1535,10 @@ export function RoundtableView() {
           text: mesaProviderErrorMessage(err),
           isError: true,
         });
+      } finally {
+        setHands((h) => h.filter((x) => x.agentId !== agId));
       }
 
-      setHands((h) => h.filter((x) => x.agentId !== agId));
       await new Promise((r) => setTimeout(r, 200));
     }
 
@@ -1490,14 +1560,12 @@ export function RoundtableView() {
 - No abras una nueva ronda ni menciones a otro agente salvo que sea crítico.
 - Si falta un dato, pide ese dato exacto. No inventes registros.`;
       for (const item of followupTargets) {
-        setHands((h) => [...h, { agentId: item.targetId, modelLabel: routing.modelLabel }]);
         const requesterName = agentById(item.requesterId)?.name ?? item.requesterId.toUpperCase();
         await runAgentTurn(
           item.targetId,
           `${llmUserText}\n\n${requesterName} te mencionó en su respuesta:\n${item.requesterContent}\n\nResponde en breve para afinar la consulta del usuario.`,
           followupBrief
         );
-        setHands((h) => h.filter((x) => x.agentId !== item.targetId));
         await new Promise((r) => setTimeout(r, 200));
       }
     }
@@ -1658,7 +1726,7 @@ export function RoundtableView() {
               </button>
             )}
             {visibleThread.map((m) => (
-              <RTMessage key={m.id} role={m.role} text={m.text} time={m.time} agentId={m.agentId} modelLabel={m.modelLabel} modelSuggestion={m.modelSuggestion} isError={m.isError} attachments={m.attachments} userEmail={m.userEmail} userName={m.userName} currentUserEmail={session?.email} status={m.status} userDirectory={userDirectory} onMenuPrompt={(prompt) => send(prompt)} />
+              <RTMessage key={m.id} role={m.role} text={m.text} time={m.time} agentId={m.agentId} modelLabel={m.modelLabel} modelSuggestion={m.modelSuggestion} isError={m.isError} attachments={m.attachments} userEmail={m.userEmail} userName={m.userName} currentUserEmail={session?.email} status={m.status} userDirectory={userDirectory} onMenuPrompt={(prompt) => send(prompt)} onInternalEntityOpen={setInternalEntityOverlay} />
             ))}
             {hands.map((h) => (
               <HandRaise key={h.agentId} agentId={h.agentId} modelLabel={h.modelLabel} />
@@ -1724,6 +1792,9 @@ export function RoundtableView() {
           </div>
         </div>
       )}
+      {internalEntityOverlay ? (
+        <InternalEntityWorkspace entity={internalEntityOverlay} onClose={() => setInternalEntityOverlay(null)} />
+      ) : null}
     </>
   );
 }

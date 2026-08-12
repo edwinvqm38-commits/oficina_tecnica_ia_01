@@ -22,6 +22,12 @@ import { CONTEXT_GUARDRAIL_RULES, phraseForStatus } from "@/lib/chat/contextGuar
 
 const BLOCK_START = "--- CONTEXTO REAL CONSULTADO ---";
 const BLOCK_END = "--- FIN CONTEXTO REAL CONSULTADO ---";
+const SOURCE_PRIORITY_RULES = [
+  "Prioridad de fuentes:",
+  "- Para estado, responsable, avance, fechas, cliente y proyecto, usa primero los registros estructurados actuales de Supabase.cotizaciones y Supabase.requerimientos.",
+  "- La información histórica, documental o conversacional es secundaria: no la mezcles como si fuera el mismo dato actual.",
+  "- Si una fuente secundaria contradice un registro estructurado actual, dilo explícitamente: dato registrado actualmente vs. mención previa/documental.",
+].join("\n");
 
 // Etiquetas legibles por fuente, para el encabezado de cada sección.
 const SOURCE_LABELS: Record<ContextToolResult["source"], string> = {
@@ -78,7 +84,9 @@ function renderCotizacion(c: CotizacionSummary): string {
 function renderRequerimiento(r: RequirementSummary): string {
   const bits = [`**${r.codigo}**`, `Estado: ${r.estado}`, `Avance: ${r.avance ?? "—"}%`];
   if (r.responsable) bits.push(`Responsable: ${r.responsable}`);
+  if (r.proyecto_servicio) bits.push(`Proyecto/servicio: ${r.proyecto_servicio}`);
   if (r.cotizacion_codigo) bits.push(`Cotización: ${r.cotizacion_codigo}`);
+  if (r.fecha_solicitud) bits.push(`Solicitud: ${r.fecha_solicitud}`);
   if (r.fecha_requerida) bits.push(`Req: ${r.fecha_requerida}`);
   return bits.join(" · ");
 }
@@ -200,6 +208,7 @@ export function buildContextPack(results: ContextToolResult[], options: ContextP
 
   return [
     "\n\n" + header.join("\n"),
+    SOURCE_PRIORITY_RULES,
     sections.join("\n\n"),
     CONTEXT_GUARDRAIL_RULES,
     BLOCK_END,

@@ -135,8 +135,10 @@ export function parseInput(raw: string): ParsedInput {
 
 export type MdSegment =
   | { type: "text"; value: string }
+  | { type: "code"; value: string }
   | { type: "bold"; value: string }
   | { type: "italic"; value: string }
+  | { type: "link"; label: string; href: string; external: boolean }
   | { type: "agent-mention"; agentId: string }
   | { type: "project-mention"; projectId: string }
   | { type: "code-link"; code: string; href: string }
@@ -152,6 +154,39 @@ export function slugForUser(fullName: string): string {
   return fullName.replace(/\s+/g, "");
 }
 
+function hrefForKnownCode(code: string): string | null {
+  if (/^RQ-[A-Z0-9]+(?:[-_][A-Z0-9]+){1,8}$/i.test(code)) {
+    return `/requerimientos?rqCode=${encodeURIComponent(code)}`;
+  }
+  if (/^REC-[A-Z0-9_-]+$/i.test(code)) {
+    return `/recursos?resourceCode=${encodeURIComponent(code)}`;
+  }
+  if (/^(?:COT-[A-Z0-9_-]+|FOR-EKA-PRO-[A-Z0-9_-]+)$/i.test(code)) {
+    return `/cotizaciones?quotationCode=${encodeURIComponent(code)}`;
+  }
+  return null;
+}
+
+function normalizeMarkdownHref(label: string, rawHref: string): { href: string; external: boolean } {
+  const labelCode = label.trim().match(/^(RQ-[A-Z0-9]+(?:[-_][A-Z0-9]+){1,8}|COT-[A-Z0-9_-]+|FOR-EKA-PRO-[A-Z0-9_-]+|REC-[A-Z0-9_-]+)$/i);
+  const codeHref = labelCode ? hrefForKnownCode(labelCode[1]) : null;
+  if (codeHref) return { href: codeHref, external: false };
+
+  const href = rawHref.trim();
+  if (href.startsWith("/")) return { href, external: false };
+
+  try {
+    const url = new URL(href);
+    const isLocalApp = /^(localhost|127\.0\.0\.1)$/i.test(url.hostname);
+    if (isLocalApp && (url.pathname === "/requerimientos" || url.pathname === "/cotizaciones" || url.pathname === "/recursos")) {
+      return { href: `${url.pathname}${url.search}${url.hash}`, external: false };
+    }
+    return { href, external: true };
+  } catch {
+    return { href, external: false };
+  }
+}
+
 export function parseMd(text: string, userDirectory?: UserDirectory): MdSegment[] {
   const segments: MdSegment[] = [];
   const lines = text.split("\n");
@@ -161,6 +196,30 @@ export function parseMd(text: string, userDirectory?: UserDirectory): MdSegment[
     const line = lines[li].replace(/^\s*[*-]\s+/, "• ");
     let i = 0;
     while (i < line.length) {
+      // [label](href) — normalize same-app localhost links to relative routes.
+      if (line[i] === "[") {
+        const closeLabel = line.indexOf("]", i + 1);
+        if (closeLabel !== -1 && line[closeLabel + 1] === "(") {
+          const closeHref = line.indexOf(")", closeLabel + 2);
+          if (closeHref !== -1) {
+            const label = line.slice(i + 1, closeLabel);
+            const href = line.slice(closeLabel + 2, closeHref);
+            const normalized = normalizeMarkdownHref(label, href);
+            segments.push({ type: "link", label, href: normalized.href, external: normalized.external });
+            i = closeHref + 1;
+            continue;
+          }
+        }
+      }
+      // `inline code`
+      if (line[i] === "`") {
+        const end = line.indexOf("`", i + 1);
+        if (end !== -1) {
+          segments.push({ type: "code", value: line.slice(i + 1, end) });
+          i = end + 1;
+          continue;
+        }
+      }
       // **bold**
       if (line[i] === "*" && line[i + 1] === "*") {
         const end = line.indexOf("**", i + 2);
@@ -216,21 +275,18 @@ export function parseMd(text: string, userDirectory?: UserDirectory): MdSegment[
           }
         }
       }
-      const codeLink = line.slice(i).match(/^(COT-[A-Za-z0-9_-]+|FOR-EKA-PRO-[A-Za-z0-9_-]+|RQ-[A-Za-z0-9_-]+|REC-[A-Za-z0-9_-]+)/i);
+      const codeLink = line.slice(i).match(/^(COT-[A-Za-z0-9_-]+|FOR-EKA-PRO-[A-Za-z0-9_-]+|RQ-[A-Za-z0-9]+(?:[-_][A-Za-z0-9]+){1,8}|REC-[A-Za-z0-9_-]+)/i);
       if (codeLink) {
         const code = codeLink[1];
-        const upper = code.toUpperCase();
-        const href = upper.startsWith("RQ-")
-          ? `/requerimientos?rqCode=${encodeURIComponent(code)}`
-          : upper.startsWith("REC-")
-            ? `/recursos?resourceCode=${encodeURIComponent(code)}`
-            : `/cotizaciones?quotationCode=${encodeURIComponent(code)}`;
-        segments.push({ type: "code-link", code, href });
-        i += code.length;
-        continue;
+        const href = hrefForKnownCode(code);
+        if (href) {
+          segments.push({ type: "code-link", code, href });
+          i += code.length;
+          continue;
+        }
       }
       // accumulate plain text
-      const next = line.slice(i).search(/\*\*|\*|@|COT-[A-Za-z0-9_-]+|FOR-EKA-PRO-[A-Za-z0-9_-]+|RQ-[A-Za-z0-9_-]+|REC-[A-Za-z0-9_-]+/i);
+      const next = line.slice(i).search(/`|\[|\*\*|\*|@|COT-[A-Za-z0-9_-]+|FOR-EKA-PRO-[A-Za-z0-9_-]+|RQ-[A-Za-z0-9]+(?:[-_][A-Za-z0-9]+){1,8}|REC-[A-Za-z0-9_-]+/i);
       if (next === -1) {
         segments.push({ type: "text", value: line.slice(i) });
         break;

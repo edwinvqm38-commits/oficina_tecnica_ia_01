@@ -74,6 +74,15 @@ const RequirementWorkspaceModal = dynamic(
   { ssr: false },
 );
 
+export type RequerimientosEmbeddedWorkspace = {
+  rqCode: string;
+  onClose: () => void;
+};
+
+type RequerimientosPageProps = {
+  embeddedWorkspace?: RequerimientosEmbeddedWorkspace | null;
+};
+
 function safeUuid(): string {
   try {
     if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
@@ -395,7 +404,9 @@ function upsertResource(rows: Recurso[], resource: Recurso): Recurso[] {
   return [resource, ...rows];
 }
 
-export default function RequerimientosPage() {
+export default function RequerimientosPage({ embeddedWorkspace = null }: RequerimientosPageProps) {
+  const embeddedRqCode = embeddedWorkspace?.rqCode.trim() || null;
+  const isEmbeddedWorkspace = Boolean(embeddedRqCode);
   const { profile, user } = useAuth();
   const {
     users: approvedUsers,
@@ -411,7 +422,7 @@ export default function RequerimientosPage() {
   const workspaceDirtyRef = useRef(false);
   const initialUiStateRef = useRef<PersistedTableUiState | null>(null);
   if (initialUiStateRef.current === null) {
-    initialUiStateRef.current = readSessionUiState<PersistedTableUiState>(REQUERIMIENTOS_UI_STATE_KEY, {});
+    initialUiStateRef.current = isEmbeddedWorkspace ? {} : readSessionUiState<PersistedTableUiState>(REQUERIMIENTOS_UI_STATE_KEY, {});
   }
   const initialUiState = initialUiStateRef.current;
   const [requerimientos, setRequerimientos] = useState<Requerimiento[]>([]);
@@ -439,7 +450,7 @@ export default function RequerimientosPage() {
   const [warning, setWarning] = useState<string | null>(null);
   const [dataSource, setDataSource] = useState<AppDataSource>("demo");
   const [loading, setLoading] = useState(true);
-  const [page, setPage] = useState(() => readUrlNumberParam("page") ?? initialUiState.page ?? 1);
+  const [page, setPage] = useState(() => isEmbeddedWorkspace ? 1 : readUrlNumberParam("page") ?? initialUiState.page ?? 1);
   const [pageSize, setPageSize] = useState<number>(() => initialUiState.pageSize ?? DEFAULT_PAGE_SIZE);
   const [tableViewState, setTableViewState] = useState<DataTableViewState>(
     () => initialUiState.tableView ?? { columnFilters: {}, sortKey: null, sortDirection: null },
@@ -750,15 +761,17 @@ export default function RequerimientosPage() {
         cacheStatus: result.cacheStatus,
       });
     });
-    writeSessionUiState(REQUERIMIENTOS_UI_STATE_KEY, {
-      page,
-      pageSize,
-      tableView: tableViewState,
-      rqCode: normalized.codigo,
-    });
-    updateUrlState({ page, rqCode: normalized.codigo, rqId: normalized.id });
+    if (!isEmbeddedWorkspace) {
+      writeSessionUiState(REQUERIMIENTOS_UI_STATE_KEY, {
+        page,
+        pageSize,
+        tableView: tableViewState,
+        rqCode: normalized.codigo,
+      });
+      updateUrlState({ page, rqCode: normalized.codigo, rqId: normalized.id });
+    }
     debugUiState("requerimientos", "workspace-opened", { rqCode: normalized.codigo });
-  }, [cotizaciones, page, pageSize, recursos, tableViewState]);
+  }, [cotizaciones, isEmbeddedWorkspace, page, pageSize, recursos, tableViewState]);
 
   useEffect(() => {
     let active = true;
@@ -844,8 +857,8 @@ export default function RequerimientosPage() {
 
   useEffect(() => {
     if (typeof window === "undefined") return;
-    const rqCode = readUrlStringParam("rqCode") ?? initialUiState.rqCode ?? null;
-    const rqId = readUrlStringParam("rqId");
+    const rqCode = embeddedRqCode ?? readUrlStringParam("rqCode") ?? initialUiState.rqCode ?? null;
+    const rqId = isEmbeddedWorkspace ? null : readUrlStringParam("rqId");
     const restoreKey = rqCode ?? rqId;
     if (!restoreKey) {
       restoredUiStateRef.current = true;
@@ -864,9 +877,10 @@ export default function RequerimientosPage() {
     restoredUiStateRef.current = true;
     openWorkspace(target);
     debugUiState("requerimientos", "restored", { rqCode, rqId, found: true });
-  }, [initialUiState.rqCode, requerimientos, openWorkspace]);
+  }, [embeddedRqCode, initialUiState.rqCode, isEmbeddedWorkspace, requerimientos, openWorkspace]);
 
   useEffect(() => {
+    if (isEmbeddedWorkspace) return;
     const hasPendingRestore =
       !restoredUiStateRef.current &&
       Boolean(readUrlStringParam("rqCode") || readUrlStringParam("rqId") || initialUiState.rqCode);
@@ -885,7 +899,7 @@ export default function RequerimientosPage() {
       rqCode: draft?.codigo ?? null,
       filters: Object.keys(tableViewState.columnFilters).filter((key) => tableViewState.columnFilters[key]?.trim()),
     });
-  }, [draft?.codigo, initialUiState.rqCode, page, pageSize, tableViewState]);
+  }, [draft?.codigo, initialUiState.rqCode, isEmbeddedWorkspace, page, pageSize, tableViewState]);
 
   function patchRow(rowId: string, patch: Partial<EditableRequirementItem>) {
     if (!canEditRequirementDetail) {
@@ -1245,7 +1259,9 @@ export default function RequerimientosPage() {
       persistedDraft = normalizeRequirementDates(draftSave.requerimiento);
       setDraft(persistedDraft);
       setRequerimientos((prev) => prev.map((rq) => (rq.id === selectedId ? persistedDraft : rq)));
-      updateUrlState({ page, rqCode: persistedDraft.codigo, rqId: persistedDraft.id });
+      if (!isEmbeddedWorkspace) {
+        updateUrlState({ page, rqCode: persistedDraft.codigo, rqId: persistedDraft.id });
+      }
     } catch (error) {
       setWarning(`Error al guardar datos del requerimiento: ${formatSupabaseSaveError(error)}`);
       return false;
@@ -1465,11 +1481,12 @@ export default function RequerimientosPage() {
 
   return (
     <section className="sgp-page app-table-section min-w-0">
-      {loading ? (
+      {loading && (!isEmbeddedWorkspace || !selectedId) ? (
         <div className="rounded-xl border border-border bg-panel px-3 py-4 text-sm text-stone-600">
           Cargando requerimientos...
         </div>
       ) : null}
+      {!isEmbeddedWorkspace ? (
       <DataTable
         rows={tableRows}
         rowWindow={{ start: pageStartIndex, size: pageSize }}
@@ -1543,11 +1560,15 @@ export default function RequerimientosPage() {
           { key: "avance", title: "Avance", align: "right", render: (row) => `${row.avance}%` },
         ]}
       />
+      ) : null}
+      {!isEmbeddedWorkspace ? (
       <div className="mt-2 flex flex-wrap items-center gap-2 text-xs text-muted">
         <span>Fuente: {dataSource === "supabase" ? "Supabase" : "Demo local"}</span>
         <span>Registros: {totalFilteredRows}</span>
         {warning ? <span className="text-amber-700">{warning}</span> : null}
       </div>
+      ) : null}
+      {!isEmbeddedWorkspace ? (
       <div className="mt-3 flex items-center justify-between text-xs text-muted">
         <p>
           Mostrando {totalFilteredRows === 0 ? 0 : pageStartIndex + 1} - {Math.min(pageStartIndex + pageSize, totalFilteredRows)} de{" "}
@@ -1590,6 +1611,7 @@ export default function RequerimientosPage() {
           </button>
         </div>
       </div>
+      ) : null}
 
       <RequirementWorkspaceModal
         open={!!selectedId}
@@ -1599,6 +1621,10 @@ export default function RequerimientosPage() {
           workspaceDirtyRef.current = false;
           setSelectedId(null);
           setDraft(null);
+          if (isEmbeddedWorkspace) {
+            embeddedWorkspace?.onClose();
+            return;
+          }
           writeSessionUiState(REQUERIMIENTOS_UI_STATE_KEY, {
             page,
             pageSize,
@@ -1688,6 +1714,7 @@ export default function RequerimientosPage() {
         onResolveFileUrl={createResourceFileSignedUrl}
       />
 
+      {!isEmbeddedWorkspace ? (
       <NewRequirementModal
         open={newRequirementOpen}
         cotizaciones={cotizaciones}
@@ -1702,6 +1729,7 @@ export default function RequerimientosPage() {
         }}
         onSave={createRequirementFromModal}
       />
+      ) : null}
     </section>
   );
 }

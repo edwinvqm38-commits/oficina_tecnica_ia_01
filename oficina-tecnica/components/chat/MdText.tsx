@@ -1,6 +1,7 @@
 "use client";
 import { useEffect, useId, useMemo, useRef, useState } from "react";
-import type { CSSProperties } from "react";
+import type { CSSProperties, MouseEvent } from "react";
+import Link from "next/link";
 import katex from "katex";
 import { Parser } from "expr-eval";
 import { parseMd, AGENT_FULL_LABELS, type UserDirectory } from "../../lib/chat/messageUtils";
@@ -34,7 +35,7 @@ type MdBlock =
   | { type: "htmlApp"; value: string }
   | { type: "mermaid"; value: string }
   | { type: "plot"; kind: "chart" | "graph2d" | "graph3d" | "plotly"; value: string }
-  | { type: "table"; headers: string[]; rows: string[][] };
+  | { type: "table"; headers: string[]; rows: string[][]; align: Array<"left" | "center" | "right"> };
 
 type PlotlyRuntime = {
   newPlot: (element: HTMLElement, data: unknown[], layout?: Record<string, unknown>, config?: Record<string, unknown>) => Promise<unknown>;
@@ -52,6 +53,19 @@ type PlotSpec = {
     values: number[];
     expression: string;
   };
+};
+
+export type InternalEntityLink = {
+  type: "requirement" | "quotation";
+  code: string;
+  href: string;
+};
+
+type MdTextProps = {
+  text: string;
+  variant?: "default" | "inverted";
+  userDirectory?: UserDirectory;
+  onInternalEntityOpen?: (entity: InternalEntityLink) => void;
 };
 
 declare global {
@@ -102,12 +116,35 @@ function isTableLine(line: string): boolean {
 }
 
 function splitTableLine(line: string): string[] {
-  return line.trim().replace(/^\|/, "").replace(/\|$/, "").split("|").map((cell) => cell.trim());
+  const trimmed = line.trim().replace(/^\|/, "").replace(/\|$/, "");
+  const cells: string[] = [];
+  let current = "";
+  for (let idx = 0; idx < trimmed.length; idx += 1) {
+    const char = trimmed[idx];
+    if (char === "|" && trimmed[idx - 1] !== "\\") {
+      cells.push(current.replace(/\\\|/g, "|").trim());
+      current = "";
+      continue;
+    }
+    current += char;
+  }
+  cells.push(current.replace(/\\\|/g, "|").trim());
+  return cells;
 }
 
 function isSeparatorLine(line: string): boolean {
   const cells = splitTableLine(line);
-  return cells.length > 0 && cells.every((cell) => /^:?-{3,}:?$/.test(cell));
+  return cells.length > 0 && cells.every((cell) => /^:?-{2,}:?$/.test(cell));
+}
+
+function tableAlignments(line: string): Array<"left" | "center" | "right"> {
+  return splitTableLine(line).map((cell) => {
+    const left = cell.startsWith(":");
+    const right = cell.endsWith(":");
+    if (left && right) return "center";
+    if (right) return "right";
+    return "left";
+  });
 }
 
 function parseBlocks(text: string): MdBlock[] {
@@ -183,6 +220,7 @@ function parseBlocks(text: string): MdBlock[] {
     if (current && next && isTableLine(current) && isTableLine(next) && isSeparatorLine(next)) {
       flushText();
       const headers = splitTableLine(current);
+      const align = tableAlignments(next);
       const rows: string[][] = [];
       i += 2;
       while (i < lines.length && isTableLine(lines[i])) {
@@ -190,7 +228,7 @@ function parseBlocks(text: string): MdBlock[] {
         rows.push(headers.map((_, idx) => row[idx] ?? ""));
         i += 1;
       }
-      blocks.push({ type: "table", headers, rows });
+      blocks.push({ type: "table", headers, rows, align: headers.map((_, idx) => align[idx] ?? "left") });
       continue;
     }
     buffer.push(current);
@@ -610,7 +648,24 @@ function PlotBlock({ kind, code }: { kind: "chart" | "graph2d" | "graph3d" | "pl
   );
 }
 
-export function MdText({ text, variant = "default", userDirectory }: { text: string; variant?: "default" | "inverted"; userDirectory?: UserDirectory }) {
+function getInternalEntityLink(href: string): InternalEntityLink | null {
+  try {
+    const url = new URL(href, "http://local.app");
+    if (url.pathname === "/requerimientos") {
+      const code = url.searchParams.get("rqCode")?.trim();
+      return code ? { type: "requirement", code, href } : null;
+    }
+    if (url.pathname === "/cotizaciones") {
+      const code = url.searchParams.get("quotationCode")?.trim();
+      return code ? { type: "quotation", code, href } : null;
+    }
+  } catch {
+    return null;
+  }
+  return null;
+}
+
+export function MdText({ text, variant = "default", userDirectory, onInternalEntityOpen }: MdTextProps) {
   const blocks = useMemo(() => {
     if (text.length > MAX_PARSE_LENGTH) {
       return [{ type: "text" as const, value: text }];
@@ -618,6 +673,13 @@ export function MdText({ text, variant = "default", userDirectory }: { text: str
     return parseBlocks(text);
   }, [text]);
   const inverted = variant === "inverted";
+
+  function handleInternalEntityClick(event: MouseEvent<HTMLAnchorElement>, href: string) {
+    const entity = getInternalEntityLink(href);
+    if (!entity || !onInternalEntityOpen) return;
+    event.preventDefault();
+    onInternalEntityOpen(entity);
+  }
 
   function splitInlineMath(value: string): Array<{ type: "text" | "math"; value: string }> {
     const parts: Array<{ type: "text" | "math"; value: string }> = [];
@@ -679,6 +741,23 @@ export function MdText({ text, variant = "default", userDirectory }: { text: str
       const segments = parseMd(part.value, userDirectory);
       return segments.map((seg, i) => {
       const key = `${keyPrefix}-${partIdx}-${i}`;
+      if (seg.type === "code") {
+        return (
+          <code
+            key={key}
+            style={{
+              fontFamily: "var(--mono)",
+              fontSize: "0.92em",
+              background: inverted ? "rgba(255,255,255,.18)" : "var(--bg-subtle)",
+              border: `1px solid ${inverted ? "rgba(255,255,255,.24)" : "var(--border)"}`,
+              borderRadius: 4,
+              padding: "1px 4px",
+            }}
+          >
+            {seg.value}
+          </code>
+        );
+      }
       if (seg.type === "bold") {
         return <strong key={key} style={{ fontWeight: 700, color: "inherit" }}>{seg.value}</strong>;
       }
@@ -726,9 +805,29 @@ export function MdText({ text, variant = "default", userDirectory }: { text: str
               textDecoration: "none",
             };
         return (
-          <a key={key} href={seg.href} style={linkStyle} title={`Abrir ${seg.code}`}>
+          <Link key={key} href={seg.href} style={linkStyle} title={`Abrir ${seg.code}`} onClick={(event) => handleInternalEntityClick(event, seg.href)}>
             {seg.code}
-          </a>
+          </Link>
+        );
+      }
+      if (seg.type === "link") {
+        const linkStyle: CSSProperties = {
+          color: inverted ? "inherit" : "var(--blue)",
+          fontWeight: 700,
+          textDecoration: "underline",
+          textUnderlineOffset: 2,
+        };
+        if (seg.external) {
+          return (
+            <a key={key} href={seg.href} target="_blank" rel="noopener noreferrer" style={linkStyle}>
+              {seg.label}
+            </a>
+          );
+        }
+        return (
+          <Link key={key} href={seg.href} style={linkStyle} onClick={(event) => handleInternalEntityClick(event, seg.href)}>
+            {seg.label}
+          </Link>
         );
       }
       if (seg.type === "user-mention") {
@@ -825,12 +924,12 @@ export function MdText({ text, variant = "default", userDirectory }: { text: str
           return <PlotBlock key={blockIdx} kind={block.kind} code={block.value} />;
         }
         return (
-          <div key={blockIdx} style={{ maxWidth: "100%", overflowX: "auto", border: "1px solid var(--border)", borderRadius: 8, background: inverted ? "rgba(255,255,255,.08)" : "var(--bg-card)" }}>
-            <table style={{ width: "100%", minWidth: 520, borderCollapse: "collapse", fontSize: 12 }}>
+          <div key={blockIdx} style={{ maxWidth: "100%", overflowX: "auto", border: `1px solid ${inverted ? "rgba(255,255,255,.25)" : "var(--border)"}`, borderRadius: 8, background: inverted ? "rgba(255,255,255,.08)" : "var(--bg-card)" }}>
+            <table style={{ width: "100%", minWidth: Math.max(520, block.headers.length * 132), borderCollapse: "separate", borderSpacing: 0, fontSize: 12 }}>
               <thead>
                 <tr>
                   {block.headers.map((header, idx) => (
-                    <th key={idx} style={{ textAlign: "left", padding: "7px 9px", borderBottom: "1px solid var(--border)", background: inverted ? "rgba(255,255,255,.14)" : "var(--bg-subtle)", fontWeight: 700, whiteSpace: "nowrap" }}>
+                    <th key={idx} style={{ textAlign: block.align[idx], padding: "7px 9px", borderBottom: `1px solid ${inverted ? "rgba(255,255,255,.25)" : "var(--border)"}`, background: inverted ? "rgba(255,255,255,.14)" : "var(--bg-subtle)", fontWeight: 800, whiteSpace: "nowrap" }}>
                       {renderInline(header, `table-${blockIdx}-h-${idx}`)}
                     </th>
                   ))}
@@ -838,9 +937,9 @@ export function MdText({ text, variant = "default", userDirectory }: { text: str
               </thead>
               <tbody>
                 {block.rows.map((row, rowIdx) => (
-                  <tr key={rowIdx}>
+                  <tr key={rowIdx} style={{ background: !inverted && rowIdx % 2 === 1 ? "rgba(15,23,42,.018)" : undefined }}>
                     {block.headers.map((_, cellIdx) => (
-                      <td key={cellIdx} style={{ padding: "7px 9px", borderTop: rowIdx === 0 ? "none" : "1px solid var(--border)", verticalAlign: "top" }}>
+                      <td key={cellIdx} style={{ padding: "7px 9px", borderTop: rowIdx === 0 ? "none" : `1px solid ${inverted ? "rgba(255,255,255,.18)" : "var(--border)"}`, verticalAlign: "top", textAlign: block.align[cellIdx] }}>
                         {renderInline(row[cellIdx] ?? "", `table-${blockIdx}-r-${rowIdx}-${cellIdx}`)}
                       </td>
                     ))}

@@ -74,8 +74,15 @@ const COT_COUNT_NOUN_RE = /\bcotizaci[oó]n(?:es)?\b|\bcots?\b|\blog\s+de\s+coti
 const RQ_COUNT_NOUN_RE = /\brequerimientos?\b|\brqs?\b|\blog\s+de\s+requerimientos\b/i;
 const RESOURCE_COUNT_NOUN_RE = /\brecursos?\b|\bcat[aá]logo\b/i;
 const TABLE_SUMMARY_TRIGGER_RE = /\b(dashboard|tablero|tabla\s+resumen|tabla|resumen|reporte|informe|gr[aá]fico|grafico|mu[eé]strame|mostrar|genera|generar|prepara|preparar)\b/i;
+const DISCOVERY_TRIGGER_RE = /\b(qu[eé]|cu[aá]les?|lista|listar|listado|mu[eé]stra(?:me)?|mostrar|dame|ver|consulta(?:r)?|hay|tienen?|est[aá]n|actual(?:es|mente)?|vigentes?|registrad[oa]s?)\b/i;
 const COT_AMOUNT_QUESTION_RE = /\b(cu[aá]nto(?:s)?|monto|importe|valor|ofertad[ao]|ofertamos|oferta)\b/i;
 const COT_DETAIL_QUESTION_RE = /\b(detalle|datos|ficha|desglose|informaci[oó]n|resumen)\b/i;
+const RQ_STATUS_QUESTION_RE = /\b(estado|estatus|situaci[oó]n|c[oó]mo\s+est[aá])\b/i;
+const RQ_RESPONSIBLE_QUESTION_RE = /\b(responsable|encargad[oa]|asignad[oa]|qui[eé]n)\b/i;
+const RQ_LIST_QUESTION_RE = /\brequerimientos?\b|\brqs?\b/i;
+const RQ_HISTORY_COMPARISON_RE = /\b(hist[oó]ric[ao]s?|documental(?:es)?|documentos?|compar(?:a|ar|aci[oó]n|arlo|alo))\b/i;
+const RQ_DETAIL_INTENT_RE = /\b(material(?:es)?|recursos?|[ií]tems?|items?|entregables?|cantidades?|precios?|proveedor(?:es)?|partidas?|suministros?|equipos?|detalle|desglose)\b|\bpendientes?\s+(?:espec[ií]ficos|de\s+(?:material(?:es)?|recursos?|[ií]tems?|items?))\b|\bdocumentaci[oó]n\s+detallada\b/i;
+const EXACT_RQ_CODE_RE = /\bRQ-[A-Z0-9]+(?:[-_][A-Z0-9]+){1,8}\b/gi;
 const DOCUMENTS_RE = /\b(documentos?|documentaci[oó]n|archivos?|adjuntos?|drive|sustentos?|anexos?)\b/i;
 
 type CountIntent = {
@@ -88,6 +95,18 @@ function detectRecursoIntent(t: string): RecursosToolFilters | null {
   if (!RECURSO_NOUN_RE.test(t)) return null;
   if (!RECURSO_TRIGGER_RE.test(t)) return null;
   return {};
+}
+
+function unique(values: string[]): string[] {
+  return [...new Set(values.map((value) => value.trim().toUpperCase()).filter(Boolean))];
+}
+
+function detectExactRqCodes(t: string): string[] {
+  return unique([...t.matchAll(EXACT_RQ_CODE_RE)].map((match) => match[0]));
+}
+
+function removeRqCodeFragments(codes: string[]): string[] {
+  return codes.filter((code) => !codes.some((other) => other !== code && other.startsWith(code) && other.length > code.length));
 }
 
 function isoDate(date: Date): string {
@@ -106,7 +125,7 @@ function addDays(date: Date, days: number): Date {
 
 function detectEstadoFilter(t: string): string | undefined {
   if (/\bpendientes?\b|\bpendientes?\s+de\s+atenci[oó]n\b|\bpor\s+atender\b/i.test(t)) return "Pendiente";
-  if (/\ben\s+proceso\b|\ben\s+curso\b/i.test(t)) return "En proceso";
+  if (/\bprocesando\b|\ben\s+proceso\b|\ben\s+curso\b/i.test(t)) return "En proceso";
   if (/\batendidos?\b|\bcompletados?\b|\bfinalizados?\b|\bculminados?\b|\bcerrados?\b/i.test(t)) return "Atendido";
   return undefined;
 }
@@ -197,7 +216,90 @@ function buildPeriodSearchFilters(
     estado,
     recent: true,
     limit: DEFAULT_CONTEXT_LIMIT,
+    dateColumn: detectDateColumn(t, "requerimientos"),
+    ...period,
   } as RequerimientoSearchFilters & { limit?: number };
+}
+
+function cleanNamedFilterValue(value: string): string {
+  return value
+    .replace(/\b(?:pendientes?|actual(?:es|mente)?|vigentes?|registrad[oa]s?|hoy|ayer|esta\s+semana|semana\s+pasada|este\s+mes|mes\s+pasado|con\s+estado|estado|responsable)\b.*$/i, "")
+    .replace(/^(?:de la|de los|de las|del?|el|la|los|las)\s+/i, "")
+    .trim()
+    .replace(/[.,;:]+$/g, "")
+    .trim();
+}
+
+function extractNamedFilter(t: string, names: string): string | undefined {
+  const match = t.match(new RegExp(`\\b(?:${names})\\s+([^?\\n]+)`, "i"));
+  if (!match?.[1]) return undefined;
+  const value = cleanNamedFilterValue(match[1]);
+  return value.length >= 2 ? value : undefined;
+}
+
+function extractResponsibleFilter(t: string): string | undefined {
+  const match = t.match(/responsable\s+(?:es\s+|de\s+|:)?([A-Za-zÀ-ÿ.]+(?:\s+[A-Za-zÀ-ÿ.]+){0,3})/i);
+  return match?.[1]?.trim();
+}
+
+function buildDiscoveryFilters(
+  t: string,
+  table: "cotizaciones" | "requerimientos",
+): (CotizacionSearchFilters | RequerimientoSearchFilters) & { limit?: number } | null {
+  const isCot = table === "cotizaciones";
+  const nounMatches = isCot ? COT_COUNT_NOUN_RE.test(t) : RQ_COUNT_NOUN_RE.test(t);
+  if (!nounMatches) return null;
+
+  const period = detectPeriodFilter(t);
+  const estado = detectEstadoFilter(t);
+  const project = extractNamedFilter(t, "proyectos?");
+  const client = extractNamedFilter(t, "clientes?");
+  const responsable = isCot ? undefined : extractResponsibleFilter(t);
+  const hasFilter = Boolean(estado || project || client || responsable || period.dateFrom || period.dateTo);
+  if (!DISCOVERY_TRIGGER_RE.test(t) && !hasFilter) return null;
+
+  const q = project ?? client;
+  if (isCot) {
+    return {
+      estado,
+      q,
+      recent: true,
+      limit: DEFAULT_CONTEXT_LIMIT,
+      dateColumn: "fecha_registro",
+      ...period,
+    } as CotizacionSearchFilters & { limit?: number };
+  }
+
+  return {
+    estado,
+    responsable,
+    q: project,
+    cotizacionQ: client,
+    recent: true,
+    limit: DEFAULT_CONTEXT_LIMIT,
+    dateColumn: detectDateColumn(t, "requerimientos"),
+    ...period,
+  } as RequerimientoSearchFilters & { limit?: number };
+}
+
+function mergeSearchFilters<T extends { limit?: number }>(...filters: Array<T | null | undefined>): T | null {
+  const merged: Record<string, unknown> = {};
+  let hasValue = false;
+
+  for (const filter of filters) {
+    if (!filter) continue;
+    for (const [key, value] of Object.entries(filter)) {
+      if (value === undefined || value === null || (typeof value === "string" && value === "")) continue;
+      merged[key] = value;
+      hasValue = true;
+    }
+  }
+
+  return hasValue ? (merged as T) : null;
+}
+
+function shouldLoadRequirementItems(cleanText: string): boolean {
+  return RQ_DETAIL_INTENT_RE.test(cleanText);
 }
 
 /**
@@ -214,14 +316,15 @@ export function detectContextIntent(cleanText: string): ContextRoutingDecision {
 
   const codes = detectDocumentCodes(t);
   const cotCodes = codes.filter((c) => c.type === "COT").map((c) => c.code);
-  const rqCodes = codes.filter((c) => c.type === "RQ").map((c) => c.code);
-  const exclude = new Set(codes.map((c) => c.code));
+  const rqCodes = removeRqCodeFragments(unique([...codes.filter((c) => c.type === "RQ").map((c) => c.code), ...detectExactRqCodes(t)]));
+  const exclude = new Set([...codes.map((c) => c.code), ...rqCodes]);
   const otherCodes = detectOtherCodes(t, exclude).slice(0, 2);
+  const hasExplicitCode = cotCodes.length > 0 || rqCodes.length > 0 || otherCodes.length > 0;
 
   const calls: ContextToolCall[] = [];
   const countIntent = detectCountIntent(t);
 
-  if (countIntent) {
+  if (countIntent && !hasExplicitCode) {
     calls.push({ tool: "contarRegistros", args: { table: countIntent.table, filters: countIntent.filters } });
   }
 
@@ -245,18 +348,22 @@ export function detectContextIntent(cleanText: string): ContextRoutingDecision {
   }
 
   // Búsqueda libre de requerimientos ("lista RQ pendientes de Juan").
-  const reqIntent = detectRequerimientoSearchIntent(t);
-  const reqSummaryIntent = buildPeriodSearchFilters(t, "requerimientos") as (RequerimientoSearchFilters & { limit?: number }) | null;
-  if (reqIntent || reqSummaryIntent) {
-    const { limit, ...filters } = (reqIntent ?? reqSummaryIntent)!;
+  const reqIntent = hasExplicitCode ? null : detectRequerimientoSearchIntent(t);
+  const reqSummaryIntent = hasExplicitCode ? null : buildPeriodSearchFilters(t, "requerimientos") as (RequerimientoSearchFilters & { limit?: number }) | null;
+  const reqDiscoveryIntent = hasExplicitCode ? null : buildDiscoveryFilters(t, "requerimientos") as (RequerimientoSearchFilters & { limit?: number }) | null;
+  const reqSearchIntent = mergeSearchFilters<RequerimientoSearchFilters & { limit?: number }>(reqSummaryIntent, reqDiscoveryIntent, reqIntent);
+  if (reqSearchIntent) {
+    const { limit, ...filters } = reqSearchIntent;
     calls.push({ tool: "buscarRequerimientos", args: { filters: filters as RequerimientoSearchFilters, limit: limit ?? DEFAULT_CONTEXT_LIMIT } });
   }
 
   // Búsqueda libre de cotizaciones ("últimas cotizaciones de NEXA").
-  const cotIntent = detectCotizacionSearchIntent(t);
-  const cotSummaryIntent = buildPeriodSearchFilters(t, "cotizaciones") as (CotizacionSearchFilters & { limit?: number }) | null;
-  if (cotIntent || cotSummaryIntent) {
-    const { limit, ...filters } = (cotIntent ?? cotSummaryIntent)!;
+  const cotIntent = hasExplicitCode ? null : detectCotizacionSearchIntent(t);
+  const cotSummaryIntent = hasExplicitCode ? null : buildPeriodSearchFilters(t, "cotizaciones") as (CotizacionSearchFilters & { limit?: number }) | null;
+  const cotDiscoveryIntent = hasExplicitCode ? null : buildDiscoveryFilters(t, "cotizaciones") as (CotizacionSearchFilters & { limit?: number }) | null;
+  const cotSearchIntent = mergeSearchFilters<CotizacionSearchFilters & { limit?: number }>(cotSummaryIntent, cotDiscoveryIntent, cotIntent);
+  if (cotSearchIntent) {
+    const { limit, ...filters } = cotSearchIntent;
     calls.push({ tool: "buscarCotizaciones", args: { filters: filters as CotizacionSearchFilters, limit: limit ?? DEFAULT_CONTEXT_LIMIT } });
   }
 
@@ -267,24 +374,23 @@ export function detectContextIntent(cleanText: string): ContextRoutingDecision {
   }
 
   // ── Etiqueta de intención + confianza ──────────────────────────────────────
-  const hasCodeCall = cotCodes.length > 0 || rqCodes.length > 0 || otherCodes.length > 0;
   let intent: string;
   let confidence: number;
   let reason: string;
 
-  if (countIntent && !hasCodeCall) {
+  if (countIntent && !hasExplicitCode) {
     intent = `contar_${countIntent.table}`;
     confidence = 0.9;
     reason = "Intención de conteo/agregado sobre una tabla real de Supabase.";
-  } else if (hasCodeCall) {
+  } else if (hasExplicitCode) {
     intent = wantsResumen ? "resumen_proyecto" : wantsProposal ? "consulta_propuesta_tecnica" : "consulta_por_codigo";
     confidence = 0.9;
     reason = "Se detectó al menos un código (COT/RQ/proyecto) en el mensaje.";
-  } else if (reqIntent) {
+  } else if (reqSearchIntent) {
     intent = "buscar_requerimientos";
     confidence = 0.8;
     reason = "Intención de búsqueda/listado de requerimientos.";
-  } else if (cotIntent) {
+  } else if (cotSearchIntent) {
     intent = "buscar_cotizaciones";
     confidence = 0.8;
     reason = "Intención de búsqueda/listado de cotizaciones.";
@@ -353,14 +459,19 @@ function summarizeQuery(query: Record<string, unknown>): string {
   return parts.length ? parts.join(" · ") : "sin filtros adicionales";
 }
 
+function mdCell(value: unknown): string {
+  const text = String(value ?? "—").replace(/\r?\n/g, " ").replace(/\|/g, "\\|").trim();
+  return text || "—";
+}
+
 function cotizacionRow(cot: import("@/lib/chat/contextQuery").CotizacionSummary): string {
   const moneda = moneyPrefix(cot.moneda_codigo);
   const monto = cot.monto == null ? "—" : `${moneda} ${formatMoney(cot.monto)}`;
-  return `| ${cot.codigo} | ${cot.proyecto ?? "—"} | ${cot.cliente_nombre ?? "—"} | ${cot.unidad_trabajo_nombre ?? "—"} | ${cot.estado_propuesta ?? cot.estado ?? "—"} | ${cot.avance ?? "—"}% | ${monto} |`;
+  return `| ${[cot.codigo, cot.proyecto, cot.cliente_nombre, cot.unidad_trabajo_nombre, cot.estado_propuesta ?? cot.estado, `${cot.avance ?? "—"}%`, monto].map(mdCell).join(" | ")} |`;
 }
 
 function requerimientoRow(rq: import("@/lib/chat/contextQuery").RequirementSummary): string {
-  return `| ${rq.codigo} | ${rq.cotizacion_codigo ?? "—"} | ${rq.proyecto_servicio ?? "—"} | ${rq.estado ?? "—"} | ${rq.avance ?? "—"}% | ${rq.responsable ?? "—"} |`;
+  return `| ${[rq.codigo, rq.cotizacion_codigo, rq.proyecto_servicio, rq.estado, `${rq.avance ?? "—"}%`, rq.responsable].map(mdCell).join(" | ")} |`;
 }
 
 function recursoRow(r: import("@/lib/chat/contextTools").RecursoLite): string {
@@ -388,7 +499,7 @@ function countSummaryAnswer(results: ContextToolResult[]): string | null {
 
   const requerimientos = results.find((res) => res.source === "requerimientos" && res.status === "success");
   if (requerimientos?.source === "requerimientos" && requerimientos.records.length > 0) {
-    lines.push("", "| RQ | Cotización | Proyecto/servicio | Estado | Avance | Responsable |", "|---|---|---|---|---:|---|");
+    lines.push("", "| RQ | Cotización | Proyecto/servicio | Estado | Avance | Responsable |", "| -- | ---------- | ----------------- | ------ | -----: | ----------- |");
     lines.push(...requerimientos.records.map(requerimientoRow));
     if (requerimientos.total > requerimientos.records.length) {
       lines.push("", `Mostré ${requerimientos.records.length} de ${requerimientos.total}. Usa un filtro para acotar más.`);
@@ -403,6 +514,74 @@ function countSummaryAnswer(results: ContextToolResult[]): string | null {
     if (recursos.total > recursos.records.length) {
       lines.push("", `Mostré ${recursos.records.length} de ${recursos.total}. Usa un filtro para acotar más.`);
     }
+  }
+
+  return lines.join("\n");
+}
+
+function requirementDetailAnswer(
+  cleanText: string,
+  rq: import("@/lib/chat/contextQuery").RequirementSummary,
+): string | null {
+  const currentRows = [
+    ["Código", rq.codigo],
+    ["Estado actual", rq.estado ?? "—"],
+    ["Avance", `${rq.avance ?? "—"}%`],
+    ["Responsable", rq.responsable ?? "—"],
+    ["Proyecto/servicio", rq.proyecto_servicio ?? "—"],
+  ];
+  const currentTable = [
+    "| Campo | Dato estructurado actual |",
+    "| -- | ------------------------ |",
+    ...currentRows.map(([label, value]) => `| ${mdCell(label)} | ${mdCell(value)} |`),
+  ].join("\n");
+
+  if (RQ_HISTORY_COMPARISON_RE.test(cleanText)) {
+    return [
+      `Resolví exclusivamente el requerimiento **${rq.codigo}** en Supabase.`,
+      "",
+      currentTable,
+      "",
+      "No encontré en el contexto resuelto una fuente histórica o documental comparable para contrastar ese estado. Si existe una mención histórica fuera de este bloque, debe tratarse como secundaria frente al registro estructurado actual.",
+    ].join("\n");
+  }
+
+  if (RQ_RESPONSIBLE_QUESTION_RE.test(cleanText)) {
+    return [
+      `Según Supabase, el requerimiento **${rq.codigo}** tiene como responsable registrado actualmente: **${rq.responsable ?? "—"}**.`,
+      "",
+      currentTable,
+      "Si algún contexto documental previo menciona otro responsable, debe tratarse como información secundaria frente al registro actual.",
+    ].join("\n");
+  }
+
+  if (RQ_STATUS_QUESTION_RE.test(cleanText)) {
+    return [
+      `Según Supabase, el requerimiento **${rq.codigo}** tiene estado registrado actualmente: **${rq.estado ?? "—"}**.`,
+      "",
+      currentTable,
+      "Si algún contexto documental previo menciona otro estado, debe tratarse como información secundaria frente al registro actual.",
+    ].join("\n");
+  }
+
+  return null;
+}
+
+function requirementListAnswer(
+  result: Extract<ContextToolResult, { source: "requerimientos" }>,
+): string | null {
+  if (result.status !== "success" || result.records.length === 0) return null;
+
+  const lines = [
+    `Encontré **${result.total} requerimiento(s)** que coinciden con los filtros aplicados en Supabase.`,
+    "",
+    "| RQ | Cotización | Proyecto/servicio | Estado | Avance | Responsable |",
+    "| -- | ---------- | ----------------- | ------ | -----: | ----------- |",
+    ...result.records.map(requerimientoRow),
+  ];
+
+  if (result.total > result.records.length) {
+    lines.push("", `Mostré ${result.records.length} de ${result.total}. Usa un filtro adicional para acotar más.`);
   }
 
   return lines.join("\n");
@@ -467,6 +646,20 @@ export function buildDeterministicAnswerFromResults(
   cleanText: string,
   results: ContextToolResult[],
 ): string | null {
+  const reqResult = results.find(
+    (res) => res.source === "requerimientos" && res.status === "success",
+  );
+  if (reqResult?.source === "requerimientos" && reqResult.status === "success") {
+    if (reqResult.records.length === 1) {
+      const answer = requirementDetailAnswer(cleanText, reqResult.records[0]);
+      if (answer) return answer;
+    }
+    if (RQ_LIST_QUESTION_RE.test(cleanText)) {
+      const answer = requirementListAnswer(reqResult);
+      if (answer) return answer;
+    }
+  }
+
   const countAnswer = countSummaryAnswer(results);
   if (countAnswer) return countAnswer;
 
@@ -514,6 +707,7 @@ const SOFT_ERROR_NOTE =
  */
 export async function runContextPipeline(cleanText: string, options: ContextPipelineOptions): Promise<ContextPipelineResult> {
   const decision = detectContextIntent(cleanText);
+  const loadRequirementItems = shouldLoadRequirementItems(cleanText);
 
   if (decision.toolsToCall.length === 0) {
     return { block: "", decision, results: [], hasData: false };
@@ -529,14 +723,14 @@ export async function runContextPipeline(cleanText: string, options: ContextPipe
 
       // Encadenado: ítems del requerimiento encontrado por código.
       if (res.source === "requerimientos" && call.tool === "buscarRequerimientoPorCodigo"
-          && res.status === "success" && res.records.length === 1) {
+          && res.status === "success" && res.records.length === 1 && loadRequirementItems) {
         const rq = res.records[0];
         results.push(await buscarItemsDeRequerimiento(rq.id, DEFAULT_CONTEXT_LIMIT, rq.codigo, options));
       }
 
       // Encadenado: ítems cuando un código resolvió a un requerimiento único.
       if (res.source === "proyecto" && res.status === "success"
-          && res.reference.source === "requerimiento" && res.reference.requirements?.length === 1) {
+          && res.reference.source === "requerimiento" && res.reference.requirements?.length === 1 && loadRequirementItems) {
         const rq = res.reference.requirements[0];
         results.push(await buscarItemsDeRequerimiento(rq.id, DEFAULT_CONTEXT_LIMIT, rq.codigo, options));
       }

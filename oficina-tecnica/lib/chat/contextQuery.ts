@@ -25,6 +25,7 @@ export interface RequirementSummary {
   solicitante_rq: string | null;
   tipo_servicio_nombre: string | null;
   proyecto_servicio?: string | null;
+  fecha_solicitud?: string | null;
   fecha_requerida: string | null;
   cotizacion_codigo: string | null;
   observaciones: string | null;
@@ -200,7 +201,7 @@ export async function fetchCotizacionByCode(code: string, db: ContextSupabaseCli
 export async function fetchRequirementByCode(code: string, db: ContextSupabaseClient): Promise<RequirementSummary | null> {
   const { data, error } = await db
     .from("requerimientos")
-    .select("id, codigo, estado, responsable, avance, solicitante_rq, tipo_servicio_nombre, fecha_requerida, cotizacion_codigo, observaciones")
+    .select(REQUIREMENT_SELECT)
     .eq("codigo", code)
     .maybeSingle();
   if (error || !data) return null;
@@ -222,7 +223,7 @@ export async function fetchRequirementsByProject(
 
   const { data, error } = await db
     .from("requerimientos")
-    .select("id, codigo, estado, responsable, avance, solicitante_rq, tipo_servicio_nombre, fecha_requerida, cotizacion_codigo, observaciones")
+    .select(REQUIREMENT_SELECT)
     .or(filters.join(","))
     .order("codigo", { ascending: true })
     .limit(30);
@@ -313,8 +314,14 @@ export interface RequerimientoSearchFilters {
   q?: string;
   estado?: string;
   responsable?: string;
+  cotizacionQ?: string;
+  cotizacionCodigos?: string[];
   recent?: boolean;
   oldest?: boolean;
+  dateFrom?: string;
+  dateTo?: string;
+  dateColumn?: "created_at" | "fecha_solicitud" | "fecha_requerida";
+  periodLabel?: string;
 }
 
 export interface RequerimientoSearchResult {
@@ -322,7 +329,7 @@ export interface RequerimientoSearchResult {
   total: number;
 }
 
-const REQUIREMENT_SELECT = "id, codigo, estado, responsable, avance, solicitante_rq, tipo_servicio_nombre, fecha_requerida, cotizacion_codigo, observaciones, created_at";
+const REQUIREMENT_SELECT = "id, codigo, estado, responsable, avance, solicitante_rq, tipo_servicio_nombre, proyecto_servicio, fecha_solicitud, fecha_requerida, cotizacion_codigo, observaciones, created_at";
 
 export async function searchRequerimientos(
   filters: RequerimientoSearchFilters,
@@ -330,6 +337,7 @@ export async function searchRequerimientos(
   db: ContextSupabaseClient,
 ): Promise<RequerimientoSearchResult> {
   const orderByCreated = filters.recent || filters.oldest;
+  const dateColumn = filters.dateColumn ?? "created_at";
   let query = db
     .from("requerimientos")
     .select(REQUIREMENT_SELECT, { count: "exact" })
@@ -338,10 +346,14 @@ export async function searchRequerimientos(
 
   const q = filters.q?.trim();
   if (q) {
-    query = query.or(`codigo.ilike.%${q}%,cotizacion_codigo.ilike.%${q}%,responsable.ilike.%${q}%,solicitante_rq.ilike.%${q}%,observaciones.ilike.%${q}%`);
+    query = query.or(`codigo.ilike.%${q}%,cotizacion_codigo.ilike.%${q}%,proyecto_servicio.ilike.%${q}%,responsable.ilike.%${q}%,solicitante_rq.ilike.%${q}%,tipo_servicio_nombre.ilike.%${q}%,observaciones.ilike.%${q}%`);
   }
+  const cotizacionCodigos = (filters.cotizacionCodigos ?? []).map((code) => code.trim()).filter(Boolean);
+  if (cotizacionCodigos.length > 0) query = query.in("cotizacion_codigo", cotizacionCodigos);
   if (filters.estado?.trim()) query = query.ilike("estado", `%${filters.estado.trim()}%`);
   if (filters.responsable?.trim()) query = query.ilike("responsable", `%${filters.responsable.trim()}%`);
+  if (filters.dateFrom) query = query.gte(dateColumn, filters.dateFrom);
+  if (filters.dateTo) query = query.lt(dateColumn, filters.dateTo);
 
   const { data, error, count } = await query;
   if (error || !data) return { items: [], total: 0 };
@@ -354,7 +366,11 @@ export function buildRequerimientoSearchPrompt(filters: RequerimientoSearchFilte
     filters.oldest ? "más antiguos (por fecha de registro)" : "",
     filters.estado ? `estado: ${filters.estado}` : "",
     filters.responsable ? `responsable: ${filters.responsable}` : "",
+    filters.periodLabel ? `periodo: ${filters.periodLabel}` : "",
+    filters.dateFrom || filters.dateTo ? `rango ${filters.dateColumn ?? "created_at"}: ${filters.dateFrom ?? "inicio"} a ${filters.dateTo ?? "fin"}` : "",
     filters.q ? `código/texto contiene: "${filters.q}"` : "",
+    filters.cotizacionQ ? `cotización/cliente/proyecto contiene: "${filters.cotizacionQ}"` : "",
+    filters.cotizacionCodigos?.length ? `cotizaciones: ${filters.cotizacionCodigos.join(", ")}` : "",
   ].filter(Boolean).join(", ") || "sin filtros";
 
   if (result.items.length === 0) {
@@ -366,6 +382,7 @@ export function buildRequerimientoSearchPrompt(filters: RequerimientoSearchFilte
     prompt += `\n- **${rq.codigo}** · Estado: ${rq.estado} · Avance: ${rq.avance ?? "—"}%`;
     if (rq.responsable) prompt += ` · Responsable: ${rq.responsable}`;
     if (rq.cotizacion_codigo) prompt += ` · Cotización: ${rq.cotizacion_codigo}`;
+    if (rq.proyecto_servicio) prompt += ` · Proyecto/servicio: ${rq.proyecto_servicio}`;
     if (orderByCreatedFlag(filters) && rq.created_at) prompt += ` · Registrado: ${new Date(rq.created_at).toLocaleDateString("es-PE")}`;
   }
   if (result.total > result.items.length) {
@@ -381,7 +398,7 @@ function orderByCreatedFlag(filters: { recent?: boolean; oldest?: boolean }): bo
 export async function fetchAllRequirements(db: ContextSupabaseClient): Promise<RequirementSummary[]> {
   const { data, error } = await db
     .from("requerimientos")
-    .select("id, codigo, estado, responsable, avance, solicitante_rq, tipo_servicio_nombre, fecha_requerida, cotizacion_codigo, observaciones")
+    .select(REQUIREMENT_SELECT)
     .order("codigo", { ascending: true })
     .limit(50);
 
@@ -563,7 +580,7 @@ export async function fetchProjectContextByCode(
   if (options.canQueryRequerimientos) {
     const { data: reqs } = await db
       .from("requerimientos")
-      .select("id, codigo, estado, responsable, avance, solicitante_rq, tipo_servicio_nombre, fecha_requerida, cotizacion_codigo, observaciones")
+      .select(REQUIREMENT_SELECT)
       .or(`codigo.eq.${code},cotizacion_codigo.eq.${code}`)
       .limit(10);
     if (reqs && reqs.length > 0) {
@@ -612,7 +629,7 @@ export async function fetchProjectContextByCode(
         db.from("requerimientos").select("id", { count: "exact", head: true }).in("id", ids),
         db
           .from("requerimientos")
-          .select("id, codigo, estado, responsable, avance, solicitante_rq, tipo_servicio_nombre, fecha_requerida, cotizacion_codigo, observaciones")
+          .select(REQUIREMENT_SELECT)
           .in("id", ids)
           .order("codigo", { ascending: true })
           .limit(HISTORICAL_SAMPLE_LIMIT),

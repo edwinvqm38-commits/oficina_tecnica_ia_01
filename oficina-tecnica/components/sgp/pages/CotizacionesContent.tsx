@@ -74,6 +74,16 @@ const RequirementWorkspaceModal = dynamic(
   () => import("@/components/sgp/RequirementWorkspaceModal").then((mod) => mod.RequirementWorkspaceModal),
   { ssr: false },
 );
+
+export type CotizacionesEmbeddedWorkspace = {
+  quotationCode: string;
+  onClose: () => void;
+};
+
+type CotizacionesPageProps = {
+  embeddedWorkspace?: CotizacionesEmbeddedWorkspace | null;
+};
+
 const categoricalBadgePalette = [
   "bg-sky-100 text-sky-700",
   "bg-emerald-100 text-emerald-700",
@@ -560,7 +570,9 @@ function upsertResource(rows: Recurso[], resource: Recurso): Recurso[] {
   return [resource, ...rows];
 }
 
-export default function CotizacionesPage() {
+export default function CotizacionesPage({ embeddedWorkspace = null }: CotizacionesPageProps) {
+  const embeddedQuotationCode = embeddedWorkspace?.quotationCode.trim() || null;
+  const isEmbeddedWorkspace = Boolean(embeddedQuotationCode);
   const { profile, user } = useAuth();
   const {
     users: approvedUsers,
@@ -573,7 +585,7 @@ export default function CotizacionesPage() {
   const restoredWorkspaceKeyRef = useRef<string | null>(null);
   const hasLoadedDataRef = useRef(false);
   if (initialUiStateRef.current === null) {
-    initialUiStateRef.current = readSessionUiState<PersistedTableUiState>(COTIZACIONES_UI_STATE_KEY, {});
+    initialUiStateRef.current = isEmbeddedWorkspace ? {} : readSessionUiState<PersistedTableUiState>(COTIZACIONES_UI_STATE_KEY, {});
   }
   const initialUiState = initialUiStateRef.current;
   const [cotizaciones, setCotizaciones] = useState<Cotizacion[]>([]);
@@ -587,7 +599,7 @@ export default function CotizacionesPage() {
   const [isDataLoading, setIsDataLoading] = useState(true);
   const [warning, setWarning] = useState<string | null>(null);
   const [dataSource, setDataSource] = useState<AppDataSource>("demo");
-  const [page, setPage] = useState(() => readUrlNumberParam("page") ?? initialUiState.page ?? 1);
+  const [page, setPage] = useState(() => isEmbeddedWorkspace ? 1 : readUrlNumberParam("page") ?? initialUiState.page ?? 1);
   const [pageSize, setPageSize] = useState<number>(() => initialUiState.pageSize ?? DEFAULT_PAGE_SIZE);
   const [tableViewState, setTableViewState] = useState<DataTableViewState>(
     () => initialUiState.tableView ?? { columnFilters: {}, sortKey: null, sortDirection: null },
@@ -1148,6 +1160,7 @@ export default function CotizacionesPage() {
   }, [totalPages]);
 
   useEffect(() => {
+    if (isEmbeddedWorkspace) return;
     const hasPendingRestore =
       !restoredUiStateRef.current &&
       Boolean(
@@ -1186,12 +1199,13 @@ export default function CotizacionesPage() {
     pageSize,
     requirementDraft?.codigo,
     tableViewState,
+    isEmbeddedWorkspace,
   ]);
 
   useEffect(() => {
     if (isDataLoading) return;
-    const quotationCode = readUrlStringParam("quotationCode") ?? initialUiState.quotationCode ?? null;
-    const rqCode = readUrlStringParam("rqCode") ?? initialUiState.rqCode ?? null;
+    const quotationCode = embeddedQuotationCode ?? readUrlStringParam("quotationCode") ?? initialUiState.quotationCode ?? null;
+    const rqCode = isEmbeddedWorkspace ? null : readUrlStringParam("rqCode") ?? initialUiState.rqCode ?? null;
 
     if (!quotationCode && !rqCode) {
       restoredUiStateRef.current = true;
@@ -1280,8 +1294,10 @@ export default function CotizacionesPage() {
     });
   }, [
     cotizaciones,
+    embeddedQuotationCode,
     initialUiState.quotationCode,
     initialUiState.rqCode,
+    isEmbeddedWorkspace,
     isDataLoading,
     recursos,
     requerimientos,
@@ -1388,6 +1404,7 @@ export default function CotizacionesPage() {
   }
 
   function persistWorkspaceState(next: Partial<PersistedTableUiState>) {
+    if (isEmbeddedWorkspace) return;
     const snapshot: PersistedTableUiState = {
       page,
       pageSize,
@@ -1440,6 +1457,10 @@ export default function CotizacionesPage() {
     setEditingId(null);
     setDraft(null);
     setRequirementCreationError(null);
+    if (isEmbeddedWorkspace) {
+      embeddedWorkspace?.onClose();
+      return;
+    }
     persistWorkspaceState({ quotationCode: null, rqCode: null });
   }
 
@@ -2200,11 +2221,15 @@ export default function CotizacionesPage() {
         <div className="rounded-xl border border-border bg-panel px-3 py-4 text-sm text-stone-600">
           Cargando permisos...
         </div>
-      ) : isDataLoading && cotizaciones.length === 0 ? (
+      ) : isDataLoading && (!isEmbeddedWorkspace || !draft) && cotizaciones.length === 0 ? (
         <div className="rounded-xl border border-border bg-panel px-3 py-4 text-sm text-stone-600">
           Cargando cotizaciones...
         </div>
-      ) : canViewQuotationTable ? (
+      ) : isEmbeddedWorkspace && !draft ? (
+        <div className="rounded-xl border border-border bg-panel px-3 py-4 text-sm text-stone-600">
+          Preparando workspace de cotización...
+        </div>
+      ) : !isEmbeddedWorkspace && canViewQuotationTable ? (
         <DataTable
           rows={cotizaciones}
           onRowClick={openEditQuotation}
@@ -2263,16 +2288,16 @@ export default function CotizacionesPage() {
           }
           columns={visibleCotizacionesColumns}
         />
-      ) : effectiveCanView ? (
+      ) : !isEmbeddedWorkspace && effectiveCanView ? (
         <div className="rounded-xl border border-border bg-panel px-3 py-4 text-sm text-stone-600">
           Tabla principal oculta por permisos.
         </div>
-      ) : (
+      ) : !isEmbeddedWorkspace ? (
         <div className="rounded-xl border border-border bg-panel px-3 py-4 text-sm text-stone-600">
           No tienes permiso para ver el Log de cotizaciones.
         </div>
-      )}
-      {permissionsReady && effectiveCanView && canViewQuotationActions && canCreateQuotationInCurrentSource && pendingNewQuotationConfirm ? (
+      ) : null}
+      {!isEmbeddedWorkspace && permissionsReady && effectiveCanView && canViewQuotationActions && canCreateQuotationInCurrentSource && pendingNewQuotationConfirm ? (
         <div className="fixed inset-0 z-[65] flex items-center justify-center bg-black/20 p-3">
           <div className="w-full max-w-[420px] rounded-lg border border-stone-300 bg-panel p-3 shadow-md">
             <p className="text-[12px] font-medium text-stone-700">¿Deseas crear una nueva cotización?</p>
@@ -2299,7 +2324,7 @@ export default function CotizacionesPage() {
         </div>
       ) : null}
 
-      {permissionsReady && effectiveCanView && canViewQuotationTable ? (
+      {!isEmbeddedWorkspace && permissionsReady && effectiveCanView && canViewQuotationTable ? (
         <div className="mt-2 flex flex-wrap items-center gap-2 text-xs text-muted">
           <span>Fuente: {dataSource === "supabase" ? "Supabase" : "Demo local"}</span>
           <span>Registros: {totalFilteredRows}</span>
@@ -2308,7 +2333,7 @@ export default function CotizacionesPage() {
         </div>
       ) : null}
 
-      {permissionsReady && canViewQuotationTable ? (
+      {!isEmbeddedWorkspace && permissionsReady && canViewQuotationTable ? (
         <div className="mt-3 flex items-center justify-between text-xs text-muted">
           <p>
             Mostrando {totalFilteredRows === 0 ? 0 : pageStartIndex + 1} - {Math.min(page * pageSize, totalFilteredRows)} de{" "}

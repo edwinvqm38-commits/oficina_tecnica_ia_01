@@ -392,7 +392,29 @@ export async function buscarRequerimientos(
   const query: Record<string, unknown> = { ...filters, limit: clampLimit(limit) };
   try {
     ensureCanView(deps, "requerimientos");
-    const result = await searchRequerimientos(filters, clampLimit(limit), contextDb(deps));
+    let effectiveFilters = filters;
+    const cotizacionQ = filters.cotizacionQ?.trim();
+    if (cotizacionQ) {
+      if (!canViewModule(deps, "cotizaciones")) {
+        return {
+          source: "requerimientos",
+          status: "error",
+          query,
+          records: [],
+          total: 0,
+          message: "No se pudo aplicar el filtro por cliente/proyecto con los permisos actuales.",
+        };
+      }
+      const cotizaciones = await searchCotizacionesByFilters({ q: cotizacionQ, recent: true }, clampLimit(limit), contextDb(deps));
+      const cotizacionCodigos = cotizaciones.items.map((cot) => cot.codigo).filter(Boolean);
+      if (cotizacionCodigos.length === 0) {
+        return { source: "requerimientos", status: "empty", query, records: [], total: 0 };
+      }
+      query.cotizacionCodigos = cotizacionCodigos;
+      effectiveFilters = { ...filters, cotizacionCodigos };
+    }
+
+    const result = await searchRequerimientos(effectiveFilters, clampLimit(limit), contextDb(deps));
     if (result.items.length === 0) {
       return { source: "requerimientos", status: "empty", query, records: [], total: 0 };
     }
