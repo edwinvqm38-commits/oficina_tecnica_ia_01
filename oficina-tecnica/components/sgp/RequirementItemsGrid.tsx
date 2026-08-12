@@ -234,6 +234,13 @@ type SortConfig = {
   direction: SortDirection;
 };
 
+type ActiveCell = {
+  rowId: string;
+  columnKey: ColumnKey;
+};
+
+type ActiveCellFocusMode = "cell" | "control";
+
 type NumericField =
   | "cantidad"
   | "ajuste"
@@ -246,7 +253,7 @@ type NumericField =
 
 const COLUMN_DEFS: ColumnDef[] = [
   { key: "idx", width: 44, minWidth: 40, sticky: true },
-  { key: "seleccion_observacion", width: 58, minWidth: 52 },
+  { key: "seleccion_observacion", width: 24, minWidth: 22 },
   { key: "proyecto", width: 180, minWidth: 150 },
   { key: "requerimiento", width: 130, minWidth: 120 },
   { key: "codigo_rq", width: 130, minWidth: 120 },
@@ -318,6 +325,149 @@ const requirementGridWidthMemory = new Map<string, Record<ColumnKey, number>>();
 
 const NON_SORTABLE_COLUMNS = new Set<ColumnKey>(["idx", "seleccion_observacion", "acciones"]);
 const NON_FILTERABLE_COLUMNS = new Set<ColumnKey>(["idx", "seleccion_observacion", "acciones"]);
+
+const GRID_NAVIGABLE_COLUMN_KEYS = new Set<ColumnKey>([
+  "codigo_fabricante",
+  "seleccion_observacion",
+  "tipo_recurso",
+  "descripcion",
+  "informacion_adicional",
+  "observaciones_item",
+  "ficha",
+  "imagen",
+  "archivos",
+  "cantidad",
+  "ajuste",
+  "atencion_real",
+  "cant_stock",
+  "compra",
+  "precio_unitario",
+  "moneda",
+  "tc",
+  "factor_eq_herr",
+  "fecha_coti",
+  "estado",
+  "recurso_a_suministrar",
+  "ficha_tecnica_a_suministrar",
+  "proveedor",
+  "condicion_pago",
+  "tiempo_entrega",
+  "eq",
+  "eq_fecha_aprob",
+  "ll",
+  "ll_fecha_aprob",
+  "hb",
+  "hb_fecha_aprob",
+  "logistica_compra",
+  "fecha_compra",
+  "oc_os_recurso",
+  "fecha_entrega",
+  "guia_remision",
+  "archivo_guia",
+]);
+
+const GRID_CONTROL_FOCUS_COLUMN_KEYS = new Set<ColumnKey>([
+  "codigo_fabricante",
+  "descripcion",
+  "cantidad",
+  "ajuste",
+  "atencion_real",
+  "cant_stock",
+  "compra",
+  "precio_unitario",
+  "tc",
+  "factor_eq_herr",
+  "condicion_pago",
+  "tiempo_entrega",
+  "oc_os_recurso",
+  "guia_remision",
+]);
+
+const GRID_ACTIVATE_CONTROL_COLUMN_KEYS = new Set<ColumnKey>([
+  "tipo_recurso",
+  "informacion_adicional",
+  "observaciones_item",
+  "ficha",
+  "imagen",
+  "archivos",
+  "moneda",
+  "fecha_coti",
+  "estado",
+  "recurso_a_suministrar",
+  "ficha_tecnica_a_suministrar",
+  "proveedor",
+  "eq",
+  "eq_fecha_aprob",
+  "ll",
+  "ll_fecha_aprob",
+  "hb",
+  "hb_fecha_aprob",
+  "logistica_compra",
+  "fecha_compra",
+  "fecha_entrega",
+  "archivo_guia",
+]);
+
+const GRID_PRINTABLE_EDIT_COLUMN_KEYS = new Set<ColumnKey>([
+  "codigo_fabricante",
+  "descripcion",
+  "informacion_adicional",
+  "observaciones_item",
+  "cantidad",
+  "ajuste",
+  "atencion_real",
+  "cant_stock",
+  "compra",
+  "precio_unitario",
+  "tc",
+  "factor_eq_herr",
+  "fecha_coti",
+  "recurso_a_suministrar",
+  "condicion_pago",
+  "tiempo_entrega",
+  "eq_fecha_aprob",
+  "ll_fecha_aprob",
+  "hb_fecha_aprob",
+  "fecha_compra",
+  "oc_os_recurso",
+  "fecha_entrega",
+  "guia_remision",
+]);
+
+const GRID_DATE_COLUMN_KEYS = new Set<ColumnKey>([
+  "fecha_coti",
+  "eq_fecha_aprob",
+  "ll_fecha_aprob",
+  "hb_fecha_aprob",
+  "fecha_compra",
+  "fecha_entrega",
+]);
+
+const GRID_CLEARABLE_COLUMN_KEYS = new Set<ColumnKey>([
+  "codigo_fabricante",
+  "descripcion",
+  "informacion_adicional",
+  "observaciones_item",
+  "cantidad",
+  "ajuste",
+  "atencion_real",
+  "cant_stock",
+  "compra",
+  "precio_unitario",
+  "tc",
+  "factor_eq_herr",
+  "fecha_coti",
+  "recurso_a_suministrar",
+  "condicion_pago",
+  "tiempo_entrega",
+  "eq_fecha_aprob",
+  "ll_fecha_aprob",
+  "hb_fecha_aprob",
+  "fecha_compra",
+  "oc_os_recurso",
+  "fecha_entrega",
+  "guia_remision",
+]);
 
 const NUMERIC_SORT_COLUMNS = new Set<ColumnKey>([
   "cantidad",
@@ -482,7 +632,7 @@ function serializeRows(rows: EditableRequirementItem[]): string {
 }
 
 function cellClassName(): string {
-  return "rq-cell-control h-[var(--rq-grid-control-height)] min-h-[var(--rq-grid-control-height)] max-h-[var(--rq-grid-control-height)] w-full rounded border border-stone-300 bg-white px-1.5 py-0 text-[11px] font-normal leading-[var(--rq-grid-control-height)] box-border align-middle outline-none focus:border-stone-500";
+  return "rq-cell-control h-[var(--rq-grid-control-height)] min-h-[var(--rq-grid-control-height)] max-h-[var(--rq-grid-control-height)] w-full border-0 bg-transparent px-1 py-0 text-[11px] font-normal leading-[var(--rq-grid-control-height)] box-border align-middle outline-none focus:outline-none focus:bg-stone-100";
 }
 
 function numericCellClassName(): string {
@@ -778,7 +928,7 @@ const ResourceAutocompleteCell = memo(function ResourceAutocompleteCell({
   }
 
   return (
-    <div className="relative">
+    <div className="relative" data-rq-autocomplete-open={isOpen && suggestions.length > 0 ? "true" : undefined}>
       <input
         ref={inputRef}
         value={draft}
@@ -917,6 +1067,7 @@ export function RequirementItemsGrid({
   const showCreateResourceButton = editingMode && canCreateResourceFromGrid;
   const [preview, setPreview] = useState<PreviewState>(null);
   const [activeRowId, setActiveRowId] = useState<string | null>(null);
+  const [activeCell, setActiveCell] = useState<ActiveCell | null>(null);
   const [numericDrafts, setNumericDrafts] = useState<Record<string, string>>({});
   const [columnFilters, setColumnFilters] = useState<Partial<Record<ColumnKey, string>>>({});
   const [sortConfig, setSortConfig] = useState<SortConfig>({ key: null, direction: null });
@@ -949,6 +1100,10 @@ export function RequirementItemsGrid({
   const initialSnapshotRef = useRef<string>(serializeRows(items));
   const resizingRef = useRef<{ key: ColumnKey; startX: number; startWidth: number } | null>(null);
   const tableWrapperRef = useRef<HTMLDivElement | null>(null);
+  const activeCellRef = useRef<ActiveCell | null>(null);
+  const activeCellElementRef = useRef<HTMLTableCellElement | null>(null);
+  const activeCellSyncFrameRef = useRef<number | null>(null);
+  const pendingActiveCellSyncRef = useRef<ActiveCell | null>(null);
   const originalOrderRef = useRef<Record<string, number>>({});
   const itemIdsKey = useMemo(() => items.map((item) => item.id).join("|"), [items]);
   const gridSizingVars = useMemo(
@@ -963,6 +1118,14 @@ export function RequirementItemsGrid({
 
   useEffect(() => {
     tableWrapperRef.current?.scrollTo({ left: 0 });
+  }, []);
+
+  useEffect(() => {
+    return () => {
+      if (activeCellSyncFrameRef.current !== null) {
+        window.cancelAnimationFrame(activeCellSyncFrameRef.current);
+      }
+    };
   }, []);
 
   useEffect(() => {
@@ -1326,6 +1489,65 @@ export function RequirementItemsGrid({
     });
     return sorted;
   }, [items, columnFilters, sortConfig, getColumnFilterValue, getColumnSortValue]);
+  const renderedBodyColumnKeys = useMemo(() => {
+    const contextKeys = new Set<ColumnKey>([
+      "proyecto",
+      "requerimiento",
+      "codigo_rq",
+      "cotizacion_codigo",
+      "oc",
+      "cliente",
+      "unidad_trabajo",
+      "solicitante_rq",
+      "estado_rq",
+      "fecha_solicitud",
+      "fecha_entrega_rq",
+      "tipo_servicio_rq",
+      "area_rq",
+      "items_totales",
+      "pendientes_rq",
+      "en_proceso_rq",
+      "atendidos_rq",
+      "vb_completos_rq",
+      "con_recurso_rq",
+      "sin_recurso_rq",
+      "con_ficha_suministrar_rq",
+      "con_oc_os_rq",
+      "con_guia_rq",
+      "avance_rq",
+      "cliente_proyecto",
+    ]);
+
+    return COLUMN_DEFS.filter((col) => {
+      if (col.key === "idx") return showIndexColumn;
+      if (col.key === "seleccion_observacion") return canSelectObservationItems;
+      if (contextKeys.has(col.key)) return hasContextColumns;
+      return true;
+    }).map((col) => col.key);
+  }, [canSelectObservationItems, hasContextColumns, showIndexColumn]);
+  const visibleBodyColumnKeys = useMemo(
+    () => renderedBodyColumnKeys.filter((key) => !isColumnHidden(key)),
+    [isColumnHidden, renderedBodyColumnKeys],
+  );
+  const navigableColumnKeys = useMemo(
+    () => visibleBodyColumnKeys.filter((key) => GRID_NAVIGABLE_COLUMN_KEYS.has(key)),
+    [visibleBodyColumnKeys],
+  );
+  const rowIndexById = useMemo(() => {
+    const next = new Map<string, number>();
+    filteredSortedItems.forEach((item, index) => next.set(item.id, index));
+    return next;
+  }, [filteredSortedItems]);
+  const navigableColumnIndexByKey = useMemo(() => {
+    const next = new Map<ColumnKey, number>();
+    navigableColumnKeys.forEach((key, index) => next.set(key, index));
+    return next;
+  }, [navigableColumnKeys]);
+  const renderedColumnIndexByKey = useMemo(() => {
+    const next = new Map<ColumnKey, number>();
+    renderedBodyColumnKeys.forEach((key, index) => next.set(key, index));
+    return next;
+  }, [renderedBodyColumnKeys]);
   const filteredObservedItems = useMemo(
     () =>
       filteredSortedItems.filter(
@@ -1340,6 +1562,432 @@ export function RequirementItemsGrid({
   useEffect(() => {
     onFilteredObservationItemsChange?.(filteredSortedItems);
   }, [filteredSortedItems, onFilteredObservationItemsChange]);
+
+  function getVisibleCellColumnKey(cell: HTMLTableCellElement): ColumnKey | null {
+    const columnKey = renderedBodyColumnKeys[cell.cellIndex] ?? null;
+    if (!columnKey || isColumnHidden(columnKey)) return null;
+    return columnKey;
+  }
+
+  function getGridCellFromTarget(target: EventTarget | null): HTMLTableCellElement | null {
+    if (!(target instanceof HTMLElement)) return null;
+    return target.closest("tbody td");
+  }
+
+  function getRowIdFromCell(cell: HTMLTableCellElement): string | null {
+    return cell.closest("tr")?.getAttribute("data-rq-row-id") ?? null;
+  }
+
+  function focusGridCellControl(cell: HTMLTableCellElement, focusControl: boolean) {
+    const selector = "input:not([type='hidden']):not([type='file']):not([aria-hidden='true']):not([disabled]), select:not([disabled]), textarea:not([disabled]), button:not([disabled])";
+    const control = cell.querySelector<HTMLElement>(selector);
+
+    if (focusControl && control) {
+      control.focus({ preventScroll: true });
+      if (control instanceof HTMLInputElement && control.type === "text") {
+        control.select();
+      }
+      return;
+    }
+
+    cell.tabIndex = -1;
+    cell.focus({ preventScroll: true });
+  }
+
+  function getActiveGridCellElement(currentCell: ActiveCell): HTMLTableCellElement | null {
+    const activeElement = activeCellElementRef.current;
+    if (activeElement) {
+      const rowId = getRowIdFromCell(activeElement);
+      const columnKey = getVisibleCellColumnKey(activeElement);
+      if (rowId === currentCell.rowId && columnKey === currentCell.columnKey) return activeElement;
+    }
+
+    const wrapper = tableWrapperRef.current;
+    if (!wrapper) return null;
+    const row = wrapper.querySelector<HTMLTableRowElement>(`tbody tr[data-rq-row-id="${CSS.escape(currentCell.rowId)}"]`);
+    const columnIndex = renderedColumnIndexByKey.get(currentCell.columnKey) ?? -1;
+    if (!row || columnIndex < 0) return null;
+    const cell = row.cells.item(columnIndex);
+    return cell instanceof HTMLTableCellElement ? cell : null;
+  }
+
+  function getPrimaryCellControl(cell: HTMLTableCellElement): HTMLElement | null {
+    return cell.querySelector<HTMLElement>(
+      "input:not([type='hidden']):not([type='file']):not([aria-hidden='true']):not([disabled]), select:not([disabled]), textarea:not([disabled])",
+    );
+  }
+
+  function setTextControlValue(control: HTMLInputElement | HTMLTextAreaElement, value: string) {
+    const prototype = control instanceof HTMLTextAreaElement ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
+    const valueSetter = Object.getOwnPropertyDescriptor(prototype, "value")?.set;
+    valueSetter?.call(control, value);
+    control.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "insertText", data: value }));
+    const caret = value.length;
+    control.setSelectionRange(caret, caret);
+  }
+
+  function focusTextControlForEdit(control: HTMLInputElement | HTMLTextAreaElement, mode: "replace" | "preserve", initialValue = "") {
+    control.focus({ preventScroll: true });
+    if (mode === "replace") {
+      setTextControlValue(control, initialValue);
+      return;
+    }
+    window.requestAnimationFrame(() => {
+      const end = control.value.length;
+      control.setSelectionRange(end, end);
+    });
+  }
+
+  function openSelectElement(select: HTMLSelectElement) {
+    if (select.disabled) return false;
+    select.focus({ preventScroll: true });
+    if (typeof select.showPicker === "function") {
+      select.showPicker();
+      return true;
+    }
+    select.click();
+    return true;
+  }
+
+  function startPrintableEdit(currentCell: ActiveCell, initialValue: string) {
+    if (!GRID_PRINTABLE_EDIT_COLUMN_KEYS.has(currentCell.columnKey)) return false;
+    const cell = getActiveGridCellElement(currentCell);
+    if (!cell) return false;
+    const control = getPrimaryCellControl(cell);
+    if (!(control instanceof HTMLInputElement || control instanceof HTMLTextAreaElement)) return false;
+    if (control.disabled) return false;
+
+    activeCellRef.current = currentCell;
+    setActiveCellElement(cell);
+    syncActiveCellState(currentCell);
+    focusTextControlForEdit(control, "replace", initialValue);
+    return true;
+  }
+
+  function startPreserveEdit(currentCell: ActiveCell) {
+    const cell = getActiveGridCellElement(currentCell);
+    if (!cell) return false;
+    const control = getPrimaryCellControl(cell);
+    if (control instanceof HTMLInputElement || control instanceof HTMLTextAreaElement) {
+      if (control.disabled) return false;
+      activeCellRef.current = currentCell;
+      setActiveCellElement(cell);
+      syncActiveCellState(currentCell);
+      focusTextControlForEdit(control, "preserve");
+      return true;
+    }
+    if (control instanceof HTMLSelectElement) {
+      return openSelectElement(control);
+    }
+    return false;
+  }
+
+  function activateSpecialCell(currentCell: ActiveCell) {
+    const cell = getActiveGridCellElement(currentCell);
+    if (!cell) return false;
+    const fileInput = cell.querySelector<HTMLInputElement>("input[type='file']");
+    if (fileInput) {
+      fileInput.click();
+      return true;
+    }
+    const control = getPrimaryCellControl(cell);
+    if (control) {
+      if (control instanceof HTMLSelectElement) return openSelectElement(control);
+      control.focus({ preventScroll: true });
+      return true;
+    }
+    return false;
+  }
+
+  function clearActiveCellValue(currentCell: ActiveCell) {
+    if (!GRID_CLEARABLE_COLUMN_KEYS.has(currentCell.columnKey)) return false;
+    const cell = getActiveGridCellElement(currentCell);
+    const control = cell ? getPrimaryCellControl(cell) : null;
+    if (
+      (control instanceof HTMLInputElement || control instanceof HTMLTextAreaElement || control instanceof HTMLSelectElement) &&
+      control.disabled
+    ) {
+      return false;
+    }
+    const numericFields = new Set<ColumnKey>(["cantidad", "ajuste", "atencion_real", "cant_stock", "compra", "precio_unitario", "tc", "factor_eq_herr"]);
+    if (currentCell.columnKey === "precio_unitario") {
+      onPatchRow(currentCell.rowId, { precio_unitario: 0, costo_unitario: 0 });
+      return true;
+    }
+    const nextValue = numericFields.has(currentCell.columnKey) ? 0 : "";
+    onPatchRow(currentCell.rowId, { [currentCell.columnKey]: nextValue } as Partial<EditableRequirementItem>);
+    return true;
+  }
+
+  function setActiveDateToToday(currentCell: ActiveCell) {
+    if (!GRID_DATE_COLUMN_KEYS.has(currentCell.columnKey)) return false;
+    const now = new Date();
+    const today = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
+    onPatchRow(currentCell.rowId, { [currentCell.columnKey]: today } as Partial<EditableRequirementItem>);
+    return true;
+  }
+
+  function openDatePickerFromCell(currentCell: ActiveCell) {
+    if (!GRID_DATE_COLUMN_KEYS.has(currentCell.columnKey)) return false;
+    const cell = getActiveGridCellElement(currentCell);
+    const button = cell?.querySelector<HTMLButtonElement>("button[aria-label='Seleccionar fecha']");
+    if (!button) return false;
+    button.click();
+    return true;
+  }
+
+  function isPrintableEditKey(event: React.KeyboardEvent<HTMLDivElement>) {
+    return event.key.length === 1 && !event.ctrlKey && !event.metaKey && !event.altKey;
+  }
+
+  function scrollGridCellIntoViewIfNeeded(cell: HTMLTableCellElement) {
+    const wrapper = tableWrapperRef.current;
+    if (!wrapper) return;
+
+    const wrapperRect = wrapper.getBoundingClientRect();
+    const cellRect = cell.getBoundingClientRect();
+    let nextLeft = wrapper.scrollLeft;
+    let nextTop = wrapper.scrollTop;
+
+    if (cellRect.left < wrapperRect.left) {
+      nextLeft -= wrapperRect.left - cellRect.left;
+    } else if (cellRect.right > wrapperRect.right) {
+      nextLeft += cellRect.right - wrapperRect.right;
+    }
+
+    if (cellRect.top < wrapperRect.top) {
+      nextTop -= wrapperRect.top - cellRect.top;
+    } else if (cellRect.bottom > wrapperRect.bottom) {
+      nextTop += cellRect.bottom - wrapperRect.bottom;
+    }
+
+    if (nextLeft !== wrapper.scrollLeft) wrapper.scrollLeft = Math.max(0, nextLeft);
+    if (nextTop !== wrapper.scrollTop) wrapper.scrollTop = Math.max(0, nextTop);
+  }
+
+  function syncActiveCellState(nextCell: ActiveCell) {
+    pendingActiveCellSyncRef.current = nextCell;
+    if (activeCellSyncFrameRef.current !== null) return;
+    activeCellSyncFrameRef.current = window.requestAnimationFrame(() => {
+      activeCellSyncFrameRef.current = null;
+      const pending = pendingActiveCellSyncRef.current;
+      if (!pending) return;
+      setActiveCell(pending);
+      setActiveRowId(pending.rowId);
+    });
+  }
+
+  function setActiveCellElement(cell: HTMLTableCellElement) {
+    const previous = activeCellElementRef.current;
+    if (previous && previous !== cell) {
+      previous.classList.remove("rq-active-cell");
+    }
+    cell.classList.add("rq-active-cell");
+    activeCellElementRef.current = cell;
+  }
+
+  function focusActiveGridCell(nextCell: ActiveCell, focusMode: ActiveCellFocusMode) {
+    const wrapper = tableWrapperRef.current;
+    if (!wrapper) return;
+    const row = wrapper.querySelector<HTMLTableRowElement>(`tbody tr[data-rq-row-id="${CSS.escape(nextCell.rowId)}"]`);
+    if (!row) return;
+    const columnIndex = renderedColumnIndexByKey.get(nextCell.columnKey) ?? -1;
+    if (columnIndex < 0) return;
+    const cell = row.cells.item(columnIndex);
+    if (!(cell instanceof HTMLTableCellElement)) return;
+
+    activeCellRef.current = nextCell;
+    setActiveCellElement(cell);
+    scrollGridCellIntoViewIfNeeded(cell);
+    syncActiveCellState(nextCell);
+    focusGridCellControl(cell, focusMode === "control");
+  }
+
+  function activeCellFromTarget(target: EventTarget | null): ActiveCell | null {
+    const cell = getGridCellFromTarget(target);
+    if (!cell) return null;
+    const rowId = getRowIdFromCell(cell);
+    const columnKey = getVisibleCellColumnKey(cell);
+    if (!rowId || !columnKey || !GRID_NAVIGABLE_COLUMN_KEYS.has(columnKey)) return null;
+    return { rowId, columnKey };
+  }
+
+  function moveGridCell(current: ActiveCell, rowDelta: number, columnDelta: number, wrapColumns: boolean): ActiveCell | null {
+    if (filteredSortedItems.length === 0 || navigableColumnKeys.length === 0) return null;
+
+    let rowIndex = rowIndexById.get(current.rowId) ?? -1;
+    let columnIndex = navigableColumnIndexByKey.get(current.columnKey) ?? -1;
+    if (rowIndex < 0) rowIndex = 0;
+    if (columnIndex < 0) columnIndex = 0;
+
+    rowIndex += rowDelta;
+    columnIndex += columnDelta;
+
+    if (wrapColumns) {
+      while (columnIndex >= navigableColumnKeys.length) {
+        columnIndex = 0;
+        rowIndex += 1;
+      }
+      while (columnIndex < 0) {
+        columnIndex = navigableColumnKeys.length - 1;
+        rowIndex -= 1;
+      }
+    }
+
+    rowIndex = Math.max(0, Math.min(filteredSortedItems.length - 1, rowIndex));
+    columnIndex = Math.max(0, Math.min(navigableColumnKeys.length - 1, columnIndex));
+
+    return {
+      rowId: filteredSortedItems[rowIndex].id,
+      columnKey: navigableColumnKeys[columnIndex],
+    };
+  }
+
+  function handleGridClickCapture(event: React.MouseEvent<HTMLDivElement>) {
+    if (!editingMode) return;
+    const nextCell = activeCellFromTarget(event.target);
+    if (!nextCell) return;
+    activeCellRef.current = nextCell;
+    const clickedCell = getGridCellFromTarget(event.target);
+    if (clickedCell) setActiveCellElement(clickedCell);
+    setActiveCell(nextCell);
+    setActiveRowId(nextCell.rowId);
+
+    const targetElement = event.target instanceof HTMLElement ? event.target : null;
+    if (targetElement?.closest("button, a, input, select, textarea, label")) return;
+    window.requestAnimationFrame(() => {
+      focusActiveGridCell(
+        nextCell,
+        GRID_CONTROL_FOCUS_COLUMN_KEYS.has(nextCell.columnKey) ||
+          GRID_ACTIVATE_CONTROL_COLUMN_KEYS.has(nextCell.columnKey)
+          ? "control"
+          : "cell",
+      );
+    });
+  }
+
+  function handleGridKeyDownCapture(event: React.KeyboardEvent<HTMLDivElement>) {
+    if (!editingMode) return;
+
+    const key = event.key;
+    const isNavigationKey =
+      key === "ArrowDown" ||
+      key === "ArrowUp" ||
+      key === "ArrowRight" ||
+      key === "ArrowLeft" ||
+      key === "Enter" ||
+      key === "Tab";
+    const isEditKey =
+      key === "Escape" ||
+      key === " " ||
+      key === "F2" ||
+      key === "Delete" ||
+      (event.ctrlKey && key === ";") ||
+      isPrintableEditKey(event);
+    if (!isNavigationKey && !isEditKey) return;
+
+    const target = event.target;
+    const targetElement = target instanceof HTMLElement ? target : null;
+    const currentCell = activeCellFromTarget(target) ?? activeCellRef.current ?? activeCell;
+    if (!currentCell) return;
+
+    if (
+      targetElement?.closest("[data-rq-autocomplete-open='true']") &&
+      (key === "ArrowDown" || key === "ArrowUp" || key === "Enter" || key === "Escape")
+    ) {
+      return;
+    }
+
+    if (targetElement instanceof HTMLTextAreaElement) {
+      if (key.startsWith("Arrow")) return;
+      if (key === "Enter") return;
+    }
+
+    if (targetElement instanceof HTMLSelectElement) {
+      if (key === "Enter") {
+        window.requestAnimationFrame(() => focusActiveGridCell(currentCell, "cell"));
+        return;
+      }
+      if (key === "Escape") {
+        event.preventDefault();
+        focusActiveGridCell(currentCell, "cell");
+      }
+      return;
+    }
+
+    if (event.ctrlKey && key === ";") {
+      if (setActiveDateToToday(currentCell)) event.preventDefault();
+      return;
+    }
+
+    if (event.altKey && key === "ArrowDown") {
+      if (openDatePickerFromCell(currentCell) || startPreserveEdit(currentCell)) {
+        event.preventDefault();
+      }
+      return;
+    }
+
+    if (key === "Escape") {
+      if (targetElement instanceof HTMLInputElement || targetElement instanceof HTMLTextAreaElement) {
+        window.requestAnimationFrame(() => focusActiveGridCell(currentCell, "cell"));
+        return;
+      }
+      event.preventDefault();
+      focusActiveGridCell(currentCell, "cell");
+      return;
+    }
+
+    if (key === "F2") {
+      if (startPreserveEdit(currentCell)) event.preventDefault();
+      return;
+    }
+
+    if (key === "Delete") {
+      if (clearActiveCellValue(currentCell)) event.preventDefault();
+      return;
+    }
+
+    if ((key === "Enter" || key === " ") && targetElement instanceof HTMLTableCellElement) {
+      if (currentCell.columnKey === "seleccion_observacion") {
+        const checkbox = getActiveGridCellElement(currentCell)?.querySelector<HTMLInputElement>("input[type='checkbox']");
+        if (checkbox && !checkbox.disabled) {
+          event.preventDefault();
+          checkbox.click();
+        }
+        return;
+      }
+      if (GRID_ACTIVATE_CONTROL_COLUMN_KEYS.has(currentCell.columnKey)) {
+        event.preventDefault();
+        if (!activateSpecialCell(currentCell)) focusActiveGridCell(currentCell, "control");
+        return;
+      }
+    }
+
+    if (targetElement instanceof HTMLTableCellElement && isPrintableEditKey(event)) {
+      if (startPrintableEdit(currentCell, key)) {
+        event.preventDefault();
+      }
+      return;
+    }
+
+    if (!isNavigationKey) return;
+
+    event.preventDefault();
+    const nextCell =
+      key === "ArrowDown"
+        ? moveGridCell(currentCell, 1, 0, false)
+        : key === "ArrowUp"
+          ? moveGridCell(currentCell, -1, 0, false)
+          : key === "ArrowRight"
+            ? moveGridCell(currentCell, 0, 1, true)
+            : key === "ArrowLeft"
+              ? moveGridCell(currentCell, 0, -1, true)
+              : key === "Enter"
+                ? moveGridCell(currentCell, event.shiftKey ? -1 : 1, 0, false)
+                : moveGridCell(currentCell, 0, event.shiftKey ? -1 : 1, true);
+
+    if (nextCell) focusActiveGridCell(nextCell, "cell");
+  }
 
   function requestRemoveRow(rowId: string) {
     if (!editingMode) return;
@@ -1380,6 +2028,15 @@ export function RequirementItemsGrid({
     }
     setNumericDrafts({});
     setActiveRowId(null);
+    setActiveCell(null);
+    activeCellRef.current = null;
+    pendingActiveCellSyncRef.current = null;
+    if (activeCellSyncFrameRef.current !== null) {
+      window.cancelAnimationFrame(activeCellSyncFrameRef.current);
+      activeCellSyncFrameRef.current = null;
+    }
+    activeCellElementRef.current?.classList.remove("rq-active-cell");
+    activeCellElementRef.current = null;
     setEditingMode(false);
     onEditingModeChange?.(false);
   }
@@ -1706,16 +2363,18 @@ export function RequirementItemsGrid({
 
       <div
         ref={tableWrapperRef}
+        onClickCapture={handleGridClickCapture}
+        onKeyDownCapture={handleGridKeyDownCapture}
         className={`min-h-0 overflow-x-auto ${bodyOverflowYClassName} ${fullHeight ? "flex-1" : ""} ${maxHeightClassName}`}
       >
-        <table className="requirement-items-grid w-max table-fixed border-collapse text-[11px] [&_td]:border-r [&_td]:border-stone-200/60 [&_td:last-child]:border-r-0 [&_th]:border-r [&_th]:border-stone-200/70 [&_th:last-child]:border-r-0 [&_tbody_tr]:min-h-[var(--rq-grid-row-height)] [&_tbody_td]:min-h-[var(--rq-grid-row-height)] [&_tbody_td]:py-[var(--rq-grid-cell-padding-y)] [&_tbody_td]:align-middle [&_tbody_td]:box-border [&_.rq-cell-control]:!h-[var(--rq-grid-control-height)] [&_.rq-cell-control]:!min-h-[var(--rq-grid-control-height)] [&_.rq-cell-control]:!max-h-[var(--rq-grid-control-height)] [&_.rq-cell-control]:!my-0 [&_.rq-cell-control]:leading-[var(--rq-grid-control-height)] [&_.rq-cell-control]:align-middle [&_.rq-cell-read]:!h-[var(--rq-grid-control-height)] [&_.rq-cell-read]:!min-h-[var(--rq-grid-control-height)] [&_.rq-cell-read]:!max-h-[var(--rq-grid-control-height)] [&_.rq-cell-read]:leading-[var(--rq-grid-control-height)] [&_.rq-cell-read]:align-middle">
+        <table className={`requirement-items-grid w-max table-fixed border-collapse text-[11px] [&_td]:border-r [&_td]:border-stone-200/60 [&_td:last-child]:border-r-0 [&_th]:border-r [&_th]:border-stone-200/70 [&_th:last-child]:border-r-0 [&_tbody_tr]:min-h-[var(--rq-grid-row-height)] [&_tbody_td]:min-h-[var(--rq-grid-row-height)] [&_tbody_td]:py-[var(--rq-grid-cell-padding-y)] [&_tbody_td]:align-middle [&_tbody_td]:box-border [&_.rq-cell-control]:!h-[var(--rq-grid-control-height)] [&_.rq-cell-control]:!min-h-[var(--rq-grid-control-height)] [&_.rq-cell-control]:!max-h-[var(--rq-grid-control-height)] [&_.rq-cell-control]:!my-0 [&_.rq-cell-control]:leading-[var(--rq-grid-control-height)] [&_.rq-cell-control]:align-middle [&_.rq-cell-read]:!h-[var(--rq-grid-control-height)] [&_.rq-cell-read]:!min-h-[var(--rq-grid-control-height)] [&_.rq-cell-read]:!max-h-[var(--rq-grid-control-height)] [&_.rq-cell-read]:leading-[var(--rq-grid-control-height)] [&_.rq-cell-read]:align-middle ${editingMode ? "[&_tbody_td.rq-active-cell]:relative [&_tbody_td.rq-active-cell]:z-[15] [&_tbody_td.rq-active-cell]:outline [&_tbody_td.rq-active-cell]:outline-1 [&_tbody_td.rq-active-cell]:outline-teal-700 [&_tbody_td.rq-active-cell]:outline-offset-[-1px] [&_tbody_td:focus-within]:relative [&_tbody_td:focus-within]:z-[15] [&_tbody_td:focus-within]:outline [&_tbody_td:focus-within]:outline-1 [&_tbody_td:focus-within]:outline-teal-700 [&_tbody_td:focus-within]:outline-offset-[-1px]" : ""}`}>
           <thead className="sticky top-0 z-20 bg-stone-50 text-muted">
             <tr className="filters-row h-[var(--rq-grid-row-height)] max-h-[var(--rq-grid-row-height)]">
               {showIndexColumn ? headerCell("idx", headerContent("idx", "hash", "#"), "", true) : null}
               {canSelectObservationItems
                 ? headerCell(
                     "seleccion_observacion",
-                    <div className="flex items-center justify-center" title="Seleccionar recursos observados visibles">
+                    <div className="flex w-full items-center justify-center" title="Seleccionar recursos observados visibles">
                       <input
                         type="checkbox"
                         data-no-row-open="true"
@@ -1727,6 +2386,7 @@ export function RequirementItemsGrid({
                         className="h-3.5 w-3.5 rounded border-stone-300 text-teal-700"
                       />
                     </div>,
+                    "!px-0 text-center",
                   )
                 : null}
               {hasContextColumns
@@ -1861,6 +2521,7 @@ export function RequirementItemsGrid({
                     <span className="block text-center text-[9px] font-semibold text-stone-400">
                       {filteredObservedItemIds.length}
                     </span>,
+                    "!px-0 text-center",
                   )
                 : null}
               {hasContextColumns ? filterCell("proyecto", filterInputFor("proyecto")) : null}
@@ -1942,6 +2603,7 @@ export function RequirementItemsGrid({
               return (
                 <tr
                   key={item.id}
+                  data-rq-row-id={item.id}
                   className={`border-t border-stone-200 align-middle ${
                     onRowClick && !editingMode ? "cursor-pointer hover:bg-stone-50" : ""
                   } ${
@@ -1961,8 +2623,15 @@ export function RequirementItemsGrid({
                     if (shouldIgnoreRowClick(event.target)) return;
                     onRowClick(item);
                   }}
-                  onFocusCapture={() => {
-                    if (editingMode) setActiveRowId(item.id);
+                  onFocusCapture={(event) => {
+                    if (!editingMode) return;
+                    if (
+                      event.target instanceof HTMLTableCellElement &&
+                      event.target.classList.contains("rq-active-cell")
+                    ) {
+                      return;
+                    }
+                    setActiveRowId(item.id);
                   }}
                 >
                   {showIndexColumn ? (
@@ -1971,7 +2640,7 @@ export function RequirementItemsGrid({
                     </td>
                   ) : null}
                   {canSelectObservationItems ? (
-                    <td style={cellStyle("seleccion_observacion")} className="px-1.5 py-0.5 text-center">
+                    <td style={cellStyle("seleccion_observacion")} className="px-0 py-0.5 text-center">
                       <input
                         type="checkbox"
                         data-no-row-open="true"
@@ -2195,7 +2864,7 @@ export function RequirementItemsGrid({
                           value={item.informacion_adicional}
                           onCommit={(value) => onPatchRow(item.id, { informacion_adicional: value })}
                           maxLength={180}
-                          className="h-full w-full resize-none overflow-y-auto rounded border border-stone-300 bg-white px-1.5 py-1 text-[11px] leading-4 outline-none box-border focus:border-stone-500"
+                          className="h-full w-full resize-none overflow-y-auto border-0 bg-transparent px-1.5 py-1 text-[11px] leading-4 outline-none box-border focus:outline-none focus:bg-stone-100"
                         />
                       ) : (
                         <span
@@ -2214,7 +2883,7 @@ export function RequirementItemsGrid({
                         <DraftTextareaCell
                           value={item.observaciones_item}
                           onCommit={(value) => onPatchRow(item.id, { observaciones_item: value })}
-                          className="h-full w-full resize-none overflow-y-auto overflow-x-hidden rounded border border-stone-300 bg-white px-1.5 py-1 text-[11px] leading-4 outline-none box-border focus:border-stone-500"
+                          className="h-full w-full resize-none overflow-y-auto overflow-x-hidden border-0 bg-transparent px-1.5 py-1 text-[11px] leading-4 outline-none box-border focus:outline-none focus:bg-stone-100"
                         />
                       ) : (
                         <span
