@@ -23,15 +23,28 @@ import {
   type CotizacionSearchFilters,
   type RequerimientoSearchFilters,
   type ProjectReferenceResult,
+  type ContextSupabaseClient,
 } from "@/lib/chat/contextQuery";
-import { getTechnicalProposalByCode } from "@/lib/sgp/technicalProposalsRepository";
-import { listRecursos } from "@/lib/sgp/recursosRepository";
-import { supabase } from "@/lib/sgp/supabaseClient";
 
 // Límite máximo de registros que una herramienta devuelve al contexto IA.
 export const DEFAULT_CONTEXT_LIMIT = 20;
 
 export type ContextToolStatus = "success" | "empty" | "error" | "not_implemented";
+
+export type ContextSensitivePermissions = {
+  can_view: boolean;
+  can_view_prices: boolean;
+  can_view_supplier: boolean;
+  can_view_margin: boolean;
+};
+
+export type ContextModuleKey = "cotizaciones" | "requerimientos" | "detalle_rq" | "recursos" | "technical_proposals";
+export type ContextPermissions = Partial<Record<ContextModuleKey, ContextSensitivePermissions>>;
+
+export interface ContextToolDeps {
+  supabase: ContextSupabaseClient;
+  permissions?: ContextPermissions;
+}
 
 interface ContextToolResultBase {
   status: ContextToolStatus;
@@ -143,10 +156,101 @@ function devLog(...args: unknown[]) {
   if (process.env.NODE_ENV !== "production") console.debug("[contextTools]", ...args);
 }
 
+function contextDb(deps: ContextToolDeps | undefined): ContextSupabaseClient {
+  if (!deps?.supabase) throw new Error("CTX_SUPABASE_CLIENT_REQUIRED");
+  return deps.supabase;
+}
+
+function permissionsFor(deps: ContextToolDeps | undefined, moduleKey: keyof ContextPermissions): ContextSensitivePermissions {
+  return deps?.permissions?.[moduleKey] ?? {
+    can_view: false,
+    can_view_prices: false,
+    can_view_supplier: false,
+    can_view_margin: false,
+  };
+}
+
+function canViewModule(deps: ContextToolDeps | undefined, moduleKey: keyof ContextPermissions): boolean {
+  return permissionsFor(deps, moduleKey).can_view === true;
+}
+
+function canViewRequirementItems(deps: ContextToolDeps | undefined): boolean {
+  return canViewModule(deps, "detalle_rq") || canViewModule(deps, "requerimientos");
+}
+
+function itemPermissions(deps: ContextToolDeps | undefined): ContextSensitivePermissions {
+  const detail = permissionsFor(deps, "detalle_rq");
+  const req = permissionsFor(deps, "requerimientos");
+  return {
+    can_view: detail.can_view || req.can_view,
+    can_view_prices: detail.can_view_prices || req.can_view_prices,
+    can_view_supplier: detail.can_view_supplier || req.can_view_supplier,
+    can_view_margin: detail.can_view_margin || req.can_view_margin,
+  };
+}
+
+function isPermissionError(err: unknown): boolean {
+  return err instanceof Error && err.message === "CTX_FORBIDDEN";
+}
+
+function forbiddenError(): never {
+  throw new Error("CTX_FORBIDDEN");
+}
+
+function ensureCanView(deps: ContextToolDeps | undefined, moduleKey: keyof ContextPermissions): void {
+  contextDb(deps);
+  if (!canViewModule(deps, moduleKey)) forbiddenError();
+}
+
+function ensureCanViewItems(deps: ContextToolDeps | undefined): void {
+  contextDb(deps);
+  if (!canViewRequirementItems(deps)) forbiddenError();
+}
+
+function safeToolErrorMessage(err: unknown): string {
+  if (isPermissionError(err)) return "Fuente no autorizada para el usuario.";
+  return "No se pudo consultar esta fuente de contexto.";
+}
+
+function redactCotizacion(cot: CotizacionSummary, deps?: ContextToolDeps): CotizacionSummary {
+  const permissions = permissionsFor(deps, "cotizaciones");
+  return {
+    ...cot,
+    monto: permissions.can_view_prices ? cot.monto : null,
+    moneda_codigo: permissions.can_view_prices ? cot.moneda_codigo : null,
+    resumen_economico: permissions.can_view_margin ? cot.resumen_economico : [],
+  };
+}
+
+function redactCotizaciones(rows: CotizacionSummary[], deps?: ContextToolDeps): CotizacionSummary[] {
+  return rows.map((row) => redactCotizacion(row, deps));
+}
+
+function redactRequirementItems(rows: RequirementItemSummary[], deps?: ContextToolDeps): RequirementItemSummary[] {
+  const permissions = itemPermissions(deps);
+  return rows.map((row) => ({
+    ...row,
+    precio_unitario: permissions.can_view_prices ? row.precio_unitario : null,
+    moneda: permissions.can_view_prices ? row.moneda : null,
+    costo_total_presupuestado: permissions.can_view_prices ? row.costo_total_presupuestado : null,
+    proveedor_nombre: permissions.can_view_supplier ? row.proveedor_nombre : null,
+  }));
+}
+
+function redactRecurso(row: RecursoLite, deps?: ContextToolDeps): RecursoLite {
+  const permissions = permissionsFor(deps, "recursos");
+  return {
+    ...row,
+    precio_unitario_ref: permissions.can_view_prices ? row.precio_unitario_ref : null,
+    moneda_codigo: permissions.can_view_prices ? row.moneda_codigo : null,
+    proveedor_nombre: permissions.can_view_supplier ? row.proveedor_nombre : null,
+    marca_nombre: permissions.can_view_supplier ? row.marca_nombre : null,
+  };
+}
+
 // Normaliza cualquier excepción a un mensaje seguro (sin filtrar internals).
 function safeErrorMessage(err: unknown): string {
-  if (err instanceof Error) return err.message;
-  return "Error desconocido al consultar la base de datos.";
+  return safeToolErrorMessage(err);
 }
 
 function clampLimit(limit: number | undefined): number {
@@ -188,11 +292,13 @@ function dateColumnForTable(table: CountableContextTable): CountToolFilters["dat
 export async function contarRegistros(
   table: CountableContextTable,
   filters: CountToolFilters = {},
+  deps?: ContextToolDeps,
 ): Promise<CountToolResult> {
   const dateColumn: NonNullable<CountToolFilters["dateColumn"]> = filters.dateColumn ?? dateColumnForTable(table) ?? "created_at";
   const query: Record<string, unknown> = { ...filters, dateColumn };
   try {
-    let request = supabase
+    ensureCanView(deps, table);
+    let request = contextDb(deps)
       .from(table)
       .select("id", { count: "exact", head: true });
 
@@ -245,28 +351,31 @@ export async function contarRegistros(
 export async function buscarCotizaciones(
   filters: CotizacionSearchFilters,
   limit = DEFAULT_CONTEXT_LIMIT,
+  deps?: ContextToolDeps,
 ): Promise<CotizacionesToolResult> {
   const query: Record<string, unknown> = { ...filters, limit: clampLimit(limit) };
   try {
-    const result = await searchCotizacionesByFilters(filters, clampLimit(limit));
+    ensureCanView(deps, "cotizaciones");
+    const result = await searchCotizacionesByFilters(filters, clampLimit(limit), contextDb(deps));
     if (result.items.length === 0) {
       return { source: "cotizaciones", status: "empty", query, records: [], total: 0 };
     }
-    return { source: "cotizaciones", status: "success", query, records: result.items, total: result.total };
+    return { source: "cotizaciones", status: "success", query, records: redactCotizaciones(result.items, deps), total: result.total };
   } catch (err) {
     devLog("buscarCotizaciones error", err);
     return { source: "cotizaciones", status: "error", query, records: [], total: 0, message: safeErrorMessage(err) };
   }
 }
 
-export async function buscarCotizacionPorCodigo(code: string): Promise<CotizacionesToolResult> {
+export async function buscarCotizacionPorCodigo(code: string, deps?: ContextToolDeps): Promise<CotizacionesToolResult> {
   const query: Record<string, unknown> = { codigo: code };
   try {
-    const cot = await fetchCotizacionByCode(code);
+    ensureCanView(deps, "cotizaciones");
+    const cot = await fetchCotizacionByCode(code, contextDb(deps));
     if (!cot) {
       return { source: "cotizaciones", status: "empty", query, records: [], total: 0 };
     }
-    return { source: "cotizaciones", status: "success", query, records: [cot], total: 1 };
+    return { source: "cotizaciones", status: "success", query, records: [redactCotizacion(cot, deps)], total: 1 };
   } catch (err) {
     devLog("buscarCotizacionPorCodigo error", err);
     return { source: "cotizaciones", status: "error", query, records: [], total: 0, message: safeErrorMessage(err) };
@@ -278,10 +387,12 @@ export async function buscarCotizacionPorCodigo(code: string): Promise<Cotizacio
 export async function buscarRequerimientos(
   filters: RequerimientoSearchFilters,
   limit = DEFAULT_CONTEXT_LIMIT,
+  deps?: ContextToolDeps,
 ): Promise<RequerimientosToolResult> {
   const query: Record<string, unknown> = { ...filters, limit: clampLimit(limit) };
   try {
-    const result = await searchRequerimientos(filters, clampLimit(limit));
+    ensureCanView(deps, "requerimientos");
+    const result = await searchRequerimientos(filters, clampLimit(limit), contextDb(deps));
     if (result.items.length === 0) {
       return { source: "requerimientos", status: "empty", query, records: [], total: 0 };
     }
@@ -292,10 +403,11 @@ export async function buscarRequerimientos(
   }
 }
 
-export async function buscarRequerimientoPorCodigo(code: string): Promise<RequerimientosToolResult> {
+export async function buscarRequerimientoPorCodigo(code: string, deps?: ContextToolDeps): Promise<RequerimientosToolResult> {
   const query: Record<string, unknown> = { codigo: code };
   try {
-    const rq = await fetchRequirementByCode(code);
+    ensureCanView(deps, "requerimientos");
+    const rq = await fetchRequirementByCode(code, contextDb(deps));
     if (!rq) {
       return { source: "requerimientos", status: "empty", query, records: [], total: 0 };
     }
@@ -312,14 +424,16 @@ export async function buscarItemsDeRequerimiento(
   requerimientoId: string,
   limit = DEFAULT_CONTEXT_LIMIT,
   requerimientoCodigo?: string,
+  deps?: ContextToolDeps,
 ): Promise<RequerimientoItemsToolResult> {
   const query: Record<string, unknown> = { requerimiento_id: requerimientoId, limit: clampLimit(limit) };
   try {
-    const items = await fetchRequirementItems(requerimientoId, clampLimit(limit));
+    ensureCanViewItems(deps);
+    const items = await fetchRequirementItems(requerimientoId, clampLimit(limit), contextDb(deps));
     if (items.length === 0) {
       return { source: "requerimiento_items", status: "empty", query, records: [], total: 0, requerimientoCodigo };
     }
-    return { source: "requerimiento_items", status: "success", query, records: items, total: items.length, requerimientoCodigo };
+    return { source: "requerimiento_items", status: "success", query, records: redactRequirementItems(items, deps), total: items.length, requerimientoCodigo };
   } catch (err) {
     devLog("buscarItemsDeRequerimiento error", err);
     return { source: "requerimiento_items", status: "error", query, records: [], total: 0, message: safeErrorMessage(err), requerimientoCodigo };
@@ -328,10 +442,21 @@ export async function buscarItemsDeRequerimiento(
 
 // ── Propuesta técnica ────────────────────────────────────────────────────────
 
-export async function buscarPropuestaTecnicaPorCodigo(code: string): Promise<TechnicalProposalsToolResult> {
+export async function buscarPropuestaTecnicaPorCodigo(code: string, deps?: ContextToolDeps): Promise<TechnicalProposalsToolResult> {
   const query: Record<string, unknown> = { code };
   try {
-    const pt = await getTechnicalProposalByCode(code);
+    ensureCanView(deps, "technical_proposals");
+    const { data, error } = await contextDb(deps)
+      .from("technical_proposals")
+      .select("code,cotizacion_codigo,revision,status,work_status,document_date")
+      .or(`code.eq.${code},cotizacion_codigo.eq.${code}`)
+      .order("updated_at", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    if (error) {
+      return { source: "technical_proposals", status: "error", query, records: [], total: 0, message: safeErrorMessage(error) };
+    }
+    const pt = data as TechnicalProposalLite | null;
     if (!pt) {
       return { source: "technical_proposals", status: "empty", query, records: [], total: 0 };
     }
@@ -360,45 +485,86 @@ export interface RecursosToolFilters {
   marca?: string;
 }
 
+type ResourceFileRecord = {
+  drive_file_id?: string | null;
+  drive_url?: string | null;
+  file_name?: string | null;
+};
+
+type ResourceMetadata = {
+  resource_files?: {
+    image?: ResourceFileRecord[];
+  };
+};
+
+type ResourceContextRow = {
+  codigo_recurso: string;
+  descripcion: string;
+  tipo_recurso_nombre: string | null;
+  precio_unitario_ref: number | null;
+  moneda_codigo: string | null;
+  proveedor_nombre: string | null;
+  marca_nombre: string | null;
+  estado: string | null;
+  metadata: ResourceMetadata | null;
+};
+
+function firstResourceImage(metadata: ResourceMetadata | null): { image_url: string | null; image_name: string | null } {
+  const imageFile = metadata?.resource_files?.image?.[0] ?? null;
+  const fileId = imageFile?.drive_file_id || driveFileIdFromUrl(imageFile?.drive_url ?? "");
+  if (fileId) return { image_url: internalDriveFileUrl(fileId), image_name: imageFile?.file_name ?? null };
+  if (imageFile?.drive_url && /\.(png|jpe?g|webp|gif|svg)(\?|#|$)/i.test(imageFile.drive_url)) {
+    return { image_url: imageFile.drive_url, image_name: imageFile.file_name ?? null };
+  }
+  return { image_url: null, image_name: imageFile?.file_name ?? null };
+}
+
 export async function buscarRecursos(
   filters: RecursosToolFilters,
   limit = DEFAULT_CONTEXT_LIMIT,
+  deps?: ContextToolDeps,
 ): Promise<RecursosToolResult> {
   const query: Record<string, unknown> = { ...filters, limit: clampLimit(limit) };
   try {
-    const result = await listRecursos({
-      search: filters.q,
-      tipoRecurso: filters.tipoRecurso,
-      estado: filters.estado,
-      proveedor: filters.proveedor,
-      marca: filters.marca,
-      page: 1,
-      pageSize: clampLimit(limit),
-    });
-    if (result.rows.length === 0) {
+    ensureCanView(deps, "recursos");
+    let request = contextDb(deps)
+      .from("recursos")
+      .select(
+        "codigo_recurso,descripcion,tipo_recurso_nombre,precio_unitario_ref,moneda_codigo,proveedor_nombre,marca_nombre,estado,metadata",
+        { count: "exact" },
+      )
+      .is("deleted_at", null)
+      .order("codigo_recurso", { ascending: true })
+      .limit(clampLimit(limit));
+
+    if (filters.q?.trim()) {
+      const q = filters.q.trim();
+      request = request.or(`codigo_recurso.ilike.%${q}%,descripcion.ilike.%${q}%,codigo_eka.ilike.%${q}%,codigo_fabricante.ilike.%${q}%`);
+    }
+    if (filters.tipoRecurso?.trim()) request = request.ilike("tipo_recurso_nombre", `%${filters.tipoRecurso.trim()}%`);
+    if (filters.estado?.trim()) request = request.ilike("estado", `%${filters.estado.trim()}%`);
+    if (filters.proveedor?.trim()) request = request.ilike("proveedor_nombre", `%${filters.proveedor.trim()}%`);
+    if (filters.marca?.trim()) request = request.ilike("marca_nombre", `%${filters.marca.trim()}%`);
+
+    const { data, error, count } = await request;
+    if (error) {
+      return { source: "recursos", status: "error", query, records: [], total: 0, message: safeErrorMessage(error) };
+    }
+    if (!data || data.length === 0) {
       return { source: "recursos", status: "empty", query, records: [], total: 0 };
     }
-    // `listRecursos` devuelve filas con el shape de dominio `Recurso`
-    // (tipo_recurso, moneda, proveedor, marca), no las columnas crudas de la BD.
-    const lite: RecursoLite[] = result.rows.map((r) => ({
-      image_url: (() => {
-        const imageFile = r.resourceFiles.imagenes?.[0] ?? r.resourceFiles.imagen ?? null;
-        const fileId = imageFile?.futureDriveFileId || driveFileIdFromUrl(imageFile?.futureDriveUrl ?? "");
-        if (fileId) return internalDriveFileUrl(fileId);
-        if (imageFile?.futureDriveUrl && /\.(png|jpe?g|webp|gif|svg)(\?|#|$)/i.test(imageFile.futureDriveUrl)) return imageFile.futureDriveUrl;
-        return null;
-      })(),
-      image_name: r.resourceFiles.imagenes?.[0]?.name ?? r.resourceFiles.imagen?.name ?? null,
+    const lite: RecursoLite[] = (data as ResourceContextRow[]).map((r) => ({
+      ...firstResourceImage(r.metadata),
       codigo_recurso: r.codigo_recurso,
       descripcion: r.descripcion,
-      tipo_recurso_nombre: r.tipo_recurso ?? null,
+      tipo_recurso_nombre: r.tipo_recurso_nombre ?? null,
       precio_unitario_ref: r.precio_unitario_ref ?? null,
-      moneda_codigo: r.moneda ?? null,
-      proveedor_nombre: r.proveedor ?? null,
-      marca_nombre: r.marca ?? null,
+      moneda_codigo: r.moneda_codigo ?? null,
+      proveedor_nombre: r.proveedor_nombre ?? null,
+      marca_nombre: r.marca_nombre ?? null,
       estado: r.estado ?? null,
     }));
-    return { source: "recursos", status: "success", query, records: lite, total: result.total };
+    return { source: "recursos", status: "success", query, records: lite.map((row) => redactRecurso(row, deps)), total: count ?? lite.length };
   } catch (err) {
     devLog("buscarRecursos error", err);
     return { source: "recursos", status: "error", query, records: [], total: 0, message: safeErrorMessage(err) };
@@ -410,10 +576,13 @@ export async function buscarRecursos(
 export async function buscarDocumentosCotizacion(
   quotationCode: string,
   limit = DEFAULT_CONTEXT_LIMIT,
+  deps?: ContextToolDeps,
 ): Promise<QuotationDocumentsToolResult> {
   const query: Record<string, unknown> = { quotation_code: quotationCode, limit: clampLimit(limit) };
   try {
-    const { data, error, count } = await supabase
+    contextDb(deps);
+    if (!canViewModule(deps, "cotizaciones") && !canViewModule(deps, "requerimientos")) forbiddenError();
+    const { data, error, count } = await contextDb(deps)
       .from("quotation_documents")
       .select(
         "quotation_code, requirement_code, folder_key, folder_name, original_name, mime_type, file_size, drive_file_url, uploaded_at, uploaded_by_email",
@@ -444,16 +613,43 @@ export async function buscarDocumentosCotizacion(
 
 // ── Proyecto / código genérico (cascada cotización → RQ → PT → histórico) ─────
 
-export async function buscarProyectoPorCodigo(code: string): Promise<ProyectoToolResult> {
+export async function buscarProyectoPorCodigo(code: string, deps?: ContextToolDeps): Promise<ProyectoToolResult> {
   const query: Record<string, unknown> = { code };
   try {
-    const reference = await fetchProjectContextByCode(code);
+    contextDb(deps);
+    if (
+      !canViewModule(deps, "cotizaciones") &&
+      !canViewModule(deps, "requerimientos") &&
+      !canViewRequirementItems(deps) &&
+      !canViewModule(deps, "technical_proposals")
+    ) {
+      forbiddenError();
+    }
+    const reference = await fetchProjectContextByCode(code, contextDb(deps), {
+      canQueryCotizaciones: canViewModule(deps, "cotizaciones"),
+      canQueryRequerimientos: canViewModule(deps, "requerimientos"),
+      canQueryRequirementItems: canViewRequirementItems(deps),
+      canQueryTechnicalProposals: canViewModule(deps, "technical_proposals"),
+      canQueryRequirementCosts: itemPermissions(deps).can_view_prices,
+    });
     const status: ContextToolStatus = reference.source === "none" ? "empty" : "success";
     const total =
       reference.historicalSummary?.total ??
       reference.requirements?.length ??
       (reference.cotizacion ? 1 : 0);
-    return { source: "proyecto", status, query, code, reference, records: [], total };
+    const projectPermissions = permissionsFor(deps, "requerimientos");
+    const redactedReference: ProjectReferenceResult = {
+      ...reference,
+      cotizacion: reference.cotizacion ? redactCotizacion(reference.cotizacion, deps) : undefined,
+      historicalSummary: reference.historicalSummary
+        ? {
+            ...reference.historicalSummary,
+            totalCosto: projectPermissions.can_view_prices ? reference.historicalSummary.totalCosto : 0,
+          }
+        : undefined,
+      similarCotizaciones: reference.similarCotizaciones ? redactCotizaciones(reference.similarCotizaciones, deps) : undefined,
+    };
+    return { source: "proyecto", status, query, code, reference: redactedReference, records: [], total };
   } catch (err) {
     devLog("buscarProyectoPorCodigo error", err);
     return {
@@ -465,8 +661,8 @@ export async function buscarProyectoPorCodigo(code: string): Promise<ProyectoToo
 
 // Resumen de proyecto: cascada por código + (si resolvió a una cotización)
 // los requerimientos relacionados, para responder "dame el resumen de X".
-export async function obtenerResumenProyecto(code: string): Promise<ProyectoToolResult> {
-  const base = await buscarProyectoPorCodigo(code);
+export async function obtenerResumenProyecto(code: string, deps?: ContextToolDeps): Promise<ProyectoToolResult> {
+  const base = await buscarProyectoPorCodigo(code, deps);
   if (base.status !== "success") return base;
 
   // Solo enriquecemos cuando el código resolvió a una cotización concreta:
@@ -475,7 +671,8 @@ export async function obtenerResumenProyecto(code: string): Promise<ProyectoTool
   if (!cotCodigo) return base;
 
   try {
-    const related = await searchRequerimientos({ q: cotCodigo }, DEFAULT_CONTEXT_LIMIT);
+    if (!canViewModule(deps, "requerimientos")) return base;
+    const related = await searchRequerimientos({ q: cotCodigo }, DEFAULT_CONTEXT_LIMIT, contextDb(deps));
     return { ...base, relatedRequerimientos: related.items };
   } catch (err) {
     devLog("obtenerResumenProyecto related error", err);

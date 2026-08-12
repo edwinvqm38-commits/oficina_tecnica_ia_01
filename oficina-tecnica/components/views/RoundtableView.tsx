@@ -11,9 +11,13 @@ import { routeRequest } from "../../lib/llm/modelRouter";
 import type { ChatMessage } from "../../lib/llm/providers";
 import { parseInput, isSimpleMessage, isTeamMessage, hasClearIntent, isContinuationRequest, slugForUser, HUMANIZE_CTX } from "../../lib/chat/messageUtils";
 import type { UserDirectory } from "../../lib/chat/messageUtils";
-import { buildContextPrompt, buildRequirementItemsPrompt, fetchRequirementItems } from "../../lib/chat/contextQuery";
 import type { ChatCtx } from "../../lib/chat/contextQuery";
-import { buildDeterministicAnswerFromResults, runContextPipeline } from "../../lib/chat/contextRouter";
+import {
+  contextResolverMessage,
+  contextResolverTimeoutError,
+  resolveContextPipeline,
+  type ContextResolverResponse,
+} from "../../lib/chat/contextResolverClient";
 import { buildUserContentWithVision, buildVisionAttachmentNote } from "../../lib/chat/visionContent";
 import { MdText } from "../chat/MdText";
 import { HelpPanel } from "../chat/HelpPanel";
@@ -79,21 +83,11 @@ function saveLlmUsage(snapshot: LlmUsageSnapshot) {
   localStorage.setItem(LLM_USAGE_KEY, JSON.stringify(snapshot));
 }
 
-function contextPipelineWithTimeout(query: string) {
+function contextPipelineWithTimeout(query: string): Promise<ContextResolverResponse> {
   return Promise.race([
-    runContextPipeline(query),
-    new Promise<Awaited<ReturnType<typeof runContextPipeline>>>((resolve) => {
-      window.setTimeout(() => resolve({
-        block: "\n\n(No pude completar la consulta de contexto en el tiempo esperado. Responde sin inventar datos y pide reintentar o acotar la consulta.)",
-        decision: {
-          intent: "timeout_contexto",
-          toolsToCall: [],
-          confidence: 0,
-          reason: "La consulta de contexto tardó demasiado.",
-        },
-        results: [],
-        hasData: false,
-      }), 12_000);
+    resolveContextPipeline(query),
+    new Promise<ContextResolverResponse>((_, reject) => {
+      window.setTimeout(() => reject(contextResolverTimeoutError()), 12_000);
     }),
   ]);
 }
@@ -1156,6 +1150,11 @@ export function RoundtableView() {
     const contextQueryText = continuation && previousUserQuery
       ? `${previousUserQuery}\n${parsed.cleanText}`
       : parsed.cleanText;
+    const resolverHints = [
+      ctxProject?.id ? `Cotización/proyecto activo: ${ctxProject.id}` : "",
+      ctxRequirement?.codigo ? `Requerimiento activo: ${ctxRequirement.codigo}` : "",
+    ].filter(Boolean).join("\n");
+    const contextResolverText = resolverHints ? `${contextQueryText}\n${resolverHints}` : contextQueryText;
     const llmUserText = continuation && previousUserQuery
       ? `${parsed.cleanText}\n\nContinuacion de la consulta anterior del usuario: ${previousUserQuery}`
       : parsed.cleanText;
@@ -1227,9 +1226,22 @@ export function RoundtableView() {
     let autoCodeCtx = "";
     let deterministicAnswer: string | null = null;
     if (!simple) {
-      const pipeline = await contextPipelineWithTimeout(contextQueryText);
-      autoCodeCtx = pipeline.block;
-      deterministicAnswer = buildDeterministicAnswerFromResults(contextQueryText, pipeline.results);
+      try {
+        const resolved = await contextPipelineWithTimeout(contextResolverText);
+        autoCodeCtx = resolved.pipeline.block;
+        deterministicAnswer = resolved.deterministicAnswer;
+      } catch (error) {
+        appendChat(ROUNDTABLE_THREAD, {
+          role: "agent",
+          agentId: responders[0] ?? TEAM_COORDINATOR,
+          text: contextResolverMessage(error),
+          modelLabel: "context-resolver",
+          isError: true,
+        });
+        setHands([]);
+        setBusy(false);
+        return;
+      }
     }
 
     if (deterministicAnswer && !hasAttachments) {
@@ -1241,7 +1253,7 @@ export function RoundtableView() {
         agentId: agId,
         projectId: activeProject?.id,
         conversationScope: "roundtable",
-        userMessage: contextQueryText,
+        userMessage: contextResolverText,
         assistantResponse: deterministicAnswer,
         modelLabel: label,
         groundedInSupabase: true,
@@ -1252,20 +1264,6 @@ export function RoundtableView() {
       setBusy(false);
       return;
     }
-
-    // Item/material-level data for the referenced requirement (Supabase)
-    let requirementItemsCtx = "";
-    if (ctxRequirement && !simple) {
-      const items = await fetchRequirementItems(ctxRequirement.id).catch(() => []);
-      requirementItemsCtx = buildRequirementItemsPrompt(items);
-    }
-
-    const activeProjectCtx = activeProject && !simple
-      ? `\n\nProyecto activo: **${activeProject.name}** (${activeProject.id}). Cliente: ${activeProject.client}. Estado: ${activeProject.status}. Avance: ${activeProject.progress}%. ${activeProject.summary}`
-      : "";
-    const activeRequirementCtx = ctxRequirement && !simple
-      ? buildContextPrompt({ project: null, requirement: ctxRequirement }) + requirementItemsCtx
-      : "";
 
     // File attachments from ChatAutoInput
     const fileCtx = (inputCtx?.attachments ?? []).map((f) =>
@@ -1310,7 +1308,7 @@ export function RoundtableView() {
       const agRouting = routeRequest(parsed.cleanText);
 
       const messages: ChatMessage[] = [
-        { role: "system", content: sysPrompt + HUMANIZE_CTX + AGENT_LEARNING_CTX + GENERAL_CONVERSATION_CTX + HTML_APP_GENERATION_CTX + memoryCtx + skillsCtx + platformCtx + activeProjectCtx + activeRequirementCtx + autoCodeCtx + attachmentCtx + visionCtx + toneCtx + extraSystemCtx },
+        { role: "system", content: sysPrompt + HUMANIZE_CTX + AGENT_LEARNING_CTX + GENERAL_CONVERSATION_CTX + HTML_APP_GENERATION_CTX + memoryCtx + skillsCtx + platformCtx + autoCodeCtx + attachmentCtx + visionCtx + toneCtx + extraSystemCtx },
         ...supabaseHistory.map((m) => ({ role: m.role as "user" | "assistant", content: m.content })),
         ...(hasAttachments ? [] : buildThreadHistory(agId)),
         { role: "user", content: buildUserContentWithVision(userContentText + fileCtx, inputCtx?.attachments ?? []) },
@@ -1425,7 +1423,7 @@ export function RoundtableView() {
       const memoryCtx = buildAgentMemoryPrompt(agentMemories, approvedKnowledge);
 
       const messages: ChatMessage[] = [
-        { role: "system", content: sysPrompt + HUMANIZE_CTX + AGENT_LEARNING_CTX + GENERAL_CONVERSATION_CTX + HTML_APP_GENERATION_CTX + memoryCtx + skillsCtx + platformCtx + activeProjectCtx + activeRequirementCtx + autoCodeCtx + attachmentCtx + visionCtx + toneCtx + brevityCtx + coordinatorCtx },
+        { role: "system", content: sysPrompt + HUMANIZE_CTX + AGENT_LEARNING_CTX + GENERAL_CONVERSATION_CTX + HTML_APP_GENERATION_CTX + memoryCtx + skillsCtx + platformCtx + autoCodeCtx + attachmentCtx + visionCtx + toneCtx + brevityCtx + coordinatorCtx },
         ...supabaseHistory.map((m) => ({ role: m.role as "user" | "assistant", content: m.content })),
         ...(hasAttachments ? [] : buildThreadHistory(agId)),
         { role: "user", content: buildUserContentWithVision(llmUserText + fileCtx, inputCtx?.attachments ?? []) },

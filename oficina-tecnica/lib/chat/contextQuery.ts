@@ -1,5 +1,7 @@
-"use client";
 import { supabase } from "@/lib/supabaseClient";
+import type { SupabaseClient } from "@supabase/supabase-js";
+
+export type ContextSupabaseClient = SupabaseClient;
 
 // ── File attachments ────────────────────────────────────────────────────────
 export interface FileAttachment {
@@ -165,9 +167,9 @@ export function buildContextPrompt(ctx: ChatCtx): string {
 }
 
 // ── Search cotizaciones (Supabase) ───────────────────────────────────────────
-export async function searchCotizaciones(query: string, limit = 10): Promise<CotizacionSummary[]> {
+export async function searchCotizaciones(query: string, limit = 10, db: ContextSupabaseClient = supabase): Promise<CotizacionSummary[]> {
   const q = query.trim();
-  let dbQuery = supabase
+  let dbQuery = db
     .from("cotizaciones")
     .select(COTIZACION_SELECT)
     .order("codigo", { ascending: false })
@@ -184,8 +186,8 @@ export async function searchCotizaciones(query: string, limit = 10): Promise<Cot
   return normalizeCotizacionRows(data as unknown as Record<string, unknown>[]);
 }
 
-export async function fetchCotizacionByCode(code: string): Promise<CotizacionSummary | null> {
-  const { data, error } = await supabase
+export async function fetchCotizacionByCode(code: string, db: ContextSupabaseClient): Promise<CotizacionSummary | null> {
+  const { data, error } = await db
     .from("cotizaciones")
     .select(COTIZACION_SELECT)
     .eq("codigo", code)
@@ -195,8 +197,8 @@ export async function fetchCotizacionByCode(code: string): Promise<CotizacionSum
 }
 
 // ── Requerimientos ──────────────────────────────────────────────────────────
-export async function fetchRequirementByCode(code: string): Promise<RequirementSummary | null> {
-  const { data, error } = await supabase
+export async function fetchRequirementByCode(code: string, db: ContextSupabaseClient): Promise<RequirementSummary | null> {
+  const { data, error } = await db
     .from("requerimientos")
     .select("id, codigo, estado, responsable, avance, solicitante_rq, tipo_servicio_nombre, fecha_requerida, cotizacion_codigo, observaciones")
     .eq("codigo", code)
@@ -205,7 +207,11 @@ export async function fetchRequirementByCode(code: string): Promise<RequirementS
   return data as RequirementSummary;
 }
 
-export async function fetchRequirementsByProject(cotizacionCodigo: string, cotizacionId?: string): Promise<RequirementSummary[]> {
+export async function fetchRequirementsByProject(
+  cotizacionCodigo: string,
+  cotizacionId?: string,
+  db: ContextSupabaseClient = supabase,
+): Promise<RequirementSummary[]> {
   const num = cotizacionCodigo.replace(/[^0-9]/g, "");
   const filters = [
     `cotizacion_codigo.eq.${cotizacionCodigo}`,
@@ -214,7 +220,7 @@ export async function fetchRequirementsByProject(cotizacionCodigo: string, cotiz
   if (num) filters.push(`cotizacion_codigo.ilike.%${num}%`);
   if (cotizacionId) filters.push(`cotizacion_id.eq.${cotizacionId}`);
 
-  const { data, error } = await supabase
+  const { data, error } = await db
     .from("requerimientos")
     .select("id, codigo, estado, responsable, avance, solicitante_rq, tipo_servicio_nombre, fecha_requerida, cotizacion_codigo, observaciones")
     .or(filters.join(","))
@@ -230,7 +236,7 @@ export interface RequirementItemSummary {
   descripcion: string;
   unidad: string;
   cantidad: number;
-  precio_unitario: number;
+  precio_unitario: number | null;
   moneda: string | null;
   estado: string | null;
   proveedor_nombre: string | null;
@@ -243,8 +249,12 @@ function readMetaString(obj: Record<string, unknown> | undefined, key: string): 
   return typeof v === "string" && v.trim() ? v.trim() : "";
 }
 
-export async function fetchRequirementItems(requerimientoId: string, limit = 30): Promise<RequirementItemSummary[]> {
-  const { data, error } = await supabase
+export async function fetchRequirementItems(
+  requerimientoId: string,
+  limit = 30,
+  db: ContextSupabaseClient,
+): Promise<RequirementItemSummary[]> {
+  const { data, error } = await db
     .from("requerimiento_items")
     .select("recurso_a_suministrar, cantidad, precio_unitario, moneda_codigo, estado, proveedor_nombre, observaciones_item, costo_total_presupuestado, metadata")
     .eq("requerimiento_id", requerimientoId)
@@ -271,7 +281,7 @@ export async function fetchRequirementItems(requerimientoId: string, limit = 30)
       descripcion,
       unidad,
       cantidad: Number(row.cantidad ?? 0),
-      precio_unitario: Number(row.precio_unitario ?? 0),
+      precio_unitario: row.precio_unitario != null ? Number(row.precio_unitario) : null,
       moneda: (row.moneda_codigo as string | null) ?? null,
       estado: (row.estado as string | null) ?? null,
       proveedor_nombre: (row.proveedor_nombre as string | null) ?? null,
@@ -288,7 +298,8 @@ export function buildRequirementItemsPrompt(items: RequirementItemSummary[]): st
   let prompt = "\n\n**Items/materiales del requerimiento (Supabase):**";
   for (const it of items.slice(0, max)) {
     const moneda = it.moneda ?? "PEN";
-    prompt += `\n- ${it.descripcion} · ${it.cantidad} ${it.unidad} · P.U. ${moneda} ${it.precio_unitario.toFixed(2)}`;
+    const precio = it.precio_unitario == null ? "—" : `${moneda} ${it.precio_unitario.toFixed(2)}`;
+    prompt += `\n- ${it.descripcion} · ${it.cantidad} ${it.unidad} · P.U. ${precio}`;
     if (it.estado) prompt += ` · Estado: ${it.estado}`;
     if (it.proveedor_nombre) prompt += ` · Proveedor: ${it.proveedor_nombre}`;
   }
@@ -313,9 +324,13 @@ export interface RequerimientoSearchResult {
 
 const REQUIREMENT_SELECT = "id, codigo, estado, responsable, avance, solicitante_rq, tipo_servicio_nombre, fecha_requerida, cotizacion_codigo, observaciones, created_at";
 
-export async function searchRequerimientos(filters: RequerimientoSearchFilters, limit = 20): Promise<RequerimientoSearchResult> {
+export async function searchRequerimientos(
+  filters: RequerimientoSearchFilters,
+  limit = 20,
+  db: ContextSupabaseClient,
+): Promise<RequerimientoSearchResult> {
   const orderByCreated = filters.recent || filters.oldest;
-  let query = supabase
+  let query = db
     .from("requerimientos")
     .select(REQUIREMENT_SELECT, { count: "exact" })
     .order(orderByCreated ? "created_at" : "codigo", { ascending: filters.oldest ? true : !orderByCreated })
@@ -363,8 +378,8 @@ function orderByCreatedFlag(filters: { recent?: boolean; oldest?: boolean }): bo
   return Boolean(filters.recent || filters.oldest);
 }
 
-export async function fetchAllRequirements(): Promise<RequirementSummary[]> {
-  const { data, error } = await supabase
+export async function fetchAllRequirements(db: ContextSupabaseClient): Promise<RequirementSummary[]> {
+  const { data, error } = await db
     .from("requerimientos")
     .select("id, codigo, estado, responsable, avance, solicitante_rq, tipo_servicio_nombre, fecha_requerida, cotizacion_codigo, observaciones")
     .order("codigo", { ascending: true })
@@ -421,10 +436,14 @@ const COTIZACION_SELECT = [
   "metadata",
 ].join(", ");
 
-export async function searchCotizacionesByFilters(filters: CotizacionSearchFilters, limit = 20): Promise<CotizacionSearchResult> {
+export async function searchCotizacionesByFilters(
+  filters: CotizacionSearchFilters,
+  limit = 20,
+  db: ContextSupabaseClient,
+): Promise<CotizacionSearchResult> {
   const orderByCreated = filters.recent || filters.oldest;
   const dateColumn = filters.dateColumn ?? "created_at";
-  let query = supabase
+  let query = db
     .from("cotizaciones")
     .select(COTIZACION_SELECT, { count: "exact" })
     .order(orderByCreated ? "created_at" : "codigo", { ascending: filters.oldest ? true : !orderByCreated })
@@ -509,46 +528,64 @@ export interface ProjectReferenceResult {
 const HISTORICAL_SAMPLE_LIMIT = 20;
 const HISTORICAL_IDS_LIMIT = 200;
 
-export async function fetchProjectContextByCode(rawCode: string): Promise<ProjectReferenceResult> {
+export interface ProjectContextQueryOptions {
+  canQueryCotizaciones?: boolean;
+  canQueryRequerimientos?: boolean;
+  canQueryRequirementItems?: boolean;
+  canQueryTechnicalProposals?: boolean;
+  canQueryRequirementCosts?: boolean;
+}
+
+export async function fetchProjectContextByCode(
+  rawCode: string,
+  db: ContextSupabaseClient,
+  options: ProjectContextQueryOptions = {},
+): Promise<ProjectReferenceResult> {
   const code = rawCode.trim().toUpperCase();
   if (!code) return { source: "none" };
 
   // 1) cotizaciones.codigo (exact match only — fuzzy matches on
   // cotizaciones.proyecto can collide with unrelated cotizaciones whose
   // project name happens to contain this code as a substring).
-  const { data: cots } = await supabase
-    .from("cotizaciones")
-    .select(COTIZACION_SELECT)
-    .eq("codigo", code)
-    .limit(1);
-  if (cots && cots.length > 0) {
-    debugLog(`'${code}' encontrado en cotizaciones`);
-    return { source: "cotizacion", cotizacion: normalizeCotizacionRow(cots[0] as unknown as Record<string, unknown>) };
+  if (options.canQueryCotizaciones) {
+    const { data: cots } = await db
+      .from("cotizaciones")
+      .select(COTIZACION_SELECT)
+      .eq("codigo", code)
+      .limit(1);
+    if (cots && cots.length > 0) {
+      debugLog(`'${code}' encontrado en cotizaciones`);
+      return { source: "cotizacion", cotizacion: normalizeCotizacionRow(cots[0] as unknown as Record<string, unknown>) };
+    }
   }
 
   // 2) requerimientos.codigo or requerimientos.cotizacion_codigo (exact)
-  const { data: reqs } = await supabase
-    .from("requerimientos")
-    .select("id, codigo, estado, responsable, avance, solicitante_rq, tipo_servicio_nombre, fecha_requerida, cotizacion_codigo, observaciones")
-    .or(`codigo.eq.${code},cotizacion_codigo.eq.${code}`)
-    .limit(10);
-  if (reqs && reqs.length > 0) {
-    debugLog(`'${code}' encontrado en requerimientos (${reqs.length})`);
-    return { source: "requerimiento", requirements: reqs as RequirementSummary[] };
+  if (options.canQueryRequerimientos) {
+    const { data: reqs } = await db
+      .from("requerimientos")
+      .select("id, codigo, estado, responsable, avance, solicitante_rq, tipo_servicio_nombre, fecha_requerida, cotizacion_codigo, observaciones")
+      .or(`codigo.eq.${code},cotizacion_codigo.eq.${code}`)
+      .limit(10);
+    if (reqs && reqs.length > 0) {
+      debugLog(`'${code}' encontrado en requerimientos (${reqs.length})`);
+      return { source: "requerimiento", requirements: reqs as RequirementSummary[] };
+    }
   }
 
   // 3) technical_proposals.code or .cotizacion_codigo -> resolve its cotizacion
-  const { data: proposals } = await supabase
-    .from("technical_proposals")
-    .select("cotizacion_codigo")
-    .or(`code.eq.${code},cotizacion_codigo.eq.${code}`)
-    .limit(1);
-  if (proposals && proposals.length > 0) {
-    const cotCodigo = proposals[0].cotizacion_codigo as string;
-    const cot = await fetchCotizacionByCode(cotCodigo);
-    if (cot) {
-      debugLog(`'${code}' encontrado en technical_proposals -> cotización ${cotCodigo}`);
-      return { source: "technical_proposal", cotizacion: cot };
+  if (options.canQueryTechnicalProposals && options.canQueryCotizaciones) {
+    const { data: proposals } = await db
+      .from("technical_proposals")
+      .select("cotizacion_codigo")
+      .or(`code.eq.${code},cotizacion_codigo.eq.${code}`)
+      .limit(1);
+    if (proposals && proposals.length > 0) {
+      const cotCodigo = proposals[0].cotizacion_codigo as string;
+      const cot = await fetchCotizacionByCode(cotCodigo, db);
+      if (cot) {
+        debugLog(`'${code}' encontrado en technical_proposals -> cotización ${cotCodigo}`);
+        return { source: "technical_proposal", cotizacion: cot };
+      }
     }
   }
 
@@ -557,28 +594,32 @@ export async function fetchProjectContextByCode(rawCode: string): Promise<Projec
   // (lightweight) — full requerimientos/items are fetched in capped,
   // aggregate-only queries below so a code linked to 100+ RQs doesn't blow
   // up the prompt or the page.
-  const { data: items } = await supabase
-    .from("requerimiento_items")
-    .select("requerimiento_id")
-    .or(
-      `metadata->historical_import->>historical_cotizacion_key.eq.${code},` +
-      `metadata->historical_import->>historical_rq_key.ilike.${code}*`
-    )
-    .limit(500);
-  if (items && items.length > 0) {
+  const { data: items } = options.canQueryRequirementItems
+    ? await db
+      .from("requerimiento_items")
+      .select("requerimiento_id")
+      .or(
+        `metadata->historical_import->>historical_cotizacion_key.eq.${code},` +
+        `metadata->historical_import->>historical_rq_key.ilike.${code}*`
+      )
+      .limit(500)
+    : { data: null };
+  if (options.canQueryRequerimientos && items && items.length > 0) {
     const allIds = [...new Set(items.map((i) => i.requerimiento_id as string).filter(Boolean))];
     const ids = allIds.slice(0, HISTORICAL_IDS_LIMIT);
     if (ids.length > 0) {
       const [{ count }, { data: sample }, { data: estadoRows }, { data: costRows }] = await Promise.all([
-        supabase.from("requerimientos").select("id", { count: "exact", head: true }).in("id", ids),
-        supabase
+        db.from("requerimientos").select("id", { count: "exact", head: true }).in("id", ids),
+        db
           .from("requerimientos")
           .select("id, codigo, estado, responsable, avance, solicitante_rq, tipo_servicio_nombre, fecha_requerida, cotizacion_codigo, observaciones")
           .in("id", ids)
           .order("codigo", { ascending: true })
           .limit(HISTORICAL_SAMPLE_LIMIT),
-        supabase.from("requerimientos").select("estado").in("id", ids),
-        supabase.from("requerimiento_items").select("costo_total_presupuestado").in("requerimiento_id", ids).limit(500),
+        db.from("requerimientos").select("estado").in("id", ids),
+        options.canQueryRequirementCosts
+          ? db.from("requerimiento_items").select("costo_total_presupuestado").in("requerimiento_id", ids).limit(500)
+          : Promise.resolve({ data: [] }),
       ]);
 
       if (sample && sample.length > 0) {
@@ -604,8 +645,8 @@ export async function fetchProjectContextByCode(rawCode: string): Promise<Projec
   // wrote "RQ-CJM075-001_2025" but the real code ends in "_2026".
   const fuzzyBase = code.replace(/_\d{4}$/, "");
   const [reqMatches, cotMatches] = await Promise.all([
-    searchRequerimientos({ q: fuzzyBase }, 5),
-    searchCotizaciones(fuzzyBase, 5),
+    options.canQueryRequerimientos ? searchRequerimientos({ q: fuzzyBase }, 5, db) : Promise.resolve({ items: [], total: 0 }),
+    options.canQueryCotizaciones ? searchCotizaciones(fuzzyBase, 5, db) : Promise.resolve([]),
   ]);
   if (reqMatches.items.length > 0 || cotMatches.length > 0) {
     debugLog(`'${code}' sin match exacto; ${reqMatches.items.length} requerimiento(s) y ${cotMatches.length} cotización(es) similares`);

@@ -12,9 +12,8 @@ import { parseInput, isSimpleMessage, isContinuationRequest, HUMANIZE_CTX } from
 import { MdText } from "../chat/MdText";
 import { HelpPanel } from "../chat/HelpPanel";
 import { ChatAutoInput } from "../chat/ChatAutoInput";
-import { buildContextPrompt, buildRequirementItemsPrompt, fetchRequirementItems } from "../../lib/chat/contextQuery";
 import type { ChatCtx } from "../../lib/chat/contextQuery";
-import { buildDeterministicAnswerFromResults, runContextPipeline } from "../../lib/chat/contextRouter";
+import { contextResolverMessage, resolveContextPipeline } from "../../lib/chat/contextResolverClient";
 import { buildUserContentWithVision, buildVisionAttachmentNote } from "../../lib/chat/visionContent";
 import { useSession } from "../../lib/auth/useSession";
 import {
@@ -310,11 +309,6 @@ export function ChatView() {
     const routing = routeRequest(parsed.cleanText);
     setTypingModel(routing.modelLabel);
 
-    let ctxPrompt = inputCtx ? buildContextPrompt(inputCtx) : "";
-    if (inputCtx?.requirement) {
-      const items = await fetchRequirementItems(inputCtx.requirement.id).catch(() => []);
-      ctxPrompt += buildRequirementItemsPrompt(items);
-    }
     // A short message is only "simple" if there's no project/RQ context chip attached —
     // otherwise the user wants that context used even for a brief question.
     const hasAttachments = (inputCtx?.attachments?.length ?? 0) > 0;
@@ -327,6 +321,11 @@ export function ChatView() {
     const contextQueryText = continuation && previousUserQuery
       ? `${previousUserQuery}\n${parsed.cleanText}`
       : parsed.cleanText;
+    const resolverHints = [
+      inputCtx?.project?.id ? `Cotización/proyecto activo: ${inputCtx.project.id}` : "",
+      inputCtx?.requirement?.codigo ? `Requerimiento activo: ${inputCtx.requirement.codigo}` : "",
+    ].filter(Boolean).join("\n");
+    const contextResolverText = resolverHints ? `${contextQueryText}\n${resolverHints}` : contextQueryText;
     const llmUserText = continuation && previousUserQuery
       ? `${parsed.cleanText}\n\nContinuacion de la consulta anterior del usuario: ${previousUserQuery}`
       : parsed.cleanText;
@@ -340,9 +339,22 @@ export function ChatView() {
     let autoCodeCtx = "";
     let deterministicAnswer: string | null = null;
     if (!simple) {
-      const pipeline = await runContextPipeline(contextQueryText);
-      autoCodeCtx = pipeline.block;
-      deterministicAnswer = buildDeterministicAnswerFromResults(contextQueryText, pipeline.results);
+      try {
+        const resolved = await resolveContextPipeline(contextResolverText);
+        autoCodeCtx = resolved.pipeline.block;
+        deterministicAnswer = resolved.deterministicAnswer;
+      } catch (error) {
+        appendChat(threadKey, {
+          role: "agent",
+          text: contextResolverMessage(error),
+          agentId,
+          modelLabel: "context-resolver",
+          isError: true,
+        });
+        setBusy(false);
+        setTypingModel(undefined);
+        return;
+      }
     }
 
     if (deterministicAnswer && !hasAttachments) {
@@ -353,7 +365,7 @@ export function ChatView() {
         agentId,
         projectId: ctxProjectId,
         conversationScope: "private",
-        userMessage: contextQueryText,
+        userMessage: contextResolverText,
         assistantResponse: deterministicAnswer,
         modelLabel: label,
         groundedInSupabase: true,
@@ -384,7 +396,7 @@ export function ChatView() {
         ]);
     const memoryCtx = buildAgentMemoryPrompt(agentMemories, approvedKnowledge);
 
-    const systemPrompt = (AGENT_SYSTEM_PROMPTS[agentId] ?? AGENT_SYSTEM_PROMPTS.ic) + HUMANIZE_CTX + AGENT_LEARNING_CTX + GENERAL_CONVERSATION_CTX + HTML_APP_GENERATION_CTX + memoryCtx + ctxPrompt + autoCodeCtx + attachmentCtx + visionCtx;
+    const systemPrompt = (AGENT_SYSTEM_PROMPTS[agentId] ?? AGENT_SYSTEM_PROMPTS.ic) + HUMANIZE_CTX + AGENT_LEARNING_CTX + GENERAL_CONVERSATION_CTX + HTML_APP_GENERATION_CTX + memoryCtx + autoCodeCtx + attachmentCtx + visionCtx;
 
     // Load Supabase memory (older conversations) only for non-trivial
     // messages, but always read this thread's local history — it's already

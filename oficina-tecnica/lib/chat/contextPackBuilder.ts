@@ -85,7 +85,8 @@ function renderRequerimiento(r: RequirementSummary): string {
 
 function renderItem(it: RequirementItemSummary): string {
   const moneda = it.moneda ?? "PEN";
-  const bits = [`${it.descripcion}`, `${it.cantidad} ${it.unidad}`, `P.U. ${moneda} ${it.precio_unitario.toFixed(2)}`];
+  const precio = it.precio_unitario == null ? "—" : `${moneda} ${it.precio_unitario.toFixed(2)}`;
+  const bits = [`${it.descripcion}`, `${it.cantidad} ${it.unidad}`, `P.U. ${precio}`];
   if (it.estado) bits.push(`Estado: ${it.estado}`);
   if (it.proveedor_nombre) bits.push(`Proveedor: ${it.proveedor_nombre}`);
   if (it.costo_total_presupuestado != null) bits.push(`Costo: ${moneda} ${it.costo_total_presupuestado.toFixed(2)}`);

@@ -35,6 +35,7 @@ import {
   type RecursosToolFilters,
   type CountToolFilters,
   type CountableContextTable,
+  type ContextToolDeps,
 } from "@/lib/chat/contextTools";
 import { moneyPrefix, type CotizacionSearchFilters, type RequerimientoSearchFilters } from "@/lib/chat/contextQuery";
 import { buildContextPack, hasRealData } from "@/lib/chat/contextPackBuilder";
@@ -305,28 +306,28 @@ export function detectContextIntent(cleanText: string): ContextRoutingDecision {
 }
 
 // ── Ejecución de una herramienta individual ──────────────────────────────────
-async function executeTool(call: ContextToolCall): Promise<ContextToolResult> {
+async function executeTool(call: ContextToolCall, deps?: ContextToolDeps): Promise<ContextToolResult> {
   switch (call.tool) {
     case "buscarCotizacionPorCodigo":
-      return buscarCotizacionPorCodigo(String(call.args.code));
+      return buscarCotizacionPorCodigo(String(call.args.code), deps);
     case "buscarCotizaciones":
-      return buscarCotizaciones(call.args.filters as CotizacionSearchFilters, call.args.limit as number | undefined);
+      return buscarCotizaciones(call.args.filters as CotizacionSearchFilters, call.args.limit as number | undefined, deps);
     case "buscarRequerimientoPorCodigo":
-      return buscarRequerimientoPorCodigo(String(call.args.code));
+      return buscarRequerimientoPorCodigo(String(call.args.code), deps);
     case "buscarRequerimientos":
-      return buscarRequerimientos(call.args.filters as RequerimientoSearchFilters, call.args.limit as number | undefined);
+      return buscarRequerimientos(call.args.filters as RequerimientoSearchFilters, call.args.limit as number | undefined, deps);
     case "buscarPropuestaTecnicaPorCodigo":
-      return buscarPropuestaTecnicaPorCodigo(String(call.args.code));
+      return buscarPropuestaTecnicaPorCodigo(String(call.args.code), deps);
     case "buscarRecursos":
-      return buscarRecursos(call.args.filters as RecursosToolFilters, call.args.limit as number | undefined);
+      return buscarRecursos(call.args.filters as RecursosToolFilters, call.args.limit as number | undefined, deps);
     case "buscarProyectoPorCodigo":
-      return buscarProyectoPorCodigo(String(call.args.code));
+      return buscarProyectoPorCodigo(String(call.args.code), deps);
     case "obtenerResumenProyecto":
-      return obtenerResumenProyecto(String(call.args.code));
+      return obtenerResumenProyecto(String(call.args.code), deps);
     case "contarRegistros":
-      return contarRegistros(call.args.table as CountableContextTable, call.args.filters as CountToolFilters | undefined);
+      return contarRegistros(call.args.table as CountableContextTable, call.args.filters as CountToolFilters | undefined, deps);
     case "buscarDocumentosCotizacion":
-      return buscarDocumentosCotizacion(String(call.args.code), call.args.limit as number | undefined);
+      return buscarDocumentosCotizacion(String(call.args.code), call.args.limit as number | undefined, deps);
   }
 }
 
@@ -337,6 +338,8 @@ export interface ContextPipelineResult {
   results: ContextToolResult[];
   hasData: boolean;
 }
+
+export type ContextPipelineOptions = ContextToolDeps;
 
 function formatMoney(value: number): string {
   return value.toLocaleString("es-PE", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
@@ -509,7 +512,7 @@ const SOFT_ERROR_NOTE =
  *  - tras encontrar un RQ por código (1 resultado) trae sus ítems.
  *  - tras resolver un código a un requerimiento único, trae sus ítems.
  */
-export async function runContextPipeline(cleanText: string): Promise<ContextPipelineResult> {
+export async function runContextPipeline(cleanText: string, options: ContextPipelineOptions): Promise<ContextPipelineResult> {
   const decision = detectContextIntent(cleanText);
 
   if (decision.toolsToCall.length === 0) {
@@ -517,24 +520,25 @@ export async function runContextPipeline(cleanText: string): Promise<ContextPipe
   }
 
   try {
+    if (!options?.supabase) throw new Error("CTX_SUPABASE_CLIENT_REQUIRED");
     const results: ContextToolResult[] = [];
 
     for (const call of decision.toolsToCall) {
-      const res = await executeTool(call);
+      const res = await executeTool(call, options);
       results.push(res);
 
       // Encadenado: ítems del requerimiento encontrado por código.
       if (res.source === "requerimientos" && call.tool === "buscarRequerimientoPorCodigo"
           && res.status === "success" && res.records.length === 1) {
         const rq = res.records[0];
-        results.push(await buscarItemsDeRequerimiento(rq.id, DEFAULT_CONTEXT_LIMIT, rq.codigo));
+        results.push(await buscarItemsDeRequerimiento(rq.id, DEFAULT_CONTEXT_LIMIT, rq.codigo, options));
       }
 
       // Encadenado: ítems cuando un código resolvió a un requerimiento único.
       if (res.source === "proyecto" && res.status === "success"
           && res.reference.source === "requerimiento" && res.reference.requirements?.length === 1) {
         const rq = res.reference.requirements[0];
-        results.push(await buscarItemsDeRequerimiento(rq.id, DEFAULT_CONTEXT_LIMIT, rq.codigo));
+        results.push(await buscarItemsDeRequerimiento(rq.id, DEFAULT_CONTEXT_LIMIT, rq.codigo, options));
       }
     }
 
