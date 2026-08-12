@@ -328,3 +328,171 @@ TRABAJO-MODELO02 | Oficina Técnica IA
 - npx eslint focalizado: pasa con 0 errores y warnings de deuda técnica temporal.
 - npm run build: pasa correctamente.
 - Validación manual: escritura fluida en Descripción y eliminación bloqueada fuera de modo edición.
+
+## 2026-08-12 | Chat/Mesa de Trabajo | Consolidación de Context Resolver
+
+### Proyecto
+TRABAJO-MODELO02 | Oficina Técnica IA
+
+### Módulos
+- Chat
+- Mesa de Trabajo
+- Context Resolver
+- Requerimientos
+- Cotizaciones
+
+### Problemas resueltos
+1. Consultas por código específico de RQ podían derivar en listados generales.
+2. Filtros de proyecto/cliente podían perderse durante el merge de contexto.
+3. Existían contradicciones entre datos estructurados actuales y contexto histórico.
+4. Consultas simples de RQ cargaban información de detalle innecesaria.
+
+### Lógica implementada
+- Se estableció precedencia de resolución:
+  1. Código explícito.
+  2. Contexto conversacional.
+  3. Filtros específicos.
+  4. Discovery/listado general.
+- Los datos estructurados actuales de Supabase tienen prioridad sobre contexto histórico/documental.
+- Las consultas simples de RQ cargan solo cabecera.
+- `requerimiento_items` se consulta solo cuando la intención requiere materiales, recursos, cantidades, precios, proveedor, partidas, entregables o desglose.
+- Se corrigió la detección de códigos RQ complejos.
+- Se preservan filtros de estado, proyecto, cliente y fecha durante la construcción de contexto.
+- Se mejoraron respuestas determinísticas para consultas específicas.
+
+### Archivos modificados
+- lib/chat/contextQuery.ts
+- lib/chat/contextTools.ts
+- lib/chat/contextRouter.ts
+- lib/chat/contextPackBuilder.ts
+
+### Restricciones respetadas
+- No se modificó Supabase SQL.
+- No se modificó schema.
+- No se modificó .env.local.
+- No se instalaron paquetes.
+- No se alteraron IDs históricos.
+
+### Validación
+- npm run lint: sin errores bloqueantes.
+- npm run build: exitoso.
+- Pruebas funcionales con RQ específico y consultas generales.
+
+
+## 2026-08-12 | Mesa de Trabajo | Política de agentes y contexto compartido
+
+### Proyecto
+TRABAJO-MODELO02 | Oficina Técnica IA
+
+### Módulo
+Mesa de Trabajo
+
+### Problema detectado
+La interfaz podía mostrar varios agentes como “redactando” aunque solo uno terminara publicando respuesta. Además, una respuesta determinística podía cortar una ronda multiagente.
+
+### Lógica implementada
+- Si el usuario menciona un agente con @, responde solo ese agente.
+- Si menciona varios agentes, responden todos los mencionados.
+- Sin mención explícita, se selecciona un único agente principal según especialidad.
+- Si no existe match claro, PM actúa como coordinador.
+- Se conserva el modo de coordinación explícita.
+- Context Resolver se ejecuta una sola vez por mensaje.
+- `deterministicAnswer` se usa como contexto compartido en rondas multiagente y no cancela la generación.
+- El estado visual “redactando” se limita al agente que realmente está generando.
+
+### Archivo principal modificado
+- components/views/RoundtableView.tsx
+
+### Restricciones respetadas
+- No se cambió el modelo de permisos.
+- No se modificó Supabase.
+- No se agregaron paquetes.
+- No se alteró la arquitectura general de agentes.
+
+### Validación
+- npm run lint: sin errores bloqueantes.
+- npm run build: exitoso.
+- Se confirmó un solo Context Resolver por mensaje.
+
+
+## 2026-08-12 | Chat/Mesa de Trabajo | Renderizado estructurado de respuestas
+
+### Proyecto
+TRABAJO-MODELO02 | Oficina Técnica IA
+
+### Módulos
+- Chat
+- Mesa de Trabajo
+
+### Problema detectado
+Las tablas Markdown y los enlaces de entidades podían mostrarse como texto poco estructurado o con navegación no integrada.
+
+### Corrección implementada
+- Se reutiliza `MdText` como renderer compartido.
+- Se mejoró tolerancia a tablas Markdown.
+- Se agregó renderizado HTML real de tablas.
+- Se agregaron estilos responsive con scroll horizontal.
+- Se mejoraron enlaces internos y externos.
+- Los enlaces internos usan rutas relativas.
+- Se evita depender de localhost.
+- Se mantiene soporte de código inline.
+
+### Archivos modificados
+- components/chat/MdText.tsx
+- lib/chat/messageUtils.ts
+
+### Validación
+- npm run lint: sin errores bloqueantes.
+- npm run build: exitoso.
+
+
+## 2026-08-12 | Mesa de Trabajo | Workspaces embebidos para RQ y Cotizaciones
+
+### Proyecto
+TRABAJO-MODELO02 | Oficina Técnica IA
+
+### Módulos
+- Mesa de Trabajo
+- Requerimientos
+- Cotizaciones
+
+### Problema detectado
+La primera aproximación para abrir un RQ o cotización desde Mesa usaba iframe y duplicaba la aplicación completa dentro del modal, incluyendo sidebar y navegación.
+
+### Decisión funcional
+Las entidades deben abrirse usando los workspaces reales de la aplicación, manteniendo la conversación visible y evitando navegación disruptiva.
+
+### Lógica implementada
+- Se eliminó el uso de iframe para RQ y Cotizaciones.
+- Se reutilizan:
+  - RequirementWorkspaceModal
+  - QuotationWorkspaceModal
+  - RequerimientosContent
+  - CotizacionesContent
+- RequerimientosContent admite apertura embebida por `rqCode`.
+- CotizacionesContent admite apertura embebida por `quotationCode`.
+- Se reutilizan permisos, repositories y handlers existentes.
+- La conversación y su posición permanecen preservadas.
+- “Abrir módulo completo” queda como acción secundaria.
+
+### Archivos modificados
+- components/views/RoundtableView.tsx
+- components/sgp/pages/RequerimientosContent.tsx
+- components/sgp/pages/CotizacionesContent.tsx
+- components/chat/MdText.tsx
+
+### Restricciones respetadas
+- No se duplicó lógica de permisos.
+- No se creó un workspace paralelo.
+- No se usó iframe para RQ/Cotizaciones.
+- No se modificó Supabase SQL.
+- No se modificó .env.local.
+- No se instalaron paquetes.
+
+### Validación
+- npm run lint: sin errores bloqueantes.
+- npm run build: exitoso.
+- Navegación contextual validada mediante los workspaces reales.
+
+### Commit de cierre
+- 7e7de05 - feat: mejorar contexto y navegacion de mesa de trabajo
