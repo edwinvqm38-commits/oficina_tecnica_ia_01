@@ -1,439 +1,362 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
-import { supabase } from "@/lib/sgp/supabaseClient";
+import { useEffect, useMemo, useState } from "react";
+import Link from "next/link";
+import { useSearchParams } from "next/navigation";
+import {
+  listAgentKnowledge,
+  listAgentPerformanceSummary,
+  listAgentSkillVersions,
+  updateAgentKnowledgeStatus,
+  type AgentKnowledgeItem,
+  type AgentKnowledgeStatus,
+  type AgentPerformanceSummary,
+  type AgentSkillVersion,
+} from "@/lib/ai-office/agentIntelligenceRepository";
 import { useAuth } from "@/components/sgp/auth/AuthContext";
 
-type KnowledgeStatus = "proposed" | "approved" | "rejected" | "archived";
+type PanelTab = "knowledge" | "performance" | "needs";
+type KnowledgeFilter = AgentKnowledgeStatus | "all";
 
-type AgentKnowledgeRow = {
-  id: string;
-  agent_id: string;
-  project_id: string | null;
-  title: string;
-  content: string;
-  knowledge_type: string;
-  status: KnowledgeStatus;
-  source: string;
-  importance: number;
-  proposed_by: string | null;
-  approved_by: string | null;
-  approved_at: string | null;
-  created_at: string;
-  updated_at: string;
-};
-
-type AgentSkillVersionRow = {
-  id: string;
-  agent_id: string;
-  skill_key: string;
-  name: string;
-  version: string;
-  status: "draft" | "proposed" | "active" | "observed" | "rejected" | "archived";
-  discipline: string | null;
-  skill_type: string | null;
-  summary: string;
-  trigger_text: string | null;
-  updated_at: string;
-};
-
-type AgentPerformanceSummaryRow = {
-  agent_id: string;
-  total_events: number;
-  score: number;
-  answers: number;
-  grounded_answers: number;
-  knowledge_proposals: number;
-  knowledge_approved: number;
-  skill_proposals: number;
-  skill_approved: number;
-  negative_signals: number;
-  useful_clarifications: number;
-  last_event_at: string | null;
-  level_label: string;
-  confidence_score: number;
-};
-
-const STATUS_LABEL: Record<KnowledgeStatus, string> = {
+const STATUS_LABEL: Record<AgentKnowledgeStatus, string> = {
   proposed: "Propuesto",
   approved: "Aprobado",
   rejected: "Rechazado",
   archived: "Archivado",
 };
 
-const SKILL_STATUS_LABEL: Record<AgentSkillVersionRow["status"], string> = {
-  draft: "Borrador",
-  proposed: "Propuesta",
-  active: "Activa",
-  observed: "Observada",
-  rejected: "Rechazada",
-  archived: "Archivada",
-};
-
-const AGENT_LABEL: Record<string, string> = {
-  ic: "Ing. de Costos",
-  pm: "Project Management",
-  ie: "Ing. Eléctrico",
-  gg: "Gerencia",
-};
-
-function statusClass(status: KnowledgeStatus): string {
+function statusClass(status: AgentKnowledgeStatus): string {
   if (status === "approved") return "border-emerald-200 bg-emerald-50 text-emerald-700";
   if (status === "rejected") return "border-rose-200 bg-rose-50 text-rose-700";
   if (status === "archived") return "border-slate-200 bg-slate-50 text-slate-600";
   return "border-amber-200 bg-amber-50 text-amber-700";
 }
 
-function skillStatusClass(status: AgentSkillVersionRow["status"]): string {
-  if (status === "active") return "border-emerald-200 bg-emerald-50 text-emerald-700";
-  if (status === "rejected") return "border-rose-200 bg-rose-50 text-rose-700";
-  if (status === "observed") return "border-amber-200 bg-amber-50 text-amber-700";
-  if (status === "archived") return "border-slate-200 bg-slate-50 text-slate-600";
-  return "border-blue-200 bg-blue-50 text-blue-700";
+function formatDate(value: string | null): string {
+  if (!value) return "Sin fecha";
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) return value;
+  return parsed.toLocaleDateString("es-PE", { day: "2-digit", month: "short", year: "numeric" });
 }
 
-function formatDate(value: string | null): string {
-  if (!value) return "-";
-  return new Date(value).toLocaleDateString("es-PE", { day: "2-digit", month: "short", year: "numeric" });
+function excerpt(value: string, limit = 280): string {
+  const normalized = value.replace(/\s+/g, " ").trim();
+  if (normalized.length <= limit) return normalized;
+  return `${normalized.slice(0, limit).trim()}...`;
+}
+
+function groupByAgent<T extends { agentId: string }>(rows: T[]): Array<{ agentId: string; rows: T[] }> {
+  const byAgent = new Map<string, T[]>();
+  rows.forEach((row) => byAgent.set(row.agentId, [...(byAgent.get(row.agentId) ?? []), row]));
+  return Array.from(byAgent.entries()).map(([agentId, agentRows]) => ({ agentId, rows: agentRows }));
+}
+
+function KnowledgeCard({
+  row,
+  canEdit,
+  processing,
+  onStatus,
+}: {
+  row: AgentKnowledgeItem;
+  canEdit: boolean;
+  processing: boolean;
+  onStatus: (id: string, status: Exclude<AgentKnowledgeStatus, "proposed">) => void;
+}) {
+  const skillKey = typeof row.metadata.skill_key === "string" ? row.metadata.skill_key : null;
+  const conversationId = typeof row.metadata.conversation_id === "string" ? row.metadata.conversation_id : null;
+  const version = typeof row.metadata.version === "string" ? row.metadata.version : null;
+  return (
+    <article className="rounded-md border border-slate-200 bg-white p-3 shadow-sm">
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div className="min-w-0">
+          <div className="flex flex-wrap items-center gap-2">
+            <span className={`rounded-full border px-2 py-0.5 text-[11px] font-semibold ${statusClass(row.status)}`}>{STATUS_LABEL[row.status]}</span>
+            <span className="rounded-full border border-slate-200 bg-slate-50 px-2 py-0.5 text-[11px] font-semibold text-slate-600">{row.knowledgeType}</span>
+            <span className="text-[11px] text-slate-400">Imp. {row.importance ?? "-"}/5</span>
+          </div>
+          <h3 className="mt-2 text-sm font-semibold text-slate-950">{row.title}</h3>
+        </div>
+        {canEdit && row.status === "proposed" ? (
+          <div className="flex gap-2">
+            <button type="button" disabled={processing} onClick={() => onStatus(row.id, "approved")} className="h-7 rounded-md border border-emerald-200 bg-emerald-50 px-2 text-xs font-semibold text-emerald-700 hover:bg-emerald-100">Aprobar</button>
+            <button type="button" disabled={processing} onClick={() => onStatus(row.id, "rejected")} className="h-7 rounded-md border border-rose-200 bg-rose-50 px-2 text-xs font-semibold text-rose-700 hover:bg-rose-100">Rechazar</button>
+          </div>
+        ) : null}
+      </div>
+      <p className="mt-3 whitespace-pre-wrap text-sm leading-6 text-slate-700">{excerpt(row.content)}</p>
+      <div className="mt-3 flex flex-wrap gap-3 text-[11px] text-slate-400">
+        <span>Agente: {row.agentId.toUpperCase()}</span>
+        <span>Origen: {row.source ?? "No registrado"}</span>
+        <span>Creado: {formatDate(row.createdAt)}</span>
+        <span>Modificado: {formatDate(row.updatedAt)}</span>
+        {row.projectId ? <span>Proyecto: {row.projectId}</span> : null}
+        {row.proposedBy ? <span>Propuesto por: {row.proposedBy}</span> : null}
+        {row.approvedBy ? <span>Aprobado por: {row.approvedBy}</span> : null}
+        {row.approvedAt ? <span>Aprobado: {formatDate(row.approvedAt)}</span> : null}
+        {skillKey ? <span>Skill asociada: {skillKey}</span> : null}
+        {conversationId ? <span>Conversación: {conversationId}</span> : null}
+        {version ? <span>Versión: {version}</span> : null}
+        {row.tags.length ? <span>Tags: {row.tags.join(", ")}</span> : null}
+      </div>
+    </article>
+  );
+}
+
+function AgentNeedCard({
+  row,
+  approvedKnowledge,
+  activeSkills,
+  pendingProposals,
+}: {
+  row: AgentPerformanceSummary;
+  approvedKnowledge: number;
+  activeSkills: number;
+  pendingProposals: number;
+}) {
+  const needs: string[] = [];
+  if (row.negativeSignals > 0) needs.push(`${row.negativeSignals} correcciones o señales negativas registradas.`);
+  if (row.groundedAnswers > 0 && approvedKnowledge === 0) needs.push("Tiene respuestas con datos reales, pero no conocimiento aprobado asociado.");
+  if (activeSkills === 0 && row.answers > 0) needs.push("Tiene respuestas registradas sin skills activas asociadas.");
+  if (pendingProposals > 0) needs.push(`${pendingProposals} propuestas pendientes de gobierno.`);
+
+  return (
+    <article className="rounded-md border border-slate-200 bg-white p-3 shadow-sm">
+      <div className="flex items-start justify-between gap-3">
+        <div>
+          <h3 className="text-sm font-semibold text-slate-950">{row.agentId.toUpperCase()}</h3>
+          <p className="mt-1 text-xs text-slate-500">Señales derivadas de eventos y registros aprobables. No es diagnóstico automático.</p>
+        </div>
+        <Link href={`/chat?agent=${row.agentId}`} className="text-xs font-semibold text-blue-700">Abrir Chat</Link>
+      </div>
+      {needs.length ? (
+        <div className="mt-3 grid gap-2">
+          {needs.map((need) => <div key={need} className="rounded border border-amber-200 bg-amber-50 px-2 py-1.5 text-xs text-amber-800">{need}</div>)}
+        </div>
+      ) : (
+        <div className="mt-3 rounded border border-emerald-200 bg-emerald-50 px-2 py-1.5 text-xs text-emerald-800">Sin carencias detectables con los datos actuales.</div>
+      )}
+      <div className="mt-3 rounded-md border border-slate-200 bg-slate-50 p-2 text-[11px] leading-5 text-slate-600">
+        Consulta preparada: “Según tus interacciones recientes y datos reales disponibles, identifica en qué temas has tenido falta de contexto, errores, correcciones o necesidad de apoyo. No inventes carencias.”
+      </div>
+    </article>
+  );
+}
+
+function PerformanceCard({ row }: { row: AgentPerformanceSummary }) {
+  return (
+    <article className="rounded-md border border-slate-200 bg-white p-3 shadow-sm">
+      <div className="flex items-start justify-between gap-2">
+        <div>
+          <h3 className="text-sm font-semibold text-slate-950">{row.agentId.toUpperCase()}</h3>
+          <p className="mt-1 text-xs text-slate-500">Última actividad: {formatDate(row.lastEventAt)}</p>
+        </div>
+        <Link href={`/linea-tiempo?agent=${row.agentId}`} className="text-xs font-semibold text-blue-700">Ver timeline</Link>
+      </div>
+      <div className="mt-3 grid grid-cols-2 gap-2 text-xs text-slate-600 md:grid-cols-4">
+        <span>Eventos: <b>{row.totalEvents}</b></span>
+        <span>Respuestas: <b>{row.answers}</b></span>
+        <span>Con datos reales: <b>{row.groundedAnswers}</b></span>
+        <span>Correcciones/señales -: <b>{row.negativeSignals}</b></span>
+        <span>Conoc. propuesto: <b>{row.knowledgeProposals}</b></span>
+        <span>Conoc. aprobado: <b>{row.knowledgeApproved}</b></span>
+        <span>Skills propuestas: <b>{row.skillProposals}</b></span>
+        <span>Skills aprobadas: <b>{row.skillApproved}</b></span>
+      </div>
+    </article>
+  );
 }
 
 export function AIKnowledgePanel() {
   const { isAdmin, user } = useAuth();
-  const [rows, setRows] = useState<AgentKnowledgeRow[]>([]);
-  const [skills, setSkills] = useState<AgentSkillVersionRow[]>([]);
-  const [performance, setPerformance] = useState<AgentPerformanceSummaryRow[]>([]);
-  const [statusFilter, setStatusFilter] = useState<KnowledgeStatus | "all">("proposed");
+  const searchParams = useSearchParams();
+  const agentFilter = searchParams.get("agent")?.trim() ?? "";
+  const [tab, setTab] = useState<PanelTab>("knowledge");
+  const [filter, setFilter] = useState<KnowledgeFilter>("approved");
+  const [knowledge, setKnowledge] = useState<AgentKnowledgeItem[]>([]);
+  const [skills, setSkills] = useState<AgentSkillVersion[]>([]);
+  const [performance, setPerformance] = useState<AgentPerformanceSummary[]>([]);
   const [loading, setLoading] = useState(true);
-  const [message, setMessage] = useState<string | null>(null);
-  const [skillsMessage, setSkillsMessage] = useState<string | null>(null);
+  const [warning, setWarning] = useState<string | null>(null);
+  const [processingId, setProcessingId] = useState<string | null>(null);
 
-  const loadRows = useCallback(async () => {
+  function applyLoadedData() {
     setLoading(true);
-    setMessage(null);
-    setSkillsMessage(null);
-    let query = supabase
-      .from("agent_knowledge")
-      .select("id,agent_id,project_id,title,content,knowledge_type,status,source,importance,proposed_by,approved_by,approved_at,created_at,updated_at")
-      .order("created_at", { ascending: false })
-      .limit(120);
-
-    if (!isAdmin) query = query.eq("status", "approved");
-
-    const { data, error } = await query;
-    if (error) {
-      setRows([]);
-      setMessage(
-        error.message.includes("agent_knowledge")
-          ? "Aún falta ejecutar supabase/sql/180_agent_memory_layers.sql para activar conocimiento permanente."
-          : `No se pudo cargar conocimiento: ${error.message}`,
-      );
-      setLoading(false);
-      return;
-    }
-
-    setRows((data ?? []) as AgentKnowledgeRow[]);
-
-    const [skillsResult, performanceResult] = await Promise.all([
-      supabase
-        .from("agent_skill_versions")
-        .select("id,agent_id,skill_key,name,version,status,discipline,skill_type,summary,trigger_text,updated_at")
-        .order("updated_at", { ascending: false })
-        .limit(80),
-      supabase
-        .from("v_agent_performance_summary")
-        .select("agent_id,total_events,score,answers,grounded_answers,knowledge_proposals,knowledge_approved,skill_proposals,skill_approved,negative_signals,useful_clarifications,last_event_at,level_label,confidence_score")
-        .order("score", { ascending: false }),
-    ]);
-
-    if (skillsResult.error || performanceResult.error) {
-      setSkills([]);
-      setPerformance([]);
-      setSkillsMessage("Ejecuta supabase/sql/190_agent_skills_and_performance.sql para activar skills versionables e indicadores.");
-    } else {
-      setSkills((skillsResult.data ?? []) as AgentSkillVersionRow[]);
-      setPerformance((performanceResult.data ?? []) as AgentPerformanceSummaryRow[]);
-    }
-
-    setLoading(false);
-  }, [isAdmin]);
-
-  useEffect(() => {
-    void loadRows();
-  }, [loadRows]);
-
-  const filteredRows = useMemo(
-    () => rows.filter((row) => statusFilter === "all" || row.status === statusFilter),
-    [rows, statusFilter],
-  );
-
-  const counts = useMemo(
-    () => ({
-      proposed: rows.filter((row) => row.status === "proposed").length,
-      approved: rows.filter((row) => row.status === "approved").length,
-      rejected: rows.filter((row) => row.status === "rejected").length,
-      all: rows.length,
-    }),
-    [rows],
-  );
-
-  async function updateStatus(row: AgentKnowledgeRow, status: KnowledgeStatus) {
-    if (!isAdmin) return;
-    setMessage(null);
-    const patch: Partial<AgentKnowledgeRow> = {
-      status,
-      approved_by: status === "approved" ? user.email : row.approved_by,
-      approved_at: status === "approved" ? new Date().toISOString() : row.approved_at,
-    };
-    const { error } = await supabase.from("agent_knowledge").update(patch).eq("id", row.id);
-    if (error) {
-      setMessage(`No se pudo actualizar: ${error.message}`);
-      return;
-    }
-    if (status === "approved") {
-      await supabase.from("agent_performance_events").insert({
-        agent_id: row.agent_id,
-        project_id: row.project_id,
-        conversation_scope: "system",
-        event_type: "knowledge_approved",
-        score_delta: 8,
-        source: "knowledge_panel",
-        message: row.title,
-        created_by: user.email,
-        metadata: { knowledge_id: row.id, knowledge_type: row.knowledge_type },
-      });
-    }
-    await loadRows();
+    Promise.all([listAgentKnowledge(), listAgentSkillVersions(), listAgentPerformanceSummary()])
+      .then(([knowledgeResult, skillsResult, performanceResult]) => {
+        setKnowledge(knowledgeResult.source === "supabase" ? knowledgeResult.rows : []);
+        setSkills(skillsResult.source === "supabase" ? skillsResult.rows : []);
+        setPerformance(performanceResult.source === "supabase" ? performanceResult.rows : []);
+        setWarning([knowledgeResult.warning, skillsResult.warning, performanceResult.warning].filter(Boolean).join(" ") || null);
+      })
+      .catch(() => {
+        setKnowledge([]);
+        setSkills([]);
+        setPerformance([]);
+        setWarning("No se pudieron cargar las fuentes reales de conocimiento/desempeño.");
+      })
+      .finally(() => setLoading(false));
   }
 
-  async function updateSkillStatus(row: AgentSkillVersionRow, status: AgentSkillVersionRow["status"]) {
-    if (!isAdmin) return;
-    setSkillsMessage(null);
-    const patch = {
-      status,
-      approved_by: status === "active" ? user.email : null,
-      approved_at: status === "active" ? new Date().toISOString() : null,
-    };
-    const { error } = await supabase.from("agent_skill_versions").update(patch).eq("id", row.id);
-    if (error) {
-      setSkillsMessage(`No se pudo actualizar skill: ${error.message}`);
-      return;
-    }
-
-    if (status === "active") {
-      await supabase.from("agent_performance_events").insert({
-        agent_id: row.agent_id,
-        conversation_scope: "system",
-        event_type: "skill_approved",
-        score_delta: 8,
-        source: "knowledge_panel",
-        message: `${row.name} ${row.version}`,
-        created_by: user.email,
-        metadata: { skill_key: row.skill_key, version: row.version },
+  useEffect(() => {
+    let cancelled = false;
+    Promise.all([listAgentKnowledge(), listAgentSkillVersions(), listAgentPerformanceSummary()])
+      .then(([knowledgeResult, skillsResult, performanceResult]) => {
+        if (cancelled) return;
+        setKnowledge(knowledgeResult.source === "supabase" ? knowledgeResult.rows : []);
+        setSkills(skillsResult.source === "supabase" ? skillsResult.rows : []);
+        setPerformance(performanceResult.source === "supabase" ? performanceResult.rows : []);
+        setWarning([knowledgeResult.warning, skillsResult.warning, performanceResult.warning].filter(Boolean).join(" ") || null);
+      })
+      .catch(() => {
+        if (cancelled) return;
+        setKnowledge([]);
+        setSkills([]);
+        setPerformance([]);
+        setWarning("No se pudieron cargar las fuentes reales de conocimiento/desempeño.");
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
       });
-    }
-    await loadRows();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const filteredKnowledge = useMemo(
+    () => knowledge.filter((row) => (!agentFilter || row.agentId === agentFilter) && (filter === "all" || row.status === filter)),
+    [agentFilter, filter, knowledge],
+  );
+  const knowledgeGroups = useMemo(() => groupByAgent(filteredKnowledge), [filteredKnowledge]);
+  const activeSkillsByAgent = useMemo(() => groupByAgent(skills.filter((skill) => skill.status === "active")), [skills]);
+  const counts = useMemo(() => ({
+    approved: knowledge.filter((row) => (!agentFilter || row.agentId === agentFilter) && row.status === "approved").length,
+    proposed: knowledge.filter((row) => (!agentFilter || row.agentId === agentFilter) && row.status === "proposed").length,
+    rejected: knowledge.filter((row) => (!agentFilter || row.agentId === agentFilter) && row.status === "rejected").length,
+    activeSkills: skills.filter((skill) => (!agentFilter || skill.agentId === agentFilter) && skill.status === "active").length,
+  }), [agentFilter, knowledge, skills]);
+  const visiblePerformance = useMemo(
+    () => performance.filter((row) => !agentFilter || row.agentId === agentFilter),
+    [agentFilter, performance],
+  );
+
+  function handleKnowledgeStatus(id: string, status: Exclude<AgentKnowledgeStatus, "proposed">) {
+    setProcessingId(id);
+    updateAgentKnowledgeStatus(id, status, user.email)
+      .then(applyLoadedData)
+      .catch(() => setWarning("No se pudo guardar la decisión sobre el conocimiento."))
+      .finally(() => setProcessingId(null));
   }
 
   return (
-    <section className="space-y-4">
+    <section className="space-y-3">
       <div className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div>
-            <p className="text-sm font-semibold uppercase tracking-[0.18em] text-blue-600">Indicadores IA</p>
-            <h2 className="mt-1 text-xl font-semibold text-slate-950">Nivel y desempeno por agente</h2>
+            <p className="text-sm font-semibold uppercase tracking-[0.18em] text-blue-600">Conocimiento IA</p>
+            <h1 className="mt-1 text-xl font-semibold text-slate-950">Base de conocimiento / memoria gobernada</h1>
             <p className="mt-2 max-w-3xl text-sm leading-6 text-slate-600">
-              El nivel sube con respuestas utiles, uso de datos reales, conocimiento aprobado y skills activas; baja con correcciones o senales negativas.
+              El conocimiento aprobado permite reutilizar decisiones, criterios, documentos y aprendizajes validados en futuras consultas. No reentrena el modelo.
             </p>
           </div>
-          <button
-            type="button"
-            onClick={() => void loadRows()}
-            className="h-8 rounded-md border border-slate-200 px-3 text-xs font-semibold text-slate-700 hover:bg-slate-50"
-          >
-            Actualizar
-          </button>
-        </div>
-
-        {skillsMessage ? <div className="mt-4 rounded-md border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800">{skillsMessage}</div> : null}
-
-        <div className="mt-4 grid gap-3 md:grid-cols-2 xl:grid-cols-4">
-          {performance.length === 0 ? (
-            <div className="rounded-md border border-dashed border-slate-200 bg-slate-50 p-4 text-sm text-slate-500 md:col-span-2 xl:col-span-4">
-              Sin eventos de desempeno todavia. Apareceran despues de conversar con los agentes y ejecutar el SQL 190.
-            </div>
-          ) : (
-            performance.map((row) => (
-              <article key={row.agent_id} className="rounded-md border border-slate-200 bg-white p-4 shadow-sm">
-                <div className="flex items-start justify-between gap-2">
-                  <div>
-                    <div className="text-sm font-semibold text-slate-950">{AGENT_LABEL[row.agent_id] ?? row.agent_id.toUpperCase()}</div>
-                    <div className="mt-1 text-xs text-slate-500">{row.level_label}</div>
-                  </div>
-                  <span className="rounded-full border border-blue-200 bg-blue-50 px-2 py-0.5 text-xs font-semibold text-blue-700">
-                    {row.confidence_score}/100
-                  </span>
-                </div>
-                <div className="mt-3 h-2 overflow-hidden rounded-full bg-slate-100">
-                  <div className="h-full rounded-full bg-blue-600" style={{ width: `${row.confidence_score}%` }} />
-                </div>
-                <div className="mt-3 grid grid-cols-2 gap-2 text-xs text-slate-600">
-                  <span>Score: <b>{row.score}</b></span>
-                  <span>Eventos: <b>{row.total_events}</b></span>
-                  <span>Con datos: <b>{row.grounded_answers}</b></span>
-                  <span>Senales -: <b>{row.negative_signals}</b></span>
-                </div>
-                <div className="mt-3 text-[11px] text-slate-400">Ultimo: {formatDate(row.last_event_at)}</div>
-              </article>
-            ))
-          )}
+          <button type="button" onClick={applyLoadedData} className="h-8 rounded-md border border-slate-200 px-3 text-xs font-semibold text-slate-700 hover:bg-slate-50">Actualizar</button>
         </div>
       </div>
 
-      <div className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
-        <div className="flex flex-wrap items-start justify-between gap-3">
-          <div>
-            <p className="text-sm font-semibold uppercase tracking-[0.18em] text-blue-600">Skills versionables</p>
-            <h2 className="mt-1 text-xl font-semibold text-slate-950">Capacidades aprobables</h2>
-            <p className="mt-2 max-w-3xl text-sm leading-6 text-slate-600">
-              Cada skill tiene version, estado y alcance. Las propuestas se revisan antes de convertirse en comportamiento estable del agente.
-            </p>
-          </div>
-          <span className="rounded-full border border-slate-200 bg-slate-50 px-3 py-1 text-xs font-semibold text-slate-600">{skills.length} skills</span>
-        </div>
+      {warning ? <div className="rounded-md border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800">{warning}</div> : null}
 
-        <div className="mt-4 grid gap-3">
-          {skills.length === 0 ? (
-            <div className="rounded-md border border-dashed border-slate-200 bg-slate-50 p-4 text-sm text-slate-500">
-              Sin skills versionables registradas.
-            </div>
-          ) : (
-            skills.map((skill) => (
-              <article key={skill.id} className="rounded-md border border-slate-200 bg-white p-4 shadow-sm">
-                <div className="flex flex-wrap items-start justify-between gap-3">
-                  <div className="min-w-0">
-                    <div className="flex flex-wrap items-center gap-2">
-                      <span className={`rounded-full border px-2 py-0.5 text-[11px] font-semibold ${skillStatusClass(skill.status)}`}>
-                        {SKILL_STATUS_LABEL[skill.status]}
-                      </span>
-                      <span className="rounded-full border border-slate-200 bg-slate-50 px-2 py-0.5 text-[11px] font-semibold text-slate-600">
-                        {AGENT_LABEL[skill.agent_id] ?? skill.agent_id.toUpperCase()}
-                      </span>
-                      <span className="text-[11px] font-semibold text-slate-500">{skill.version}</span>
+      <div className="flex flex-wrap gap-2 rounded-md border border-slate-200 bg-slate-50 p-1">
+        <button type="button" onClick={() => setTab("knowledge")} className={`rounded px-3 py-1.5 text-xs font-semibold ${tab === "knowledge" ? "bg-blue-700 text-white" : "text-slate-600"}`}>Conocimiento</button>
+        <button type="button" onClick={() => setTab("performance")} className={`rounded px-3 py-1.5 text-xs font-semibold ${tab === "performance" ? "bg-blue-700 text-white" : "text-slate-600"}`}>Desempeño</button>
+        <button type="button" onClick={() => setTab("needs")} className={`rounded px-3 py-1.5 text-xs font-semibold ${tab === "needs" ? "bg-blue-700 text-white" : "text-slate-600"}`}>Necesidades</button>
+      </div>
+
+      {tab === "knowledge" ? (
+        <>
+          <div className="grid gap-3 md:grid-cols-4">
+            <div className="kpi"><div className="kpi-label">Aprobado</div><div className="kpi-value">{counts.approved}</div><div className="kpi-sub">agent_knowledge</div></div>
+            <div className="kpi"><div className="kpi-label">Propuesto</div><div className="kpi-value">{counts.proposed}</div><div className="kpi-sub">pendiente revisión</div></div>
+            <div className="kpi"><div className="kpi-label">Rechazado</div><div className="kpi-value">{counts.rejected}</div><div className="kpi-sub">registro real</div></div>
+            <div className="kpi"><div className="kpi-label">Skills activas</div><div className="kpi-value">{counts.activeSkills}</div><div className="kpi-sub">agent_skill_versions</div></div>
+          </div>
+
+          <div className="flex flex-wrap gap-2">
+            {[
+              ["approved", "Aprobado"],
+              ["proposed", "Propuesto"],
+              ["rejected", "Rechazado"],
+              ["all", "Todo"],
+            ].map(([id, label]) => (
+              <button key={id} type="button" onClick={() => setFilter(id as KnowledgeFilter)} className={`h-8 rounded-md border px-3 text-xs font-semibold ${filter === id ? "border-blue-600 bg-blue-600 text-white" : "border-slate-200 text-slate-700 hover:bg-slate-50"}`}>{label}</button>
+            ))}
+          </div>
+
+          <div className="grid gap-3">
+            {loading ? (
+              <div className="rounded-md border border-slate-200 bg-slate-50 p-4 text-sm text-slate-500">Cargando conocimiento...</div>
+            ) : knowledgeGroups.length === 0 ? (
+              <div className="rounded-md border border-dashed border-slate-200 bg-slate-50 p-4 text-sm text-slate-500">No hay conocimiento real para este filtro.</div>
+            ) : (
+              knowledgeGroups.map((group) => {
+                const activeForAgent = activeSkillsByAgent.find((item) => item.agentId === group.agentId)?.rows.length ?? 0;
+                const lastUpdate = group.rows.map((row) => row.updatedAt).filter(Boolean).sort().at(-1) ?? null;
+                return (
+                  <section key={group.agentId} className="rounded-lg border border-slate-200 bg-slate-50 p-3">
+                    <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+                      <div>
+                        <h2 className="text-sm font-semibold text-slate-950">{group.agentId.toUpperCase()}</h2>
+                        <p className="text-xs text-slate-500">Conocimiento: {group.rows.length} · Skills activas: {activeForAgent} · Última actualización: {formatDate(lastUpdate)}</p>
+                      </div>
+                      <Link href={`/organigrama?agent=${group.agentId}`} className="text-xs font-semibold text-blue-700">Ver agente</Link>
                     </div>
-                    <h3 className="mt-2 text-sm font-semibold text-slate-950">{skill.name}</h3>
-                    <p className="mt-1 text-sm leading-6 text-slate-700">{skill.summary}</p>
-                    {skill.trigger_text ? <p className="mt-2 text-xs text-slate-500">Dispara cuando: {skill.trigger_text}</p> : null}
-                  </div>
-                  {isAdmin && skill.status !== "active" ? (
-                    <button
-                      type="button"
-                      onClick={() => void updateSkillStatus(skill, "active")}
-                      className="h-7 rounded-md border border-emerald-200 bg-emerald-50 px-2 text-xs font-semibold text-emerald-700 hover:bg-emerald-100"
-                    >
-                      Activar
-                    </button>
-                  ) : null}
-                </div>
-              </article>
+                    <div className="grid gap-2">
+                      {group.rows.map((row) => (
+                        <KnowledgeCard key={row.id} row={row} canEdit={isAdmin} processing={processingId === row.id} onStatus={handleKnowledgeStatus} />
+                      ))}
+                    </div>
+                  </section>
+                );
+              })
+            )}
+          </div>
+        </>
+      ) : tab === "performance" ? (
+        <div className="space-y-3">
+          <div className="rounded-md border border-blue-200 bg-blue-50 p-3 text-sm leading-6 text-blue-900">
+            Estas métricas son conteos directos de <b>v_agent_performance_summary</b>, derivada de <b>agent_performance_events</b>. No miden inteligencia ni calidad global del modelo.
+          </div>
+          {loading ? (
+            <div className="rounded-md border border-slate-200 bg-slate-50 p-4 text-sm text-slate-500">Cargando desempeño...</div>
+          ) : visiblePerformance.length === 0 ? (
+            <div className="rounded-md border border-dashed border-slate-200 bg-slate-50 p-4 text-sm text-slate-500">Sin eventos reales de desempeño registrados.</div>
+          ) : (
+            visiblePerformance.map((row) => <PerformanceCard key={row.agentId} row={row} />)
+          )}
+        </div>
+      ) : (
+        <div className="space-y-3">
+          <div className="rounded-md border border-amber-200 bg-amber-50 p-3 text-sm leading-6 text-amber-900">
+            Necesidades usa señales reales disponibles. No inventa temas faltantes ni genera evaluación automática de calidad.
+          </div>
+          {loading ? (
+            <div className="rounded-md border border-slate-200 bg-slate-50 p-4 text-sm text-slate-500">Cargando señales...</div>
+          ) : visiblePerformance.length === 0 ? (
+            <div className="rounded-md border border-dashed border-slate-200 bg-slate-50 p-4 text-sm text-slate-500">Sin señales suficientes para detectar necesidades.</div>
+          ) : (
+            visiblePerformance.map((row) => (
+              <AgentNeedCard
+                key={row.agentId}
+                row={row}
+                approvedKnowledge={knowledge.filter((item) => item.agentId === row.agentId && item.status === "approved").length}
+                activeSkills={skills.filter((skill) => skill.agentId === row.agentId && skill.status === "active").length}
+                pendingProposals={
+                  knowledge.filter((item) => item.agentId === row.agentId && item.status === "proposed").length +
+                  skills.filter((skill) => skill.agentId === row.agentId && (skill.effectiveStatus === "proposed" || skill.effectiveStatus === "draft")).length
+                }
+              />
             ))
           )}
         </div>
-      </div>
-
-      <div className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
-      <div className="flex flex-wrap items-start justify-between gap-3">
-        <div>
-          <p className="text-sm font-semibold uppercase tracking-[0.18em] text-blue-600">Conocimiento IA</p>
-          <h2 className="mt-1 text-xl font-semibold text-slate-950">Memoria permanente aprobada</h2>
-          <p className="mt-2 max-w-3xl text-sm leading-6 text-slate-600">
-            Las reglas que los agentes aprenden quedan primero como propuestas. Solo lo aprobado se usa como conocimiento estable.
-          </p>
-        </div>
-        <button
-          type="button"
-          onClick={() => void loadRows()}
-          className="h-8 rounded-md border border-slate-200 px-3 text-xs font-semibold text-slate-700 hover:bg-slate-50"
-        >
-          Actualizar
-        </button>
-      </div>
-
-      <div className="mt-4 flex flex-wrap gap-2">
-        {[
-          ["proposed", `Propuestos ${counts.proposed}`],
-          ["approved", `Aprobados ${counts.approved}`],
-          ["rejected", `Rechazados ${counts.rejected}`],
-          ["all", `Todos ${counts.all}`],
-        ].map(([key, label]) => (
-          <button
-            key={key}
-            type="button"
-            onClick={() => setStatusFilter(key as KnowledgeStatus | "all")}
-            className={`h-8 rounded-md border px-3 text-xs font-semibold ${
-              statusFilter === key ? "border-blue-600 bg-blue-600 text-white" : "border-slate-200 text-slate-700 hover:bg-slate-50"
-            }`}
-          >
-            {label}
-          </button>
-        ))}
-      </div>
-
-      {message ? <div className="mt-4 rounded-md border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800">{message}</div> : null}
-
-      <div className="mt-4 grid gap-3">
-        {loading ? (
-          <div className="rounded-md border border-slate-200 bg-slate-50 p-4 text-sm text-slate-500">Cargando conocimiento...</div>
-        ) : filteredRows.length === 0 ? (
-          <div className="rounded-md border border-dashed border-slate-200 bg-slate-50 p-4 text-sm text-slate-500">
-            No hay registros para este filtro.
-          </div>
-        ) : (
-          filteredRows.map((row) => (
-            <article key={row.id} className="rounded-md border border-slate-200 bg-white p-4 shadow-sm">
-              <div className="flex flex-wrap items-start justify-between gap-3">
-                <div className="min-w-0">
-                  <div className="flex flex-wrap items-center gap-2">
-                    <span className={`rounded-full border px-2 py-0.5 text-[11px] font-semibold ${statusClass(row.status)}`}>
-                      {STATUS_LABEL[row.status]}
-                    </span>
-                    <span className="rounded-full border border-slate-200 bg-slate-50 px-2 py-0.5 text-[11px] font-semibold text-slate-600">
-                      {AGENT_LABEL[row.agent_id] ?? row.agent_id.toUpperCase()}
-                    </span>
-                    <span className="text-[11px] text-slate-400">Imp. {row.importance}/5</span>
-                  </div>
-                  <h3 className="mt-2 text-sm font-semibold text-slate-950">{row.title}</h3>
-                </div>
-                {isAdmin && row.status === "proposed" ? (
-                  <div className="flex gap-2">
-                    <button
-                      type="button"
-                      onClick={() => void updateStatus(row, "approved")}
-                      className="h-7 rounded-md border border-emerald-200 bg-emerald-50 px-2 text-xs font-semibold text-emerald-700 hover:bg-emerald-100"
-                    >
-                      Aprobar
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => void updateStatus(row, "rejected")}
-                      className="h-7 rounded-md border border-rose-200 bg-rose-50 px-2 text-xs font-semibold text-rose-700 hover:bg-rose-100"
-                    >
-                      Rechazar
-                    </button>
-                  </div>
-                ) : null}
-              </div>
-              <p className="mt-3 whitespace-pre-wrap text-sm leading-6 text-slate-700">{row.content}</p>
-              <div className="mt-3 flex flex-wrap gap-3 text-[11px] text-slate-400">
-                <span>Creado: {formatDate(row.created_at)}</span>
-                {row.project_id ? <span>Proyecto: {row.project_id}</span> : null}
-                {row.proposed_by ? <span>Propuesto por: {row.proposed_by}</span> : null}
-                {row.approved_by ? <span>Aprobado por: {row.approved_by}</span> : null}
-              </div>
-            </article>
-          ))
-        )}
-      </div>
-      </div>
+      )}
     </section>
   );
 }

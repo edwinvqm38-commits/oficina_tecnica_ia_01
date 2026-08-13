@@ -1,8 +1,7 @@
 "use client";
 
 import type { ReactNode } from "react";
-import { ALERTS, APPROVALS, CONNECTIONS, MILESTONES, PROJECTS, SKILLS } from "../../lib/data";
-import { useStore, useSkillsWithOverrides } from "../../lib/store/StoreProvider";
+import { CONNECTIONS } from "../../lib/data";
 import type { RouteId } from "../../lib/routes";
 
 function CtxCard({ title, badge, children }: { title: string; badge?: { label: string; color?: string }; children: ReactNode }) {
@@ -33,46 +32,25 @@ function CtxMetric2({ a, b }: { a: { label: string; value: string }; b: { label:
 }
 
 function DashboardContext() {
-  const pendingCount = APPROVALS.filter((a) => a.status === "pending").length;
-  const highRisk = PROJECTS.filter((p) => p.risk === "high" || p.risk === "critical").length;
   return (
     <>
-      <CtxCard title="Pulso operativo" badge={{ label: "Mock", color: "mock" }}>
-        <CtxMetric2 a={{ label: "Alertas", value: String(ALERTS.length) }} b={{ label: "Aprobaciones", value: String(pendingCount) }} />
-        <CtxMetric2 a={{ label: "Agentes", value: "2 activos" }} b={{ label: "En riesgo", value: String(highRisk) }} />
+      <CtxCard title="Pulso operativo">
+        <CtxMetric2 a={{ label: "Alertas", value: "0" }} b={{ label: "Hitos", value: "0" }} />
+        <CtxMetric2 a={{ label: "Obs.", value: "0" }} b={{ label: "Riesgo", value: "0" }} />
       </CtxCard>
 
       <CtxCard title="Alertas activas">
-        {ALERTS.map((a) => (
-          <div key={a.id} className={`alert-item alert-item--${a.level}`}>
-            <div className={`alert-dot alert-dot--${a.level}`}></div>
-            <div>
-              <div className="alert-title">{a.title}</div>
-              <div className="alert-msg">{a.message}</div>
-            </div>
-          </div>
-        ))}
+        <p style={{ fontSize: 11, color: "var(--t2)", lineHeight: 1.5 }}>Sin alertas registradas en una fuente persistente.</p>
       </CtxCard>
 
       <CtxCard title="Próximos hitos">
-        {MILESTONES.map((m, i) => (
-          <div key={i} style={{ padding: "5px 0", borderBottom: i < MILESTONES.length - 1 ? "1px solid var(--border)" : "none" }}>
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: 8 }}>
-              <span style={{ fontSize: 12, fontWeight: 600, color: "var(--t1)" }}>{m.label}</span>
-              <span style={{ fontSize: 11, color: "var(--t3)", fontFamily: "var(--mono)" }}>{m.date}</span>
-            </div>
-            <div style={{ fontSize: 11, color: "var(--t3)", marginTop: 2 }}>
-              {m.project} · {m.days}d
-            </div>
-          </div>
-        ))}
+        <p style={{ fontSize: 11, color: "var(--t2)", lineHeight: 1.5 }}>No hay hitos reales conectados a esta vista.</p>
       </CtxCard>
     </>
   );
 }
 
 function OfficeContext() {
-  const pendingCount = APPROVALS.filter((a) => a.status === "pending").length;
   return (
     <>
       <CtxCard title="Agente seleccionado">
@@ -106,7 +84,7 @@ function OfficeContext() {
         ))}
       </CtxCard>
 
-      <CtxCard title="Aprobaciones bloqueadas" badge={{ label: `${pendingCount} pend.`, color: "orange" }}>
+      <CtxCard title="Aprobaciones bloqueadas">
         <p style={{ fontSize: 11, color: "var(--t2)", lineHeight: 1.5 }}>Ninguna acción crítica se ejecuta sin aprobación explícita del GG.</p>
       </CtxCard>
     </>
@@ -114,84 +92,38 @@ function OfficeContext() {
 }
 
 function InboxContext() {
-  const { decideApproval } = useStore();
-  const pending = APPROVALS.filter((a) => a.status === "pending");
-  const firstPending = pending[0];
   return (
     <>
-      <CtxCard title="Decisión activa" badge={{ label: "Pendiente", color: "orange" }}>
-        {firstPending && (
-          <div>
-            <div style={{ fontSize: 12, fontWeight: 600, color: "var(--t1)", marginBottom: 4, lineHeight: 1.3 }}>{firstPending.title}</div>
-            <div style={{ fontSize: 11, color: "var(--t2)", marginBottom: 10, lineHeight: 1.4 }}>{firstPending.summary}</div>
-            <div style={{ display: "flex", gap: 5 }}>
-              <button
-                className="btn btn--success btn--sm"
-                onClick={() => decideApproval(firstPending.id, "approved", { title: firstPending.title, summary: firstPending.summary })}
-              >
-                Aprobar
-              </button>
-              <button
-                className="btn btn--warning btn--sm"
-                onClick={() => decideApproval(firstPending.id, "observed", { title: firstPending.title, summary: firstPending.summary })}
-              >
-                Observar
-              </button>
-              <button
-                className="btn btn--danger btn--sm"
-                onClick={() => decideApproval(firstPending.id, "rejected", { title: firstPending.title, summary: firstPending.summary })}
-              >
-                Rechazar
-              </button>
-            </div>
-          </div>
-        )}
+      <CtxCard title="Decisión activa">
+        <p style={{ fontSize: 11, color: "var(--t2)", lineHeight: 1.5 }}>La cola real se muestra en la Bandeja principal cuando existen propuestas pendientes.</p>
       </CtxCard>
 
       <CtxCard title="Memoria propuesta">
-        <div style={{ padding: "6px 0" }}>
-          <div style={{ fontSize: 12, fontWeight: 600, color: "var(--t1)", marginBottom: 2 }}>Criterio de cableado en terreno rocoso</div>
-          <div style={{ fontSize: 11, color: "var(--t3)" }}>Propuesta por IC · PRY-001</div>
-          <span className="badge badge--amber" style={{ marginTop: 6 }}>
-            Pendiente GG
-          </span>
-        </div>
+        <p style={{ fontSize: 11, color: "var(--t2)", lineHeight: 1.5 }}>Sin memoria propuesta registrada en el panel contextual.</p>
       </CtxCard>
 
       <CtxCard title="Skill propuesta">
-        <div style={{ padding: "6px 0" }}>
-          <div style={{ fontSize: 12, fontWeight: 600, color: "var(--t1)", marginBottom: 2 }}>Gestión de Restricciones v1.1</div>
-          <div style={{ fontSize: 11, color: "var(--t3)" }}>Propuesta por PM · PRY-002</div>
-          <span className="badge badge--blue" style={{ marginTop: 6 }}>
-            Requiere aprobación GG
-          </span>
-        </div>
+        <p style={{ fontSize: 11, color: "var(--t2)", lineHeight: 1.5 }}>Sin skill propuesta registrada en el panel contextual.</p>
       </CtxCard>
     </>
   );
 }
 
 function ApprovalsContext() {
-  const { state } = useStore();
-  const status = (a: { id: string; status: string }) => state.approvalDecisions[a.id] ?? a.status;
-  const pending = APPROVALS.filter((a) => status(a) === "pending").length;
-  const highRisk = APPROVALS.filter((a) => a.risk === "high" || a.risk === "critical").length;
-  const skills = APPROVALS.filter((a) => a.category === "skill").length;
   return (
     <>
       <CtxCard title="Carga de decisiones">
-        <CtxMetric2 a={{ label: "Pendientes", value: String(pending) }} b={{ label: "Riesgo alto", value: String(highRisk) }} />
-        <CtxMetric2 a={{ label: "Skills", value: String(skills) }} b={{ label: "Memoria", value: "1" }} />
+        <CtxMetric2 a={{ label: "Críticas", value: "0" }} b={{ label: "Obs.", value: "0" }} />
+        <CtxMetric2 a={{ label: "Skills", value: "0" }} b={{ label: "Memoria", value: "0" }} />
       </CtxCard>
 
-      <CtxCard title="Siguiente prioridad" badge={{ label: "Crítico", color: "red" }}>
-        <div style={{ fontSize: 12, fontWeight: 600, color: "var(--t1)", lineHeight: 1.3, marginBottom: 6 }}>{APPROVALS[0].title}</div>
-        <div style={{ fontSize: 11, color: "var(--t2)", lineHeight: 1.4 }}>{APPROVALS[0].summary}</div>
+      <CtxCard title="Siguiente prioridad">
+        <div style={{ fontSize: 11, color: "var(--t2)", lineHeight: 1.4 }}>Sin prioridad contextual registrada fuera de la cola real.</div>
       </CtxCard>
 
       <CtxCard title="Regla de control">
         <p style={{ fontSize: 11, color: "var(--t2)", lineHeight: 1.5 }}>
-          Aprobar, observar y rechazar son acciones visuales en este prototipo. En producción, ninguna decisión crítica se ejecuta sin aprobación real del GG.
+          Ninguna decisión crítica se ejecuta sin aprobación real del GG.
         </p>
       </CtxCard>
     </>
@@ -199,40 +131,18 @@ function ApprovalsContext() {
 }
 
 function SkillsContext() {
-  const skills = useSkillsWithOverrides();
-  const active = skills.filter((s) => s.status === "active").length;
-  const proposed = skills.filter((s) => s.status === "proposed").length;
-  const observed = skills.filter((s) => s.status === "observed").length;
-  const focused = SKILLS[1];
   return (
     <>
       <CtxCard title="Estado del registry">
-        <CtxMetric2 a={{ label: "Activas", value: String(active) }} b={{ label: "Propuestas", value: String(proposed) }} />
-        <CtxMetric2 a={{ label: "Observadas", value: String(observed) }} b={{ label: "Req. GG", value: String(skills.filter((s) => s.approvalRequired).length) }} />
+        <CtxMetric2 a={{ label: "Activas", value: "0" }} b={{ label: "Propuestas", value: "0" }} />
+        <CtxMetric2 a={{ label: "Observadas", value: "0" }} b={{ label: "Req. GG", value: "0" }} />
       </CtxCard>
 
-      {focused && (
-        <CtxCard title="Skill en foco">
-          <div style={{ fontSize: 12, fontWeight: 600, color: "var(--t1)", marginBottom: 4, lineHeight: 1.3 }}>{focused.name}</div>
-          <div className="info-row">
-            <span className="info-row-label">Versión</span>
-            <span className="info-row-value">{focused.version}</span>
-          </div>
-          <div className="info-row">
-            <span className="info-row-label">Riesgo</span>
-            <span className="info-row-value">{focused.risk}</span>
-          </div>
-          <div className="info-row">
-            <span className="info-row-label">Agente</span>
-            <span className="info-row-value">{focused.agent}</span>
-          </div>
-          <div style={{ marginTop: 8 }}>
-            <span className={`badge badge--${focused.status === "active" ? "green" : focused.status === "proposed" ? "blue" : "amber"}`}>
-              {focused.status === "active" ? "Activa" : focused.status === "proposed" ? "Propuesta" : "Observada"}
-            </span>
-          </div>
-        </CtxCard>
-      )}
+      <CtxCard title="Skill en foco">
+        <p style={{ fontSize: 11, color: "var(--t2)", lineHeight: 1.5 }}>
+          El detalle real se lee desde agent_skill_versions en la vista principal. Este panel no muestra una skill de ejemplo.
+        </p>
+      </CtxCard>
 
       <CtxCard title="Sin autoactivación">
         <p style={{ fontSize: 11, color: "var(--t2)", lineHeight: 1.5 }}>

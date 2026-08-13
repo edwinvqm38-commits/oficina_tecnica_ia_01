@@ -1,166 +1,148 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
+import {
+  listPendingAgentKnowledgeApprovals,
+  type AgentKnowledgeApproval,
+} from "@/lib/ai-office/agentKnowledgeRepository";
 import { PageHeader } from "../shell/PageHeader";
-import { Icons } from "../../lib/icons";
-import { APPROVALS, MVP_REQUEST, MVP_RESPONSES } from "../../lib/data";
-import { agentAvatarClass, StatusBadge } from "./shared";
-import type { AgentResponse, AgentResponseFinding } from "../../lib/types";
+import { agentAvatarClass } from "./shared";
 
-function FindingRow({ f }: { f: AgentResponseFinding }) {
-  const valClass = f.type === "risk" ? "finding-value--risk" : f.type === "warning" ? "finding-value--warning" : f.type === "number" ? "finding-value--number" : "";
-  return (
-    <div className="finding-row">
-      <span className="finding-label">{f.label}</span>
-      <span className={`finding-value ${valClass}`}>{f.value}</span>
-    </div>
-  );
+function formatDate(value: string | null): string {
+  if (!value) return "Sin fecha";
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) return value;
+  return parsed.toLocaleDateString("es-PE", { day: "2-digit", month: "short", year: "numeric" });
 }
 
-function AgentResponseCard({ response }: { response: AgentResponse }) {
-  const [open, setOpen] = useState(true);
+function shortText(value: string, max = 240): string {
+  const normalized = value.replace(/\s+/g, " ").trim();
+  if (normalized.length <= max) return normalized;
+  return `${normalized.slice(0, max).trim()}...`;
+}
+
+function ApprovalRequestCard({ approval }: { approval: AgentKnowledgeApproval }) {
   return (
-    <div className="card">
-      <div className="card-header" style={{ cursor: "pointer" }} onClick={() => setOpen((o) => !o)}>
-        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-          <div className={`agent-avatar ${agentAvatarClass(response.agentId)}`}>{response.initials}</div>
-          <div>
-            <div style={{ fontSize: 13, fontWeight: 600, color: "var(--t1)" }}>{response.agentName}</div>
-            <div style={{ fontSize: 11, color: "var(--t3)" }}>
-              Confianza: {response.confidence}% · {response.sources} fuente{response.sources > 1 ? "s" : ""}
+    <article className="card">
+      <div className="card-header">
+        <div style={{ display: "flex", alignItems: "center", gap: 10, minWidth: 0 }}>
+          <div className={`agent-avatar ${agentAvatarClass(approval.agentId)}`}>{approval.agentId.slice(0, 2).toUpperCase()}</div>
+          <div style={{ minWidth: 0 }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap", marginBottom: 3 }}>
+              <span style={{ fontSize: 11, fontFamily: "var(--mono)", color: "var(--t3)" }}>{approval.id}</span>
+              <span className="badge badge--orange">Pendiente</span>
+              <span className="badge badge--slate">{approval.knowledgeType}</span>
             </div>
+            <div style={{ fontSize: 14, fontWeight: 700, color: "var(--t1)", lineHeight: 1.3 }}>{approval.title}</div>
           </div>
         </div>
-        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-          <span className="badge badge--green">Respondido</span>
-          {open ? <Icons.chevronUp /> : <Icons.chevronDown />}
+        <div style={{ textAlign: "right", flexShrink: 0 }}>
+          <div style={{ fontSize: 10, color: "var(--t3)" }}>Propuesto por</div>
+          <div style={{ fontSize: 12, fontWeight: 700, color: "var(--t1)" }}>{approval.agentId.toUpperCase()}</div>
         </div>
       </div>
-
-      {open && (
-        <>
-          <div style={{ padding: "10px 14px", borderBottom: "1px solid var(--border)", background: "var(--bg-muted)" }}>
-            <p style={{ fontSize: 12, color: "var(--t2)", lineHeight: 1.5 }}>{response.summary}</p>
-          </div>
-          <div style={{ padding: "10px 14px", borderBottom: "1px solid var(--border)" }}>
-            <div style={{ fontSize: 10, textTransform: "uppercase", letterSpacing: ".1em", fontWeight: 600, color: "var(--t3)", marginBottom: 6 }}>Hallazgos</div>
-            {response.findings.map((f, i) => (
-              <FindingRow key={i} f={f} />
-            ))}
-          </div>
-          <div style={{ padding: "10px 14px" }}>
-            <div style={{ fontSize: 10, textTransform: "uppercase", letterSpacing: ".1em", fontWeight: 600, color: "var(--t3)", marginBottom: 6 }}>Recomendaciones</div>
-            {response.recommendations.map((r, i) => (
-              <div key={i} className="rec-item">
-                <div className="rec-num">{i + 1}</div>
-                <span>{r}</span>
-              </div>
-            ))}
-          </div>
-        </>
-      )}
-    </div>
+      <div className="card-body">
+        <p style={{ fontSize: 12, color: "var(--t2)", lineHeight: 1.6, marginBottom: 10 }}>{shortText(approval.content)}</p>
+        <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
+          <span style={{ fontSize: 11, color: "var(--t3)" }}>
+            Proyecto: <b style={{ color: "var(--t2)" }}>{approval.projectId ?? "Sin proyecto"}</b>
+          </span>
+          <span style={{ fontSize: 11, color: "var(--t3)" }}>
+            Fuente: <b style={{ color: "var(--t2)" }}>{approval.source ?? "No registrada"}</b>
+          </span>
+          <span style={{ fontSize: 11, color: "var(--t3)" }}>
+            Fecha: <b style={{ color: "var(--t2)", fontFamily: "var(--mono)" }}>{formatDate(approval.createdAt)}</b>
+          </span>
+        </div>
+      </div>
+    </article>
   );
 }
 
 export function BandejaView() {
-  const pendingApprovals = APPROVALS.filter((a) => a.status === "pending").length;
+  const [approvals, setApprovals] = useState<AgentKnowledgeApproval[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [warning, setWarning] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    listPendingAgentKnowledgeApprovals()
+      .then((result) => {
+        if (cancelled) return;
+        setApprovals(result.source === "supabase" ? result.rows : []);
+        setWarning(result.warning);
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setApprovals([]);
+          setWarning("No se pudo cargar la bandeja gerencial real.");
+        }
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   return (
     <>
       <PageHeader
         eyebrow="Bandeja Gerencial"
-        title="Solicitudes, respuestas y decisiones"
-        description="Flujo del MVP: solicitud del GG → análisis multiagente → aprobaciones y memoria pendientes."
+        title="Solicitudes y decisiones pendientes"
+        description="Cola real de propuestas generadas por agentes que requieren revisión."
         actions={
-          <div style={{ display: "flex", gap: 6 }}>
-            {pendingApprovals > 0 && (
-              <div
-                style={{
-                  display: "flex",
-                  alignItems: "center",
-                  gap: 5,
-                  padding: "4px 10px",
-                  background: "var(--orange-bg)",
-                  border: "1px solid var(--orange-border)",
-                  borderRadius: "var(--r)",
-                  fontSize: 12,
-                  fontWeight: 600,
-                  color: "var(--orange-text)",
-                }}
-              >
-                <div style={{ width: 6, height: 6, borderRadius: "50%", background: "var(--orange)" }} />
-                {pendingApprovals} pendiente{pendingApprovals > 1 ? "s" : ""}
-              </div>
-            )}
-            <span className="badge badge--blue badge--dot">{MVP_RESPONSES.length} respuestas</span>
+          <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+            <span className="badge badge--orange">{loading ? "..." : approvals.length} pendientes</span>
           </div>
         }
       />
+
+      {warning && (
+        <div className="card" style={{ marginBottom: 12, padding: "10px 14px", borderColor: "var(--amber-border)", background: "var(--amber-bg)" }}>
+          <div style={{ fontSize: 12, color: "var(--amber-text)", lineHeight: 1.5 }}>{warning} Se muestra la bandeja vacia.</div>
+        </div>
+      )}
 
       <div className="space-y-3">
         <div className="card">
           <div className="card-header">
             <div>
-              <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-                <span style={{ fontSize: 11, fontFamily: "var(--mono)", color: "var(--t3)" }}>{MVP_REQUEST.id}</span>
-                <StatusBadge status={MVP_REQUEST.status} />
-                <span className="badge badge--red">Prioridad alta</span>
+              <div style={{ fontSize: 10, textTransform: "uppercase", letterSpacing: ".12em", fontWeight: 600, color: "var(--t3)", marginBottom: 2 }}>
+                Cola real
               </div>
-              <div style={{ fontSize: 14, fontWeight: 700, color: "var(--t1)", marginTop: 4, lineHeight: 1.3 }}>{MVP_REQUEST.title}</div>
+              <div style={{ fontSize: 13, fontWeight: 600, color: "var(--t1)" }}>Conocimientos propuestos</div>
             </div>
-            <div style={{ textAlign: "right", flexShrink: 0 }}>
-              <div style={{ fontSize: 10, color: "var(--t3)" }}>Asignado a</div>
-              <div style={{ display: "flex", gap: 5, marginTop: 3 }}>
-                {MVP_REQUEST.agents.map((a) => (
-                  <span key={a} className="badge badge--blue">
-                    {a}
-                  </span>
-                ))}
-              </div>
+            <span className="badge badge--blue">agent_knowledge</span>
+          </div>
+          {loading ? (
+            <div style={{ padding: "24px 14px", textAlign: "center", color: "var(--t3)", fontSize: 12 }}>Cargando solicitudes...</div>
+          ) : approvals.length === 0 ? (
+            <div style={{ padding: "32px 14px", textAlign: "center" }}>
+              <div style={{ fontSize: 14, fontWeight: 700, color: "var(--t1)", marginBottom: 5 }}>Sin solicitudes gerenciales pendientes</div>
+              <div style={{ fontSize: 12, color: "var(--t3)" }}>No existen decisiones generadas por agentes que requieran revisión.</div>
             </div>
-          </div>
-          <div className="card-body">
-            <p style={{ fontSize: 12, color: "var(--t2)", lineHeight: 1.6 }}>{MVP_REQUEST.description}</p>
-          </div>
+          ) : (
+            <div style={{ padding: 10, display: "flex", flexDirection: "column", gap: 10 }}>
+              {approvals.map((approval) => (
+                <ApprovalRequestCard key={approval.id} approval={approval} />
+              ))}
+            </div>
+          )}
         </div>
-
-        <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
-          <span style={{ fontSize: 10, textTransform: "uppercase", letterSpacing: ".12em", fontWeight: 600, color: "var(--t3)" }}>Respuestas de agentes</span>
-          <div style={{ flex: 1, height: 1, background: "var(--border)" }} />
-          <span style={{ fontSize: 11, color: "var(--t3)" }}>
-            {MVP_RESPONSES.length}/{MVP_REQUEST.agents.length}
-          </span>
-        </div>
-
-        {MVP_RESPONSES.map((r) => (
-          <AgentResponseCard key={r.id} response={r} />
-        ))}
 
         <div className="card">
           <div className="card-header">
-            <div style={{ fontSize: 12, fontWeight: 600, color: "var(--t2)" }}>Estado del flujo</div>
+            <div style={{ fontSize: 12, fontWeight: 600, color: "var(--t2)" }}>Regla de control</div>
           </div>
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(4,1fr)", gap: 0 }}>
-            {[
-              { color: "blue", label: "Solicitud", value: "En revisión", sub: MVP_REQUEST.id },
-              { color: "green", label: "Agentes", value: `${MVP_RESPONSES.length}/${MVP_REQUEST.agents.length}`, sub: "Respuestas recibidas" },
-              { color: "orange", label: "Aprobaciones", value: `${pendingApprovals} pend.`, sub: "Requieren GG" },
-              { color: "blue", label: "Skills", value: "1 propuesta", sub: "Pendiente aprobación" },
-            ].map((s, i) => (
-              <div key={i} style={{ padding: "10px 14px", borderRight: i < 3 ? "1px solid var(--border)" : "none" }}>
-                <div style={{ fontSize: 10, textTransform: "uppercase", letterSpacing: ".08em", fontWeight: 600, color: `var(--${s.color})`, marginBottom: 2 }}>{s.label}</div>
-                <div style={{ fontSize: 14, fontWeight: 700, color: "var(--t1)" }}>{s.value}</div>
-                <div style={{ fontSize: 11, color: "var(--t3)" }}>{s.sub}</div>
-              </div>
-            ))}
+          <div className="card-body">
+            <p style={{ fontSize: 12, color: "var(--t2)", lineHeight: 1.6 }}>
+              Los agentes pueden proponer conocimiento operativo, pero nada se incorpora como criterio aprobado sin decision explicita del usuario autorizado.
+            </p>
           </div>
-        </div>
-
-        <div style={{ textAlign: "center", padding: "8px 0" }}>
-          <span style={{ fontSize: 11, color: "var(--t3)" }}>
-            Los agentes pueden analizar y recomendar, pero no ejecutan decisiones críticas sin aprobación del GG · Datos simulados · MVP mock
-          </span>
         </div>
       </div>
     </>

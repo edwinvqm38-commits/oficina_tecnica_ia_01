@@ -4,8 +4,7 @@ import { useEffect, useState } from "react";
 import Link from "next/link";
 import { Icons } from "../../lib/icons";
 import { ROUTE_GROUPS, type RouteDef } from "../../lib/routes";
-import { useStore, useSkillsWithOverrides, usePendingApprovalsCount } from "../../lib/store/StoreProvider";
-import { KNOWLEDGE } from "../../lib/data";
+import { usePendingApprovalsCount } from "../../lib/store/StoreProvider";
 import { useSession } from "../../lib/auth/useSession";
 import { usePendingUsersCount } from "../../lib/auth/usePendingUsersCount";
 import { useSectionAccess } from "../../lib/auth/useSectionAccess";
@@ -32,7 +31,9 @@ function ParentItem({
   const [open, setOpen] = useState(isChildActive);
 
   useEffect(() => {
-    if (isChildActive) setOpen(true);
+    if (!isChildActive) return;
+    const timer = window.setTimeout(() => setOpen(true), 0);
+    return () => window.clearTimeout(timer);
   }, [isChildActive]);
 
   const Icon = Icons[item.icon];
@@ -101,19 +102,16 @@ function ParentItem({
 }
 
 export function Sidebar({ activeRoute }: { activeRoute: string }) {
-  const { state } = useStore();
   const { session } = useSession(false);
   const isAdmin = session?.email === ADMIN_EMAIL;
   const { canAccessRoute } = useSectionAccess(session?.email);
   const pendingApprovals = usePendingApprovalsCount();
   const pendingUsers = usePendingUsersCount(isAdmin);
-  const skills = useSkillsWithOverrides();
-  const proposedKB = [...KNOWLEDGE, ...state.knowledge].filter((k) => k.status === "proposed").length;
 
   const badges: Partial<Record<string, number | null>> = {
     approvals: pendingApprovals || null,
-    skills: skills.length || null,
-    memory: proposedKB || null,
+    skills: null,
+    memory: null,
     "admin-users": pendingUsers || null,
   };
 
