@@ -1,10 +1,11 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { listAllRecursos } from "@/lib/sgp/recursosRepository";
 import { loadCoreAppData } from "@/lib/sgp/clientDataCache";
 import type { Cotizacion, Requerimiento, Recurso } from "@/lib/sgp/demoData";
 import { PageHeader } from "../shell/PageHeader";
+import { Badge, Card } from "../ui";
 
 type DashboardData = {
   cotizaciones: Cotizacion[];
@@ -80,7 +81,7 @@ function buildProjectSummaries(cotizaciones: Cotizacion[], requerimientos: Reque
 }
 
 function EmptyState({ children }: { children: string }) {
-  return <div style={{ padding: "18px 14px", textAlign: "center", color: "var(--t3)", fontSize: 12 }}>{children}</div>;
+  return <div className="dashboard-empty">{children}</div>;
 }
 
 function StatusList({ rows }: { rows: Array<{ label: string; value: number }> }) {
@@ -88,22 +89,70 @@ function StatusList({ rows }: { rows: Array<{ label: string; value: number }> })
   if (rows.length === 0) return <EmptyState>Sin datos registrados.</EmptyState>;
 
   return (
-    <div style={{ padding: "9px 14px", display: "flex", flexDirection: "column", gap: 7 }}>
+    <div className="dashboard-status-list">
       {rows.map((row) => (
-        <div key={row.label} style={{ display: "grid", gridTemplateColumns: "1fr 42px", gap: 10, alignItems: "center" }}>
-          <div style={{ minWidth: 0 }}>
-            <div style={{ display: "flex", justifyContent: "space-between", gap: 8, marginBottom: 4 }}>
-              <span style={{ fontSize: 11, color: "var(--t2)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{row.label}</span>
-              <span style={{ fontSize: 11, fontWeight: 700, color: "var(--t1)" }}>{row.value}</span>
+        <div key={row.label} className="dashboard-status-row">
+          <div className="dashboard-status-main">
+            <div className="dashboard-status-meta">
+              <span className="dashboard-status-label">{row.label}</span>
+              <span className="dashboard-status-value">{row.value}</span>
             </div>
-            <div style={{ height: 5, borderRadius: 3, background: "var(--bg-subtle)", overflow: "hidden" }}>
-              <div style={{ width: `${total > 0 ? Math.round((row.value / total) * 100) : 0}%`, height: "100%", background: "var(--blue)" }} />
+            <div className="dashboard-progress" aria-hidden="true">
+              <div className="dashboard-progress-fill" style={{ width: `${total > 0 ? Math.round((row.value / total) * 100) : 0}%` }} />
             </div>
           </div>
-          <span style={{ fontSize: 10, color: "var(--t3)", textAlign: "right" }}>{total > 0 ? Math.round((row.value / total) * 100) : 0}%</span>
+          <span className="dashboard-status-percent">{total > 0 ? Math.round((row.value / total) * 100) : 0}%</span>
         </div>
       ))}
     </div>
+  );
+}
+
+function KpiCard({
+  label,
+  value,
+  context,
+  tone = "info",
+}: {
+  label: string;
+  value: string | number;
+  context: string;
+  tone?: "info" | "success" | "warning" | "neutral";
+}) {
+  return (
+    <Card className={`dashboard-kpi-card dashboard-kpi-card--${tone}`}>
+      <div className="dashboard-kpi-label">{label}</div>
+      <div className="dashboard-kpi-row">
+        <div className="dashboard-kpi-value">{value}</div>
+        <span className="dashboard-kpi-signal" aria-hidden="true" />
+      </div>
+      <div className="dashboard-kpi-sub">{context}</div>
+    </Card>
+  );
+}
+
+function DashboardSection({
+  eyebrow,
+  title,
+  badge,
+  children,
+}: {
+  eyebrow?: string;
+  title: string;
+  badge?: string;
+  children: ReactNode;
+}) {
+  return (
+    <Card className="dashboard-section">
+      <div className="dashboard-section-header">
+        <div className="min-w-0">
+          {eyebrow ? <div className="dashboard-section-eyebrow">{eyebrow}</div> : null}
+          <h2 className="dashboard-section-title">{title}</h2>
+        </div>
+        {badge ? <Badge tone="info">{badge}</Badge> : null}
+      </div>
+      {children}
+    </Card>
   );
 }
 
@@ -156,7 +205,7 @@ export function DashboardView() {
   const wonQuotations = data.cotizaciones.filter((row) => row.estado === "Ganada" || row.estado === "Adjudicado").length;
 
   return (
-    <>
+    <div className="dashboard-page">
       <PageHeader
         eyebrow="Dashboard"
         title="Centro ejecutivo de control"
@@ -164,57 +213,33 @@ export function DashboardView() {
       />
 
       {data.warnings.length > 0 && (
-        <div className="card" style={{ marginBottom: 12, padding: "10px 14px", borderColor: "var(--amber-border)", background: "var(--amber-bg)" }}>
-          <div style={{ fontSize: 12, color: "var(--amber-text)", lineHeight: 1.5 }}>
-            {data.warnings[0]} Las secciones sin fuente real se muestran vacias.
+        <Card className="dashboard-warning">
+          <Badge tone="warning">Fuente parcial</Badge>
+          <div className="dashboard-warning-text">
+            {data.warnings[0]} Las secciones sin fuente real se muestran vacías.
           </div>
-        </div>
+        </Card>
       )}
 
-      <div className="grid-4" style={{ marginBottom: 14 }}>
-        <div className="kpi">
-          <div className="kpi-label">Cotizaciones</div>
-          <div className="kpi-value">{loading ? "..." : data.cotizaciones.length}</div>
-          <div className="kpi-sub">{wonQuotations} ganadas/adjudicadas</div>
-        </div>
-        <div className="kpi">
-          <div className="kpi-label">Requerimientos</div>
-          <div className="kpi-value">{loading ? "..." : data.requerimientos.length}</div>
-          <div className="kpi-sub">{pendingRequirements} pendientes</div>
-        </div>
-        <div className="kpi">
-          <div className="kpi-label">Recursos</div>
-          <div className="kpi-value">{loading ? "..." : activeResources}</div>
-          <div className="kpi-sub">{data.recursos.length} registrados</div>
-        </div>
-        <div className="kpi">
-          <div className="kpi-label">Alertas operativas</div>
-          <div className="kpi-value">0</div>
-          <div className="kpi-sub">sin fuente persistente</div>
-        </div>
+      <div className="dashboard-kpi-grid">
+        <KpiCard label="Cotizaciones" value={loading ? "..." : data.cotizaciones.length} context={`${wonQuotations} ganadas/adjudicadas`} tone="success" />
+        <KpiCard label="Requerimientos" value={loading ? "..." : data.requerimientos.length} context={`${pendingRequirements} pendientes`} tone={pendingRequirements > 0 ? "warning" : "success"} />
+        <KpiCard label="Recursos" value={loading ? "..." : activeResources} context={`${data.recursos.length} registrados`} />
+        <KpiCard label="Alertas operativas" value="0" context="sin fuente persistente" tone="neutral" />
       </div>
 
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 330px", gap: 10, alignItems: "start" }}>
-        <div className="space-y-3">
-          <div className="card">
-            <div className="card-header">
-              <div>
-                <div style={{ fontSize: 10, textTransform: "uppercase", letterSpacing: ".1em", fontWeight: 600, color: "var(--t3)", marginBottom: 1 }}>
-                  Actividad real
-                </div>
-                <div style={{ fontSize: 13, fontWeight: 600, color: "var(--t1)" }}>Proyectos y servicios</div>
-              </div>
-              <span className="badge badge--blue">{projectSummaries.length} visibles</span>
-            </div>
+      <div className="dashboard-content-grid">
+        <div className="dashboard-main-stack">
+          <DashboardSection eyebrow="Actividad real" title="Proyectos y servicios" badge={`${projectSummaries.length} visibles`}>
             {projectSummaries.length === 0 ? (
               <EmptyState>Sin proyectos o servicios con actividad registrada.</EmptyState>
             ) : (
-              <div style={{ overflowX: "auto" }}>
-                <table style={{ width: "100%", borderCollapse: "collapse" }}>
+              <div className="dashboard-table-scroll">
+                <table className="dashboard-table">
                   <thead>
-                    <tr style={{ borderBottom: "1px solid var(--border)" }}>
+                    <tr>
                       {["Proyecto/servicio", "Cliente", "Cot.", "RQ", "Pend. RQ"].map((header) => (
-                        <th key={header} style={{ padding: "8px 12px", textAlign: header === "Proyecto/servicio" || header === "Cliente" ? "left" : "right", fontSize: 10, color: "var(--t3)", textTransform: "uppercase", letterSpacing: ".08em" }}>
+                        <th key={header} className={header === "Proyecto/servicio" || header === "Cliente" ? undefined : "dashboard-table-number"}>
                           {header}
                         </th>
                       ))}
@@ -222,51 +247,41 @@ export function DashboardView() {
                   </thead>
                   <tbody>
                     {projectSummaries.map((row) => (
-                      <tr key={row.name} style={{ borderBottom: "1px solid var(--border)" }}>
-                        <td style={{ padding: "8px 12px", fontSize: 12, fontWeight: 600, color: "var(--t1)" }}>{row.name}</td>
-                        <td style={{ padding: "8px 12px", fontSize: 12, color: "var(--t2)" }}>{row.client}</td>
-                        <td style={{ padding: "8px 12px", fontSize: 12, fontWeight: 700, color: "var(--t1)", textAlign: "right" }}>{row.quotationCount}</td>
-                        <td style={{ padding: "8px 12px", fontSize: 12, fontWeight: 700, color: "var(--t1)", textAlign: "right" }}>{row.requirementCount}</td>
-                        <td style={{ padding: "8px 12px", fontSize: 12, fontWeight: 700, color: row.pendingRequirements > 0 ? "var(--orange)" : "var(--t3)", textAlign: "right" }}>{row.pendingRequirements}</td>
+                      <tr key={row.name}>
+                        <td>
+                          <div className="dashboard-entity-name">{row.name}</div>
+                        </td>
+                        <td className="dashboard-table-muted">{row.client}</td>
+                        <td className="dashboard-table-number">{row.quotationCount}</td>
+                        <td className="dashboard-table-number">{row.requirementCount}</td>
+                        <td className={`dashboard-table-number ${row.pendingRequirements > 0 ? "dashboard-table-warning" : "dashboard-table-muted"}`}>{row.pendingRequirements}</td>
                       </tr>
                     ))}
                   </tbody>
                 </table>
               </div>
             )}
-          </div>
+          </DashboardSection>
 
-          <div className="card">
-            <div className="card-header">
-              <div style={{ fontSize: 13, fontWeight: 600, color: "var(--t1)" }}>Actividad reciente</div>
-            </div>
+          <DashboardSection title="Actividad reciente">
             <EmptyState>Sin registro persistente de actividad ejecutiva reciente.</EmptyState>
-          </div>
+          </DashboardSection>
         </div>
 
-        <div className="space-y-3">
-          <div className="card">
-            <div className="card-header">
-              <div style={{ fontSize: 13, fontWeight: 600, color: "var(--t1)" }}>Cotizaciones por estado</div>
-            </div>
+        <div className="dashboard-side-stack">
+          <DashboardSection title="Cotizaciones por estado">
             <StatusList rows={quotationStatuses} />
-          </div>
+          </DashboardSection>
 
-          <div className="card">
-            <div className="card-header">
-              <div style={{ fontSize: 13, fontWeight: 600, color: "var(--t1)" }}>Requerimientos por estado</div>
-            </div>
+          <DashboardSection title="Requerimientos por estado">
             <StatusList rows={requirementStatuses} />
-          </div>
+          </DashboardSection>
 
-          <div className="card">
-            <div className="card-header">
-              <div style={{ fontSize: 13, fontWeight: 600, color: "var(--t1)" }}>Próximos hitos</div>
-            </div>
+          <DashboardSection title="Próximos hitos">
             <EmptyState>No hay hitos registrados en una fuente persistente.</EmptyState>
-          </div>
+          </DashboardSection>
         </div>
       </div>
-    </>
+    </div>
   );
 }
