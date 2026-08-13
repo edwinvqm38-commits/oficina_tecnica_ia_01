@@ -1,15 +1,25 @@
 "use client";
 
 import type { ReactNode } from "react";
+import { Badge, type BadgeTone } from "../ui";
 import { CONNECTIONS } from "../../lib/data";
 import type { RouteId } from "../../lib/routes";
+
+const ctxBadgeTone: Record<string, BadgeTone> = {
+  blue: "info",
+  green: "success",
+  amber: "warning",
+  orange: "warning",
+  red: "danger",
+  slate: "neutral",
+};
 
 function CtxCard({ title, badge, children }: { title: string; badge?: { label: string; color?: string }; children: ReactNode }) {
   return (
     <div className="ctx-card">
       <div className="ctx-title">
         <span>{title}</span>
-        {badge && <span className={`badge badge--${badge.color || "slate"}`}>{badge.label}</span>}
+        {badge && <Badge tone={ctxBadgeTone[badge.color || "slate"] ?? "neutral"}>{badge.label}</Badge>}
       </div>
       <div className="ctx-body">{children}</div>
     </div>
@@ -40,11 +50,11 @@ function DashboardContext() {
       </CtxCard>
 
       <CtxCard title="Alertas activas">
-        <p style={{ fontSize: 11, color: "var(--t2)", lineHeight: 1.5 }}>Sin alertas registradas en una fuente persistente.</p>
+        <p className="ctx-note">Sin alertas registradas en una fuente persistente.</p>
       </CtxCard>
 
       <CtxCard title="Próximos hitos">
-        <p style={{ fontSize: 11, color: "var(--t2)", lineHeight: 1.5 }}>No hay hitos reales conectados a esta vista.</p>
+        <p className="ctx-note">No hay hitos reales conectados a esta vista.</p>
       </CtxCard>
     </>
   );
@@ -61,7 +71,7 @@ function OfficeContext() {
             <div style={{ fontSize: 11, color: "var(--t3)" }}>Supervisión y aprobación</div>
           </div>
         </div>
-        <p style={{ fontSize: 11, color: "var(--t2)", lineHeight: 1.5 }}>
+        <p className="ctx-note">
           Autoridad central de decisión. Los agentes analizan y recomiendan; el GG aprueba toda acción crítica.
         </p>
       </CtxCard>
@@ -72,20 +82,20 @@ function OfficeContext() {
           b={{ label: "Colaboración", value: String(CONNECTIONS.filter((c) => c.kind === "collaboration").length) }}
         />
         {CONNECTIONS.map((c) => (
-          <div key={c.id} style={{ padding: "5px 0", borderBottom: "1px solid var(--border)" }}>
-            <div style={{ fontSize: 10, textTransform: "uppercase", letterSpacing: ".08em", color: "var(--t3)", fontWeight: 600, marginBottom: 2 }}>
+          <div key={c.id} className="ctx-list-row">
+            <div className="ctx-list-kicker">
               {c.kind === "supervision" ? "Supervisión" : "Colaboración"}
             </div>
-            <div style={{ fontSize: 12, color: "var(--t2)" }}>
+            <div className="ctx-list-title">
               {c.from} → {c.to}
             </div>
-            <div style={{ fontSize: 11, color: "var(--t3)" }}>{c.label}</div>
+            <div className="ctx-list-sub">{c.label}</div>
           </div>
         ))}
       </CtxCard>
 
       <CtxCard title="Aprobaciones bloqueadas">
-        <p style={{ fontSize: 11, color: "var(--t2)", lineHeight: 1.5 }}>Ninguna acción crítica se ejecuta sin aprobación explícita del GG.</p>
+        <p className="ctx-note">Ninguna acción crítica se ejecuta sin aprobación explícita del GG.</p>
       </CtxCard>
     </>
   );
@@ -95,15 +105,15 @@ function InboxContext() {
   return (
     <>
       <CtxCard title="Decisión activa">
-        <p style={{ fontSize: 11, color: "var(--t2)", lineHeight: 1.5 }}>La cola real se muestra en la Bandeja principal cuando existen propuestas pendientes.</p>
+        <p className="ctx-note">La cola real se muestra en la Bandeja principal cuando existen propuestas pendientes.</p>
       </CtxCard>
 
       <CtxCard title="Memoria propuesta">
-        <p style={{ fontSize: 11, color: "var(--t2)", lineHeight: 1.5 }}>Sin memoria propuesta registrada en el panel contextual.</p>
+        <p className="ctx-note">Sin memoria propuesta registrada en el panel contextual.</p>
       </CtxCard>
 
       <CtxCard title="Skill propuesta">
-        <p style={{ fontSize: 11, color: "var(--t2)", lineHeight: 1.5 }}>Sin skill propuesta registrada en el panel contextual.</p>
+        <p className="ctx-note">Sin skill propuesta registrada en el panel contextual.</p>
       </CtxCard>
     </>
   );
@@ -118,11 +128,11 @@ function ApprovalsContext() {
       </CtxCard>
 
       <CtxCard title="Siguiente prioridad">
-        <div style={{ fontSize: 11, color: "var(--t2)", lineHeight: 1.4 }}>Sin prioridad contextual registrada fuera de la cola real.</div>
+        <div className="ctx-note">Sin prioridad contextual registrada fuera de la cola real.</div>
       </CtxCard>
 
       <CtxCard title="Regla de control">
-        <p style={{ fontSize: 11, color: "var(--t2)", lineHeight: 1.5 }}>
+        <p className="ctx-note">
           Ninguna decisión crítica se ejecuta sin aprobación real del GG.
         </p>
       </CtxCard>
@@ -139,13 +149,13 @@ function SkillsContext() {
       </CtxCard>
 
       <CtxCard title="Skill en foco">
-        <p style={{ fontSize: 11, color: "var(--t2)", lineHeight: 1.5 }}>
+        <p className="ctx-note">
           El detalle real se lee desde agent_skill_versions en la vista principal. Este panel no muestra una skill de ejemplo.
         </p>
       </CtxCard>
 
       <CtxCard title="Sin autoactivación">
-        <p style={{ fontSize: 11, color: "var(--t2)", lineHeight: 1.5 }}>
+        <p className="ctx-note">
           Una skill propuesta no se activa hasta que el GG apruebe versión, alcance, riesgos, entradas y salida esperada.
         </p>
       </CtxCard>

@@ -6,6 +6,7 @@ import { Icons } from "../../lib/icons";
 import { useStore } from "../../lib/store/StoreProvider";
 import { NotificationPanel } from "./NotificationPanel";
 import { routeIdToPath } from "./GlobalSearch";
+import { Button } from "../ui";
 
 export function Topbar({
   onOpenSearch,
@@ -29,7 +30,7 @@ export function Topbar({
   return (
     <header className="ig-topbar">
       <div className="ig-topbar-left">
-        <div className="tb-project" onClick={() => navigate("dashboard")}>
+        <button type="button" className="tb-project" onClick={() => navigate("dashboard")}>
           <div className="tb-project-icon">
             <Icons.folder width={12} height={12} />
           </div>
@@ -37,9 +38,9 @@ export function Topbar({
             <div className="tb-project-name">Oficina Técnica</div>
             <div className="tb-project-sub">Portafolio de ingeniería</div>
           </div>
-        </div>
+        </button>
 
-        <div style={{ display: "flex", alignItems: "center", gap: 5 }}>
+        <div className="tb-system-chips">
           {systemChips.map((c) => (
             <span key={c} className="tb-chip">
               {c}
@@ -51,74 +52,59 @@ export function Topbar({
 
       <div className="ig-topbar-right">
         <button
-          className="tb-chip"
+          type="button"
+          className="tb-chip tb-search-trigger"
           onClick={onOpenSearch}
-          style={{ display: "flex", alignItems: "center", gap: 6, cursor: "pointer", padding: "5px 10px" }}
+          aria-label="Abrir búsqueda global"
         >
           <Icons.eye width={13} height={13} />
           <span>Buscar</span>
-          <span style={{ fontFamily: "var(--mono)", fontSize: 10, color: "var(--t3)", border: "1px solid var(--border)", borderRadius: 3, padding: "0 4px" }}>⌘K</span>
+          <span className="tb-kbd">⌘K</span>
         </button>
 
-        <div style={{ position: "relative" }}>
+        <div className="tb-popover-anchor">
           <button
-            className="tb-alert"
+            type="button"
+            className={`tb-alert ${unread === 0 ? "tb-alert--idle" : ""}`}
             onClick={() => setShowNotif((s) => !s)}
-            style={unread === 0 ? { background: "var(--bg-card)", borderColor: "var(--border)", color: "var(--t2)" } : {}}
+            aria-label={unread > 0 ? `Abrir alertas: ${unread} nuevas` : "Abrir alertas"}
+            aria-expanded={showNotif}
           >
             <Icons.bell width={13} height={13} />
             <span>{unread > 0 ? `${unread} nueva${unread > 1 ? "s" : ""}` : "Alertas"}</span>
           </button>
           {showNotif && (
             <>
-              <div style={{ position: "fixed", inset: 0, zIndex: 80 }} onClick={() => setShowNotif(false)} />
+              <div className="tb-overlay-capture" onClick={() => setShowNotif(false)} />
               <NotificationPanel onClose={() => setShowNotif(false)} onNavigate={navigate} />
             </>
           )}
         </div>
 
-        <div className="tb-user" style={{ display: "flex", alignItems: "center", gap: 8 }}>
+        <div className="tb-user">
           <div className="tb-avatar">
             {userEmail ? userEmail[0].toUpperCase() : "G"}
           </div>
-          <div>
+          <div className="tb-user-meta">
             <div className="tb-user-name" title={userEmail}>
-              {userEmail
-                ? userEmail.length > 20
-                  ? userEmail.slice(0, 18) + "…"
-                  : userEmail
-                : "Gerente General"}
+              {userEmail || "Gerente General"}
             </div>
             <div className="tb-user-role">Administrador</div>
           </div>
           {onLogout && (
-            <button
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              iconOnly
+              leftIcon={<Icons.arrowRight width={13} height={13} />}
               onClick={onLogout}
               title="Cerrar sesión"
-              style={{
-                background: "none",
-                border: "1px solid var(--border)",
-                borderRadius: 6,
-                cursor: "pointer",
-                color: "var(--t3)",
-                fontSize: 13,
-                padding: "3px 7px",
-                lineHeight: 1,
-                marginLeft: 4,
-                transition: "color 0.15s, border-color 0.15s",
-              }}
-              onMouseEnter={(e) => {
-                e.currentTarget.style.color = "var(--red)";
-                e.currentTarget.style.borderColor = "var(--red-border)";
-              }}
-              onMouseLeave={(e) => {
-                e.currentTarget.style.color = "var(--t3)";
-                e.currentTarget.style.borderColor = "var(--border)";
-              }}
+              className="tb-logout"
               aria-label="Cerrar sesión"
             >
-              →
-            </button>
+              Cerrar sesión
+            </Button>
           )}
         </div>
       </div>

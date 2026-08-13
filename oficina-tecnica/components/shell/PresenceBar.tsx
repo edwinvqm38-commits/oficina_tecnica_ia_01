@@ -11,28 +11,15 @@ export function PresenceBar({ routeId, email, name }: { routeId: string; email?:
   if (others.length === 0) return null;
 
   return (
-    <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 12 }}>
-      <span style={{ fontSize: 11, color: "var(--t3)" }}>También aquí:</span>
-      <div style={{ display: "flex" }}>
+    <div className="presence-bar">
+      <span className="presence-label">También aquí:</span>
+      <div className="presence-stack">
         {others.map((u, i) => (
           <div
             key={u.email}
             title={`${u.name} · ${u.email}`}
-            style={{
-              width: 24,
-              height: 24,
-              borderRadius: "50%",
-              background: u.color,
-              color: "#fff",
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "center",
-              fontSize: 10,
-              fontWeight: 700,
-              border: "2px solid var(--bg)",
-              marginLeft: i > 0 ? -8 : 0,
-              flexShrink: 0,
-            }}
+            className="presence-avatar"
+            style={{ background: u.color, marginLeft: i > 0 ? -8 : 0 }}
           >
             {u.initials}
           </div>

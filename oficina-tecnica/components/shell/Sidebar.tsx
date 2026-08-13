@@ -38,7 +38,7 @@ function ParentItem({
 
   const Icon = Icons[item.icon];
   const isParentActive = activeRoute === item.id;
-  const cls = ["sb-item", isParentActive ? "sb-item--active" : ""].filter(Boolean).join(" ");
+  const cls = ["sb-item", isParentActive ? "sb-item--active" : "", open ? "sb-item--open" : ""].filter(Boolean).join(" ");
   const visibleChildren = (item.children ?? []).filter((child) => canAccessRoute(child.id));
 
   return (
@@ -47,7 +47,7 @@ function ParentItem({
         type="button"
         className={cls}
         onClick={() => setOpen((prev) => !prev)}
-        style={{ width: "100%" }}
+        aria-expanded={open}
       >
         <span className="sb-item-left">
           <span className="sb-icon">
@@ -55,22 +55,13 @@ function ParentItem({
           </span>
           <span className="sb-item-label">{item.label}</span>
         </span>
-        <span
-          style={{
-            fontSize: "9px",
-            color: "var(--sb-muted)",
-            flexShrink: 0,
-            transition: "transform 0.15s ease",
-            transform: open ? "rotate(90deg)" : "rotate(0deg)",
-            display: "inline-block",
-          }}
-        >
-          ▸
+        <span className="sb-chevron" aria-hidden="true">
+          <Icons.chevronRight />
         </span>
       </button>
 
       {open && visibleChildren.length > 0 ? (
-        <div style={{ paddingLeft: "12px" }}>
+        <div className="sb-subnav">
           {visibleChildren.map((child) => {
             const active = activeRoute === child.id;
             const ChildIcon = Icons[child.icon];
@@ -81,13 +72,12 @@ function ParentItem({
                 key={child.id}
                 href={child.path}
                 className={childCls}
-                style={{ fontSize: "11px" }}
               >
                 <span className="sb-item-left">
-                  <span className="sb-icon" style={{ width: "14px", height: "14px" }}>
+                  <span className="sb-icon sb-icon--child">
                     <ChildIcon />
                   </span>
-                  <span className="sb-item-label" style={{ color: active ? undefined : "var(--sb-text)", opacity: active ? undefined : 0.85 }}>
+                  <span className="sb-item-label">
                     {child.label}
                   </span>
                 </span>
@@ -153,15 +143,14 @@ export function Sidebar({ activeRoute }: { activeRoute: string }) {
                 return (
                   <span
                     key={item.id}
-                    className="sb-item"
+                    className="sb-item sb-item--disabled"
                     title="Próximamente"
-                    style={{ opacity: 0.38, cursor: "not-allowed", pointerEvents: "none" }}
                   >
                     <span className="sb-item-left">
                       <span className="sb-icon"><Icon /></span>
                       <span className="sb-item-label">{item.label}</span>
                     </span>
-                    <span style={{ fontSize: "9px", color: "var(--sb-muted)" }}>pronto</span>
+                    <span className="sb-prox">pronto</span>
                   </span>
                 );
               }

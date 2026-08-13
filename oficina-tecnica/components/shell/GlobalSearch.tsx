@@ -79,7 +79,7 @@ export function GlobalSearch({
         </div>
         <div className="search-results">
           {results.length === 0 ? (
-            <div style={{ padding: "24px", textAlign: "center", color: "var(--t3)", fontSize: 12 }}>Sin resultados para &ldquo;{q}&rdquo;</div>
+            <div className="search-empty">Sin resultados para &ldquo;{q}&rdquo;</div>
           ) : (
             results.map((r, i) => (
               <div
@@ -89,9 +89,9 @@ export function GlobalSearch({
                 onMouseEnter={() => setActive(i)}
               >
                 <span className="search-result-kind">{r.kind}</span>
-                <div style={{ flex: 1, minWidth: 0 }}>
-                  <div style={{ fontSize: 13, fontWeight: 600, color: "var(--t1)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{r.title}</div>
-                  <div style={{ fontSize: 11, color: "var(--t3)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{r.sub}</div>
+                <div className="search-result-content">
+                  <div className="search-result-title">{r.title}</div>
+                  <div className="search-result-sub">{r.sub}</div>
                 </div>
                 <Icons.arrowRight width={14} height={14} />
               </div>

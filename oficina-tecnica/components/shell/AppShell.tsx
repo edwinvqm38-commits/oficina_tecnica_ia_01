@@ -47,7 +47,7 @@ export function AppShell({ children }: { children: ReactNode }) {
     return () => window.removeEventListener("keydown", onKey);
   }, []);
 
-  if (loading || checking) return <div style={{ height: "100vh", background: "var(--bg)" }} />;
+  if (loading || checking) return <div className="ig-shell-loading" />;
   if (!session) return null;
 
   const route = routeForPath(pathname);
@@ -64,13 +64,15 @@ export function AppShell({ children }: { children: ReactNode }) {
       <div className="ig-body">
         <Sidebar activeRoute={activeRoute} />
         <main className="ig-main">
-          <div style={{ width: "100%", maxWidth: "100%" }}>
+          <div className="ig-main-inner">
             <PresenceBar
               routeId={activeRoute}
               email={session.email}
               name={(session.user.user_metadata?.full_name as string | undefined) || (session.user.user_metadata?.name as string | undefined)}
             />
-            <ViewErrorBoundary key={pathname}>{children}</ViewErrorBoundary>
+            <div key={pathname} className="ig-view-enter">
+              <ViewErrorBoundary>{children}</ViewErrorBoundary>
+            </div>
           </div>
         </main>
         {hasCtx && <ContextPanel route={activeRoute} />}
