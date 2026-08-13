@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useState, type MouseEvent as ReactMouseEvent, type ReactNode } from "react";
 import { usePathname } from "next/navigation";
+import { Badge } from "@/components/ui";
 import { FieldLabelIcon, type IconName } from "@/components/sgp/ui/FieldLabelIcon";
 import { TableColumnHeader } from "@/components/sgp/ui/TableColumnHeader";
 
@@ -34,6 +35,7 @@ type DataTableProps<T extends { id: string }> = {
   initialSortKey?: string | null;
   initialSortDirection?: SortDirection;
   onTableViewChange?: (state: DataTableViewState) => void;
+  emptyMessage?: string;
 };
 
 type SortDirection = "asc" | "desc" | null;
@@ -175,6 +177,7 @@ export function DataTable<T extends { id: string }>({
   initialSortKey = null,
   initialSortDirection = null,
   onTableViewChange,
+  emptyMessage = "No se encontraron registros para los filtros aplicados.",
 }: DataTableProps<T>) {
   const pathname = usePathname() || "/";
   const [columnFilters, setColumnFilters] = useState<Record<string, string>>(() => initialColumnFilters ?? {});
@@ -353,27 +356,28 @@ export function DataTable<T extends { id: string }>({
 
   return (
     <div
-      className={`app-table-card min-w-0 overflow-hidden rounded-xl ${
+      className={`app-table-card ops-table-card ${
         isWidthsReady ? "opacity-100" : "opacity-0"
       }`}
-      style={{ border: "1px solid var(--border)", background: "var(--bg-card)", boxShadow: "var(--shadow-sm)" }}
     >
-      <div className="flex items-center justify-between px-2 py-1.5" style={{ borderBottom: "1px solid var(--border)" }}>
-        <FieldLabelIcon
-          icon={tableIcon}
-          label={tableTitle ?? "Tabla"}
-          className="text-xs font-medium text-stone-600"
-        />
-        <div className="flex items-center gap-1.5">
+      <div className="ops-list-toolbar">
+        <div className="ops-list-title-group">
+          <FieldLabelIcon
+            icon={tableIcon}
+            label={tableTitle ?? "Tabla"}
+            className="ops-list-title"
+          />
+          <Badge tone="neutral">{visibleRows.length} registros</Badge>
+        </div>
+        <div className="ops-list-actions">
           {enableFilters ? (
             <button
               type="button"
               onClick={clearTableView}
-              className="inline-flex h-6 min-h-6 items-center gap-1 rounded-md px-2 text-xs leading-none"
-              style={{ border: "1px solid var(--border)", color: "var(--t2)" }}
+              className="ops-list-action"
               title="Limpiar filtros y orden"
             >
-              <FieldLabelIcon icon="sliders-horizontal" label="Limpiar filtros" className="text-xs text-stone-600" />
+              <FieldLabelIcon icon="sliders-horizontal" label="Limpiar filtros" className="ops-list-action-label" />
             </button>
           ) : null}
           {toolbarActions}
@@ -382,14 +386,14 @@ export function DataTable<T extends { id: string }>({
 
       <div className={`app-table-scroll ${maxHeightClassName}`}>
         <table
-          className="w-max min-w-full table-fixed border-collapse text-[11px]"
+          className="ops-table"
         >
           <colgroup>
             {columnWidths.map((width, index) => (
               <col key={`col-${index}`} style={{ width: `${width}px` }} />
             ))}
           </colgroup>
-          <thead className="sticky top-0 z-10" style={{ background: "var(--bg-subtle)", color: "var(--t2)" }}>
+          <thead className="ops-table-head">
             <tr>
               {columns.map((column, index) => {
                 const key = String(column.key);
@@ -397,21 +401,19 @@ export function DataTable<T extends { id: string }>({
                 return (
                   <th
                     key={key}
-                    className={`relative h-8 px-2 py-1 font-semibold ${alignmentClass(column.align)}`}
-                    style={{ borderBottom: "1px solid var(--border)", borderRight: "1px solid var(--border)", color: "var(--t2)", background: "var(--bg-subtle)" }}
+                    className={`ops-table-th ${alignmentClass(column.align)}`}
                   >
                     {enableSorting && sortable ? (
                       <button
                         type="button"
                         onClick={() => toggleSort(key, sortable)}
-                        className="flex w-full items-center justify-between gap-1 rounded px-0.5 text-left"
-                        style={{ color: "var(--t2)" }}
+                        className="ops-table-sort-button"
                       >
                         <TableColumnHeader
                           icon={column.icon ?? defaultIconForColumn(key, column.title)}
                           label={column.title}
                         />
-                        <span style={{ fontSize: "9px", lineHeight: 1, color: "var(--t3)" }}>{sortIndicator(key)}</span>
+                        <span className="ops-table-sort-indicator">{sortIndicator(key)}</span>
                       </button>
                     ) : (
                       <TableColumnHeader
@@ -422,7 +424,7 @@ export function DataTable<T extends { id: string }>({
                     <button
                       type="button"
                       onMouseDown={(event) => startColumnResize(index, event)}
-                      className="absolute right-[-3px] top-0 z-20 h-full w-2.5 cursor-col-resize bg-transparent"
+                      className="ops-table-resizer"
                       style={{ touchAction: "none" }}
                       aria-label={`Ajustar ancho de ${column.title}`}
                       title={`Ajustar ancho de ${column.title}`}
@@ -432,15 +434,14 @@ export function DataTable<T extends { id: string }>({
               })}
             </tr>
             {enableFilters ? (
-              <tr className="h-8">
+              <tr className="ops-table-filter-row">
                 {columns.map((column) => {
                   const key = String(column.key);
                   const filterable = column.filterable !== false;
                   return (
                     <th
                       key={`filter-${key}`}
-                      className={`px-2 py-1 ${alignmentClass(column.align)}`}
-                      style={{ borderBottom: "1px solid var(--border)", borderRight: "1px solid var(--border)", background: "var(--bg-subtle)" }}
+                      className={`ops-table-filter-cell ${alignmentClass(column.align)}`}
                     >
                       {filterable ? (
                         <input
@@ -450,12 +451,11 @@ export function DataTable<T extends { id: string }>({
                             setColumnFilters(nextFilters);
                             emitTableViewChange({ columnFilters: nextFilters, sortKey, sortDirection });
                           }}
-                          className="h-6 w-full rounded px-1 text-[10px] leading-none outline-none"
-                          style={{ border: "1px solid var(--border)", background: "var(--bg-card)", color: "var(--t1)" }}
+                          className="ops-table-filter-input"
                           placeholder=""
                         />
                       ) : (
-                        <span className="block h-6" />
+                        <span className="ops-table-filter-placeholder" />
                       )}
                     </th>
                   );
@@ -464,23 +464,26 @@ export function DataTable<T extends { id: string }>({
             ) : null}
           </thead>
           <tbody>
+            {renderedRows.length === 0 ? (
+              <tr className="ops-table-empty-row">
+                <td colSpan={columns.length} className="ops-table-empty-cell">
+                  {emptyMessage}
+                </td>
+              </tr>
+            ) : null}
             {renderedRows.map(({ row }, index) => (
               <tr
                 key={row.id}
-                className={`h-8 text-[11px] align-middle transition ${
+                className={`ops-table-row ${
                   onRowClick ? "cursor-pointer" : ""
                 }`}
-                style={{ borderTop: "1px solid var(--border)", background: "var(--bg-card)", color: "var(--t1)" }}
-                onMouseEnter={(e) => { (e.currentTarget as HTMLElement).style.background = "var(--bg-muted)"; }}
-                onMouseLeave={(e) => { (e.currentTarget as HTMLElement).style.background = "var(--bg-card)"; }}
                 onClick={() => onRowClick?.(row)}
                 role={onRowClick ? "button" : undefined}
               >
                 {columns.map((column) => (
                   <td
                     key={String(column.key)}
-                    className={`h-8 px-2 py-1 align-middle ${alignmentClass(column.align)}`}
-                    style={{ borderRight: "1px solid var(--border)", color: "var(--t1)" }}
+                    className={`ops-table-td ${alignmentClass(column.align)}`}
                   >
                     {column.render
                       ? column.render(row, index)
