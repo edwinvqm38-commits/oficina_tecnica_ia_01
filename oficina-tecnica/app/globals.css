@@ -1260,6 +1260,34 @@ svg { display: block; flex-shrink: 0; }
   gap: 6px;
   flex-wrap: wrap;
 }
+.ops-list-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+  margin-top: var(--space-2);
+  color: var(--t3);
+  font-size: 11px;
+  line-height: var(--line-body);
+}
+.ops-list-state {
+  min-height: 54px;
+  display: flex;
+  align-items: center;
+  border: 1px solid var(--border);
+  border-radius: var(--r-lg);
+  background: var(--bg-card);
+  color: var(--t2);
+  padding: 12px 14px;
+  font-size: 12px;
+  line-height: var(--line-body);
+  box-shadow: var(--shadow-xs);
+}
+.ops-list-state--warning {
+  border-color: var(--amber-border);
+  background: var(--amber-bg);
+  color: var(--amber-text);
+}
 .ops-list-action {
   min-height: 26px;
   display: inline-flex;
@@ -1421,6 +1449,63 @@ svg { display: block; flex-shrink: 0; }
   text-align: center;
   font-size: 12px;
 }
+.ops-table-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  margin-top: var(--space-3);
+  color: var(--t3);
+  font-size: 11px;
+  line-height: var(--line-body);
+}
+.ops-table-page-summary {
+  color: var(--t3);
+}
+.ops-table-pagination {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+}
+.ops-table-page-size {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  color: var(--t2);
+  font-size: 11px;
+  font-weight: 600;
+}
+.ops-table-page-select {
+  height: 26px;
+  min-width: 58px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  background: var(--bg-card);
+  color: var(--t1);
+  padding: 0 6px;
+  font-size: 11px;
+  line-height: 1;
+  outline: none;
+}
+.ops-table-page-select:hover {
+  border-color: var(--border-strong);
+}
+.ops-table-page-select:focus {
+  border-color: var(--blue-border);
+  box-shadow: 0 0 0 2px var(--blue-bg);
+}
+.ops-table-page-button {
+  min-height: 26px;
+}
+.ops-table-page-status {
+  min-width: 42px;
+  text-align: center;
+  color: var(--t2);
+  font-size: 11px;
+  font-weight: 600;
+}
 
 /* SGP module styling — consistent with OT design tokens */
 .sgp-page {
@@ -1557,6 +1642,14 @@ body.ig-dark select      { background: var(--bg-subtle); color: var(--t1); }
   .dashboard-side-stack { display: flex; }
   .dashboard-kpi-card { min-height: 96px; }
   .dashboard-kpi-value { font-size: 22px; }
+  .ops-table-footer {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+  .ops-table-pagination {
+    width: 100%;
+    justify-content: flex-start;
+  }
 }
 
 @media (max-width: 720px) {

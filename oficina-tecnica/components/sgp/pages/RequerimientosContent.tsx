@@ -6,6 +6,8 @@ import { DataTable, type DataTableViewState } from "@/components/sgp/DataTable";
 import { NewRequirementModal } from "@/components/sgp/requirements/NewRequirementModal";
 import { ResourceFormModal } from "@/components/sgp/resources/ResourceFormModal";
 import { StatusBadge } from "@/components/sgp/StatusBadge";
+import { PageHeader } from "@/components/shell/PageHeader";
+import { Badge, Button } from "@/components/ui";
 import { useAuth } from "@/components/sgp/auth/AuthContext";
 import type { ObservationUser } from "@/components/sgp/RequirementObservationPanel";
 import { debugDataSourceLoad, publishDataSourceSnapshot, type AppDataSource } from "@/lib/sgp/dataSourceDiagnostics";
@@ -1481,8 +1483,21 @@ export default function RequerimientosPage({ embeddedWorkspace = null }: Requeri
 
   return (
     <section className="sgp-page app-table-section min-w-0">
+      {!isEmbeddedWorkspace ? (
+        <PageHeader
+          eyebrow="SGP"
+          title="Requerimientos"
+          description="Seguimiento operativo de requerimientos, responsables, estados e items asociados."
+          actions={
+            <>
+              <Badge tone="neutral">Fuente: {dataSource === "supabase" ? "Supabase" : "Demo local"}</Badge>
+              <Badge tone="info">{totalFilteredRows} registros</Badge>
+            </>
+          }
+        />
+      ) : null}
       {loading && (!isEmbeddedWorkspace || !selectedId) ? (
-        <div className="rounded-xl border border-border bg-panel px-3 py-4 text-sm text-stone-600">
+        <div className="ops-list-state">
           Cargando requerimientos...
         </div>
       ) : null}
@@ -1505,15 +1520,17 @@ export default function RequerimientosPage({ embeddedWorkspace = null }: Requeri
         tableIcon="clipboard-list"
         toolbarActions={
           <>
-          <button
+          <Button
             type="button"
             onClick={() => void refreshRequerimientosData()}
-            className="inline-flex h-6 min-h-6 items-center gap-1 rounded-md border border-border px-2 text-xs leading-none text-stone-600 hover:bg-stone-100"
+            size="sm"
+            variant="ghost"
+            className="ops-list-action"
             title="Forzar recarga de requerimientos"
           >
             Actualizar datos
-          </button>
-          <button
+          </Button>
+          <Button
             type="button"
             onClick={() => {
               if (isSupabaseReadOnly) {
@@ -1524,12 +1541,14 @@ export default function RequerimientosPage({ embeddedWorkspace = null }: Requeri
               setNewRequirementOpen(true);
             }}
             disabled={isSupabaseReadOnly}
-            className="inline-flex h-6 min-h-6 items-center gap-1 rounded-md border border-border px-2 text-xs leading-none text-stone-600 hover:bg-stone-100 disabled:cursor-not-allowed disabled:opacity-60"
+            size="sm"
+            variant="secondary"
+            className="ops-list-action"
             title={isSupabaseReadOnly ? "Supabase conectado en modo solo lectura" : "Nuevo requerimiento"}
           >
             <span className="text-sm leading-none">+</span>
             <span>Nuevo requerimiento</span>
-          </button>
+          </Button>
           </>
         }
         columns={[
@@ -1562,20 +1581,20 @@ export default function RequerimientosPage({ embeddedWorkspace = null }: Requeri
       />
       ) : null}
       {!isEmbeddedWorkspace ? (
-      <div className="mt-2 flex flex-wrap items-center gap-2 text-xs text-muted">
+      <div className="ops-list-meta">
         <span>Fuente: {dataSource === "supabase" ? "Supabase" : "Demo local"}</span>
         <span>Registros: {totalFilteredRows}</span>
         {warning ? <span className="text-amber-700">{warning}</span> : null}
       </div>
       ) : null}
       {!isEmbeddedWorkspace ? (
-      <div className="mt-3 flex items-center justify-between text-xs text-muted">
-        <p>
+      <div className="ops-table-footer">
+        <p className="ops-table-page-summary">
           Mostrando {totalFilteredRows === 0 ? 0 : pageStartIndex + 1} - {Math.min(pageStartIndex + pageSize, totalFilteredRows)} de{" "}
           {totalFilteredRows}
         </p>
-        <div className="flex items-center gap-2">
-          <label className="inline-flex items-center gap-1 text-xs text-stone-600">
+        <div className="ops-table-pagination">
+          <label className="ops-table-page-size">
             Filas
             <select
               value={pageSize}
@@ -1583,7 +1602,7 @@ export default function RequerimientosPage({ embeddedWorkspace = null }: Requeri
                 setPageSize(Number(event.target.value));
                 setPage(1);
               }}
-              className="h-7 rounded border border-border bg-white px-1 text-xs text-stone-700"
+              className="ops-table-page-select"
             >
               {ROWS_PER_PAGE_OPTIONS.map((size) => (
                 <option key={size} value={size}>
@@ -1592,23 +1611,29 @@ export default function RequerimientosPage({ embeddedWorkspace = null }: Requeri
               ))}
             </select>
           </label>
-          <button
+          <Button
+            type="button"
             disabled={page === 1}
             onClick={() => setPage((p) => Math.max(1, p - 1))}
-            className="rounded border border-border px-2 py-1 disabled:opacity-50"
+            size="sm"
+            variant="ghost"
+            className="ops-table-page-button"
           >
             Anterior
-          </button>
-          <span>
+          </Button>
+          <span className="ops-table-page-status">
             {page}/{totalPages}
           </span>
-          <button
+          <Button
+            type="button"
             disabled={page >= totalPages}
             onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
-            className="rounded border border-border px-2 py-1 disabled:opacity-50"
+            size="sm"
+            variant="ghost"
+            className="ops-table-page-button"
           >
             Siguiente
-          </button>
+          </Button>
         </div>
       </div>
       ) : null}

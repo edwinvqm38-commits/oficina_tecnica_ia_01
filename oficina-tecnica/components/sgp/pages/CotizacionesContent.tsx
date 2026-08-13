@@ -6,6 +6,8 @@ import { useAuth } from "@/components/sgp/auth/AuthContext";
 import { DataTable, type DataTableViewState } from "@/components/sgp/DataTable";
 import { QuotationWorkspaceModal } from "@/components/sgp/quotations/QuotationWorkspaceModal";
 import { ResourceFormModal } from "@/components/sgp/resources/ResourceFormModal";
+import { PageHeader } from "@/components/shell/PageHeader";
+import { Badge, Button } from "@/components/ui";
 import type { EditableRequirementItem } from "@/components/sgp/RequirementItemsGrid";
 import type { ObservationUser } from "@/components/sgp/RequirementObservationPanel";
 import { StatusBadge } from "@/components/sgp/StatusBadge";
@@ -2217,16 +2219,29 @@ export default function CotizacionesPage({ embeddedWorkspace = null }: Cotizacio
 
   return (
     <section className="sgp-page app-table-section min-w-0">
+      {!isEmbeddedWorkspace ? (
+        <PageHeader
+          eyebrow="SGP"
+          title="Cotizaciones"
+          description="Control operativo de propuestas, clientes, estados, responsables y requerimientos vinculados."
+          actions={
+            <>
+              <Badge tone="neutral">Fuente: {dataSource === "supabase" ? "Supabase" : "Demo local"}</Badge>
+              <Badge tone="info">{totalFilteredRows} registros</Badge>
+            </>
+          }
+        />
+      ) : null}
       {!permissionsReady ? (
-        <div className="rounded-xl border border-border bg-panel px-3 py-4 text-sm text-stone-600">
+        <div className="ops-list-state">
           Cargando permisos...
         </div>
       ) : isDataLoading && (!isEmbeddedWorkspace || !draft) && cotizaciones.length === 0 ? (
-        <div className="rounded-xl border border-border bg-panel px-3 py-4 text-sm text-stone-600">
+        <div className="ops-list-state">
           Cargando cotizaciones...
         </div>
       ) : isEmbeddedWorkspace && !draft ? (
-        <div className="rounded-xl border border-border bg-panel px-3 py-4 text-sm text-stone-600">
+        <div className="ops-list-state">
           Preparando workspace de cotización...
         </div>
       ) : !isEmbeddedWorkspace && canViewQuotationTable ? (
@@ -2248,16 +2263,18 @@ export default function CotizacionesPage({ embeddedWorkspace = null }: Cotizacio
           }}
           toolbarActions={
             <>
-              <button
+              <Button
                 type="button"
                 onClick={() => void refreshCotizacionesData()}
-                className="inline-flex h-6 min-h-6 items-center gap-1 rounded-md border border-border px-2 text-xs leading-none text-stone-600 hover:bg-stone-100"
+                size="sm"
+                variant="ghost"
+                className="ops-list-action"
                 title="Forzar recarga de cotizaciones y requerimientos"
               >
                 Actualizar datos
-              </button>
+              </Button>
               {canViewQuotationActions ? (
-                <button
+                <Button
                   type="button"
                   onClick={() => {
                     if (!canCreateQuotationInCurrentSource) {
@@ -2271,7 +2288,9 @@ export default function CotizacionesPage({ embeddedWorkspace = null }: Cotizacio
                     setPendingNewQuotationConfirm(true);
                   }}
                   disabled={!canCreateQuotationInCurrentSource}
-                  className="inline-flex h-6 min-h-6 items-center gap-1 rounded-md border border-border px-2 text-xs leading-none text-stone-600 hover:bg-stone-100 disabled:cursor-not-allowed disabled:opacity-60"
+                  size="sm"
+                  variant="secondary"
+                  className="ops-list-action"
                   title={
                     canCreateQuotationInCurrentSource
                       ? "Nueva cotización"
@@ -2282,18 +2301,18 @@ export default function CotizacionesPage({ embeddedWorkspace = null }: Cotizacio
                 >
                   <span className="text-sm leading-none">+</span>
                   <span>Nueva cotización</span>
-                </button>
+                </Button>
               ) : null}
             </>
           }
           columns={visibleCotizacionesColumns}
         />
       ) : !isEmbeddedWorkspace && effectiveCanView ? (
-        <div className="rounded-xl border border-border bg-panel px-3 py-4 text-sm text-stone-600">
+        <div className="ops-list-state">
           Tabla principal oculta por permisos.
         </div>
       ) : !isEmbeddedWorkspace ? (
-        <div className="rounded-xl border border-border bg-panel px-3 py-4 text-sm text-stone-600">
+        <div className="ops-list-state ops-list-state--warning">
           No tienes permiso para ver el Log de cotizaciones.
         </div>
       ) : null}
@@ -2325,7 +2344,7 @@ export default function CotizacionesPage({ embeddedWorkspace = null }: Cotizacio
       ) : null}
 
       {!isEmbeddedWorkspace && permissionsReady && effectiveCanView && canViewQuotationTable ? (
-        <div className="mt-2 flex flex-wrap items-center gap-2 text-xs text-muted">
+        <div className="ops-list-meta">
           <span>Fuente: {dataSource === "supabase" ? "Supabase" : "Demo local"}</span>
           <span>Registros: {totalFilteredRows}</span>
           {isDataLoading && cotizaciones.length > 0 ? <span className="text-stone-400">Actualizando...</span> : null}
@@ -2334,13 +2353,13 @@ export default function CotizacionesPage({ embeddedWorkspace = null }: Cotizacio
       ) : null}
 
       {!isEmbeddedWorkspace && permissionsReady && canViewQuotationTable ? (
-        <div className="mt-3 flex items-center justify-between text-xs text-muted">
-          <p>
+        <div className="ops-table-footer">
+          <p className="ops-table-page-summary">
             Mostrando {totalFilteredRows === 0 ? 0 : pageStartIndex + 1} - {Math.min(page * pageSize, totalFilteredRows)} de{" "}
             {totalFilteredRows}
           </p>
-          <div className="flex items-center gap-2">
-            <label className="inline-flex items-center gap-1 text-xs text-stone-600">
+          <div className="ops-table-pagination">
+            <label className="ops-table-page-size">
               Filas
               <select
                 value={pageSize}
@@ -2348,7 +2367,7 @@ export default function CotizacionesPage({ embeddedWorkspace = null }: Cotizacio
                   setPageSize(Number(event.target.value));
                   setPage(1);
                 }}
-                className="h-7 rounded border border-border bg-white px-1 text-xs text-stone-700"
+                className="ops-table-page-select"
               >
                 {ROWS_PER_PAGE_OPTIONS.map((size) => (
                   <option key={size} value={size}>
@@ -2357,23 +2376,29 @@ export default function CotizacionesPage({ embeddedWorkspace = null }: Cotizacio
                 ))}
               </select>
             </label>
-            <button
+            <Button
+              type="button"
               disabled={page === 1}
               onClick={() => setPage((p) => Math.max(1, p - 1))}
-              className="rounded border border-border px-2 py-1 disabled:opacity-50"
+              size="sm"
+              variant="ghost"
+              className="ops-table-page-button"
             >
               Anterior
-            </button>
-            <span>
+            </Button>
+            <span className="ops-table-page-status">
               {page}/{totalPages}
             </span>
-            <button
+            <Button
+              type="button"
               disabled={page >= totalPages}
               onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
-              className="rounded border border-border px-2 py-1 disabled:opacity-50"
+              size="sm"
+              variant="ghost"
+              className="ops-table-page-button"
             >
               Siguiente
-            </button>
+            </Button>
           </div>
         </div>
       ) : null}
