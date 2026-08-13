@@ -6,6 +6,8 @@ import { useAuth } from "@/components/sgp/auth/AuthContext";
 import { ResourceFormModal } from "@/components/sgp/resources/ResourceFormModal";
 import { ResourceGallery } from "@/components/sgp/resources/ResourceGallery";
 import { ResourcesTable } from "@/components/sgp/resources/ResourcesTable";
+import { PageHeader } from "@/components/shell/PageHeader";
+import { Badge, Button, Tab, Tabs } from "@/components/ui";
 import { demoData, type Recurso, type ResourceFileMeta } from "@/lib/sgp/demoData";
 import { getModulePermissions, type ModulePermissions } from "@/lib/sgp/modulePermissionsRepository";
 import { createProposalLogoDraft, readProposalLogos, writeProposalLogos, type ProposalLogo, type ProposalLogoEntityType } from "@/lib/sgp/proposalLogos";
@@ -517,128 +519,139 @@ export default function RecursosPage() {
 
   return (
     <section className="sgp-page app-table-section flex min-h-[calc(100vh-64px)] min-w-0 flex-col">
-      {warning ? <p className="mb-2 text-xs text-amber-700">{warning}</p> : null}
-      <p className="mb-2 text-xs text-muted">
-        Origen de datos: {dataSource === "supabase" ? "Supabase public.recursos" : "demo local"}
-      </p>
+      <PageHeader
+        eyebrow="SGP"
+        title="Recursos"
+        description="Catálogo operativo de recursos, proveedores, documentos, estados e imágenes disponibles."
+        actions={
+          <>
+            <Badge tone="neutral">Fuente: {dataSource === "supabase" ? "Supabase" : "Demo local"}</Badge>
+            <Badge tone="info">{total} registros</Badge>
+          </>
+        }
+      />
+      {warning ? <div className="ops-list-state ops-list-state--warning mb-2">{warning}</div> : null}
 
-      <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
-        <div className="flex rounded-lg border border-border bg-white p-1 text-xs font-semibold">
-          <button
-            type="button"
-            onClick={() => setActiveResourceView("resources")}
-            className={`h-7 rounded-md px-3 ${activeResourceView === "resources" ? "bg-teal-700 text-white" : "text-stone-600 hover:bg-stone-100"}`}
-          >
-            Recursos
-          </button>
-          <button
-            type="button"
-            onClick={() => setActiveResourceView("gallery")}
-            className={`h-7 rounded-md px-3 ${activeResourceView === "gallery" ? "bg-teal-700 text-white" : "text-stone-600 hover:bg-stone-100"}`}
-          >
-            Galería
-          </button>
-          <button
-            type="button"
-            onClick={() => setActiveResourceView("logos")}
-            className={`h-7 rounded-md px-3 ${activeResourceView === "logos" ? "bg-teal-700 text-white" : "text-stone-600 hover:bg-stone-100"}`}
-          >
-            Logos
-          </button>
+      <div className="ops-list-toolbar mb-3 rounded-lg border border-border">
+        <div className="ops-list-title-group">
+          <Tabs>
+            <Tab
+              active={activeResourceView === "resources"}
+              onClick={() => setActiveResourceView("resources")}
+            >
+              Recursos
+            </Tab>
+            <Tab
+              active={activeResourceView === "gallery"}
+              onClick={() => setActiveResourceView("gallery")}
+            >
+              Galería
+            </Tab>
+            <Tab
+              active={activeResourceView === "logos"}
+              onClick={() => setActiveResourceView("logos")}
+            >
+              Logos
+            </Tab>
+          </Tabs>
         </div>
-        {activeResourceView === "logos" ? (
-          <div className="flex flex-wrap gap-2">
-            <button type="button" onClick={() => addLogo("company")} className="h-7 rounded-md border border-border bg-white px-3 text-xs font-semibold text-stone-700 hover:bg-stone-100">
-              + Logo empresa
-            </button>
-            <button type="button" onClick={() => addLogo("client")} className="h-7 rounded-md border border-teal-700 bg-teal-700 px-3 text-xs font-semibold text-white hover:bg-teal-800">
-              + Logo cliente
-            </button>
-          </div>
-        ) : activeResourceView === "resources" ? (
-          <label className="ml-auto flex h-7 items-center gap-2 rounded-md border border-border bg-white px-3 text-xs font-semibold text-stone-700">
-            <input
-              type="checkbox"
-              checked={showInactive}
-              onChange={(event) => {
-                setShowInactive(event.target.checked);
-                setPage(1);
-              }}
-              className="h-3.5 w-3.5 accent-teal-700"
-            />
-            <span>Mostrar inactivos</span>
-          </label>
-        ) : null}
+        <div className="ops-list-actions">
+          {activeResourceView === "logos" ? (
+            <>
+              <Button type="button" onClick={() => addLogo("company")} size="sm" variant="ghost" className="ops-list-action">
+                + Logo empresa
+              </Button>
+              <Button type="button" onClick={() => addLogo("client")} size="sm" variant="secondary" className="ops-list-action">
+                + Logo cliente
+              </Button>
+            </>
+          ) : activeResourceView === "resources" ? (
+            <label className="ops-list-toggle">
+              <input
+                type="checkbox"
+                checked={showInactive}
+                onChange={(event) => {
+                  setShowInactive(event.target.checked);
+                  setPage(1);
+                }}
+                className="ops-list-checkbox"
+              />
+              <span>Mostrar inactivos</span>
+            </label>
+          ) : null}
+        </div>
       </div>
 
       {activeResourceView === "logos" ? (
-        <div className="min-h-0 min-w-0 flex-1 overflow-auto rounded-xl border border-border bg-white">
-          <table className="w-full min-w-[980px] border-collapse text-xs">
-            <thead className="bg-stone-100 text-left text-[11px] uppercase tracking-wide text-stone-500">
+        <div className="app-table-card ops-table-card min-h-0 flex-1">
+          <div className="app-table-scroll">
+          <table className="ops-table min-w-[980px]">
+            <thead className="ops-table-head">
               <tr>
-                <th className="border-b border-border px-2 py-2">Tipo</th>
-                <th className="border-b border-border px-2 py-2">Entidad</th>
-                <th className="border-b border-border px-2 py-2">Nombre visible</th>
-                <th className="border-b border-border px-2 py-2">Logo URL</th>
-                <th className="border-b border-border px-2 py-2">Activo</th>
-                <th className="border-b border-border px-2 py-2">Default</th>
-                <th className="border-b border-border px-2 py-2">Notas</th>
-                <th className="border-b border-border px-2 py-2">Acciones</th>
+                <th className="ops-table-th">Tipo</th>
+                <th className="ops-table-th">Entidad</th>
+                <th className="ops-table-th">Nombre visible</th>
+                <th className="ops-table-th">Logo URL</th>
+                <th className="ops-table-th text-center">Activo</th>
+                <th className="ops-table-th text-center">Default</th>
+                <th className="ops-table-th">Notas</th>
+                <th className="ops-table-th">Acciones</th>
               </tr>
             </thead>
             <tbody>
               {logos.length ? (
                 logos.map((logo) => (
-                  <tr key={logo.id} className="border-b border-border">
-                    <td className="px-2 py-1">
-                      <select value={logo.entity_type} onChange={(event) => updateLogo(logo.id, { entity_type: event.target.value as ProposalLogoEntityType })} className="h-7 w-full rounded border border-border bg-white px-2">
+                  <tr key={logo.id} className="ops-table-row">
+                    <td className="ops-table-td">
+                      <select value={logo.entity_type} onChange={(event) => updateLogo(logo.id, { entity_type: event.target.value as ProposalLogoEntityType })} className="ops-table-filter-input">
                         <option value="company">Empresa</option>
                         <option value="client">Cliente</option>
                       </select>
                     </td>
-                    <td className="px-2 py-1">
-                      <input value={logo.entity_name} onChange={(event) => updateLogo(logo.id, { entity_name: event.target.value })} className="h-7 w-full rounded border border-border px-2" />
+                    <td className="ops-table-td">
+                      <input value={logo.entity_name} onChange={(event) => updateLogo(logo.id, { entity_name: event.target.value })} className="ops-table-filter-input" />
                     </td>
-                    <td className="px-2 py-1">
-                      <input value={logo.display_name} onChange={(event) => updateLogo(logo.id, { display_name: event.target.value })} className="h-7 w-full rounded border border-border px-2" />
+                    <td className="ops-table-td">
+                      <input value={logo.display_name} onChange={(event) => updateLogo(logo.id, { display_name: event.target.value })} className="ops-table-filter-input" />
                     </td>
-                    <td className="px-2 py-1">
-                      <input value={logo.logo_url} onChange={(event) => updateLogo(logo.id, { logo_url: event.target.value })} placeholder="https://..." className="h-7 w-full rounded border border-border px-2" />
+                    <td className="ops-table-td">
+                      <input value={logo.logo_url} onChange={(event) => updateLogo(logo.id, { logo_url: event.target.value })} placeholder="https://..." className="ops-table-filter-input" />
                     </td>
-                    <td className="px-2 py-1 text-center">
+                    <td className="ops-table-td text-center">
                       <input type="checkbox" checked={logo.is_active} onChange={(event) => updateLogo(logo.id, { is_active: event.target.checked })} />
                     </td>
-                    <td className="px-2 py-1 text-center">
+                    <td className="ops-table-td text-center">
                       <input type="checkbox" checked={logo.is_default} onChange={(event) => updateLogo(logo.id, { is_default: event.target.checked })} />
                     </td>
-                    <td className="px-2 py-1">
-                      <input value={logo.notes} onChange={(event) => updateLogo(logo.id, { notes: event.target.value })} className="h-7 w-full rounded border border-border px-2" />
+                    <td className="ops-table-td">
+                      <input value={logo.notes} onChange={(event) => updateLogo(logo.id, { notes: event.target.value })} className="ops-table-filter-input" />
                     </td>
-                    <td className="px-2 py-1">
-                      <button type="button" onClick={() => deleteLogo(logo.id)} className="h-7 rounded border border-red-200 bg-red-50 px-2 text-xs font-semibold text-red-700 hover:bg-red-100">
+                    <td className="ops-table-td">
+                      <Button type="button" onClick={() => deleteLogo(logo.id)} size="sm" variant="danger" className="ops-table-row-action">
                         Eliminar
-                      </button>
+                      </Button>
                     </td>
                   </tr>
                 ))
               ) : (
-                <tr>
-                  <td colSpan={8} className="px-4 py-8 text-center text-xs text-muted">
+                <tr className="ops-table-empty-row">
+                  <td colSpan={8} className="ops-table-empty-cell">
                     Aun no hay logos registrados. Agrega el logo principal de EKA o logos de clientes.
                   </td>
                 </tr>
               )}
             </tbody>
           </table>
+          </div>
         </div>
       ) : activeResourceView === "gallery" ? (
         <ResourceGallery rows={galleryResources} loading={galleryLoading} onEdit={openEdit} canEdit={canOpenResourceModal} />
       ) : loading || permissionsLoading ? (
-        <div className="rounded-xl border border-border bg-panel p-8 text-center text-xs text-muted">
+        <div className="ops-list-state">
           {permissionsLoading ? "Cargando permisos..." : "Cargando recursos..."}
         </div>
       ) : !resourcesViewGroups.resources_main_table ? (
-        <div className="rounded-xl border border-dashed border-border bg-panel p-8 text-center text-xs text-muted">
+        <div className="ops-list-state ops-list-state--warning">
           Tabla principal de recursos oculta por permisos.
         </div>
       ) : (
@@ -665,8 +678,8 @@ export default function RecursosPage() {
         </div>
       )}
 
-      {activeResourceView === "resources" ? <div className="mt-3 flex flex-wrap items-center justify-between gap-2 text-xs">
-        <span className="text-muted">
+      {activeResourceView === "resources" ? <div className="ops-table-footer">
+        <span className="ops-table-page-summary">
           {loading || permissionsLoading
             ? "Consultando recursos..."
             : resourcesViewGroups.resources_main_table
@@ -674,8 +687,8 @@ export default function RecursosPage() {
               : "Paginación oculta por permisos."}
         </span>
         {resourcesViewGroups.resources_main_table ? (
-        <div className="flex flex-wrap items-center gap-2">
-          <label className="flex items-center gap-1 text-muted">
+        <div className="ops-table-pagination">
+          <label className="ops-table-page-size">
             Filas
             <select
               value={pageSize}
@@ -683,7 +696,7 @@ export default function RecursosPage() {
                 setPageSize(Number(event.target.value) as (typeof PAGE_SIZE_OPTIONS)[number]);
                 setPage(1);
               }}
-              className="h-7 rounded border border-border bg-white px-1 text-xs text-stone-700"
+              className="ops-table-page-select"
             >
               {PAGE_SIZE_OPTIONS.map((value) => (
                 <option key={value} value={value}>
@@ -692,23 +705,29 @@ export default function RecursosPage() {
               ))}
             </select>
           </label>
-          <button
+          <Button
+            type="button"
             disabled={page === 1}
             onClick={() => setPage((prev) => Math.max(1, prev - 1))}
-            className="rounded border border-border px-2 py-1 disabled:opacity-50"
+            size="sm"
+            variant="ghost"
+            className="ops-table-page-button"
           >
             Anterior
-          </button>
-          <span>
+          </Button>
+          <span className="ops-table-page-status">
             {page}/{totalPages}
           </span>
-          <button
+          <Button
+            type="button"
             disabled={page >= totalPages}
             onClick={() => setPage((prev) => Math.min(totalPages, prev + 1))}
-            className="rounded border border-border px-2 py-1 disabled:opacity-50"
+            size="sm"
+            variant="ghost"
+            className="ops-table-page-button"
           >
             Siguiente
-          </button>
+          </Button>
         </div>
         ) : null}
       </div> : null}

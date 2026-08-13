@@ -1318,6 +1318,25 @@ svg { display: block; flex-shrink: 0; }
   font-size: 11px;
   color: inherit;
 }
+.ops-list-toggle {
+  min-height: 26px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  background: var(--bg-card);
+  color: var(--t2);
+  padding: 0 8px;
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1;
+}
+.ops-list-checkbox {
+  width: 14px;
+  height: 14px;
+  accent-color: var(--color-primary);
+}
 .ops-table-card {
   min-width: 0;
   overflow: hidden;
@@ -1430,6 +1449,13 @@ svg { display: block; flex-shrink: 0; }
 .ops-table-row:hover {
   background: var(--bg-muted);
 }
+.ops-table-row--inactive {
+  background: var(--bg-subtle);
+  color: var(--t3);
+}
+.ops-table-row--inactive .ops-table-td {
+  color: var(--t3);
+}
 .ops-table-td {
   height: 32px;
   padding: 5px 8px;
@@ -1438,6 +1464,20 @@ svg { display: block; flex-shrink: 0; }
   vertical-align: middle;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+.ops-table-row-action {
+  min-height: 24px;
+  padding: 0 7px;
+}
+.ops-table-row-action--warning {
+  border-color: var(--amber-border);
+  background: var(--amber-bg);
+  color: var(--amber-text);
+}
+.ops-table-row-action--success {
+  border-color: var(--green-border);
+  background: var(--green-bg);
+  color: var(--green-text);
 }
 .ops-table-empty-row {
   background: var(--bg-card);

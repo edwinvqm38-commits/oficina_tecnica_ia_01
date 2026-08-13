@@ -10,6 +10,7 @@ import type {
   RecursoSortDirection,
   RecursoSortField,
 } from "@/lib/sgp/recursosRepository";
+import { Badge, Button } from "@/components/ui";
 import { StatusBadge } from "@/components/sgp/StatusBadge";
 import { FieldLabelIcon } from "@/components/sgp/ui/FieldLabelIcon";
 import { TableColumnHeader } from "@/components/sgp/ui/TableColumnHeader";
@@ -269,6 +270,10 @@ function isInactiveResource(row: Recurso): boolean {
   return row.estado === "Inactivo";
 }
 
+function alignmentClass(align: ColumnDef["align"]): string {
+  return align === "right" ? "text-right" : "text-left";
+}
+
 export function ResourcesTable({
   rows,
   emptyMessage = "No se encontraron recursos con los filtros aplicados.",
@@ -380,22 +385,18 @@ export function ResourcesTable({
     if (column.key === "fecha_actualizacion") return row.fecha_actualizacion || "-";
     if (column.key === "estado") {
       if (isInactiveResource(row)) {
-        return (
-          <span className="inline-flex items-center rounded-full border border-stone-300 bg-stone-100 px-2 py-0.5 text-[10px] font-semibold uppercase text-stone-600">
-            Inactivo
-          </span>
-        );
+        return <Badge tone="neutral">Inactivo</Badge>;
       }
       return <StatusBadge status={row.estado} />;
     }
     if (column.key === "docs") {
       return (
         <div className="flex gap-1">
-          {row.resourceFiles.fichaTecnica ? <span className="rounded border border-border px-1 text-[10px]">FT</span> : null}
-          {row.resourceFiles.imagen ? <span className="rounded border border-border px-1 text-[10px]">IMG</span> : null}
-          {row.resourceFiles.cotizacion ? <span className="rounded border border-border px-1 text-[10px]">COT</span> : null}
+          {row.resourceFiles.fichaTecnica ? <Badge tone="neutral">FT</Badge> : null}
+          {row.resourceFiles.imagen ? <Badge tone="neutral">IMG</Badge> : null}
+          {row.resourceFiles.cotizacion ? <Badge tone="neutral">COT</Badge> : null}
           {row.resourceFiles.archivos.length > 0 ? (
-            <span className="rounded border border-border px-1 text-[10px]">ARCH</span>
+            <Badge tone="neutral">ARCH</Badge>
           ) : null}
         </div>
       );
@@ -405,34 +406,38 @@ export function ResourcesTable({
       return canEdit || canDeactivate ? (
         <div className="flex flex-wrap gap-1">
           {canEdit ? (
-          <button type="button" onClick={() => onEdit(row)} className="rounded border border-border px-2 py-0.5 text-[11px]">
-            Ver / Editar
-          </button>
+            <Button type="button" onClick={() => onEdit(row)} size="sm" variant="ghost" className="ops-table-row-action">
+              Ver / Editar
+            </Button>
           ) : null}
           {canDeactivate ? (
-            <button
+            <Button
               type="button"
               onClick={() => onDeactivate?.(row)}
               disabled={isInactive}
-              className="rounded border border-amber-200 bg-amber-50 px-2 py-0.5 text-[11px] text-amber-800 disabled:cursor-not-allowed disabled:opacity-50"
+              size="sm"
+              variant="ghost"
+              className="ops-table-row-action ops-table-row-action--warning"
               title={isInactive ? "El recurso ya está inactivo" : "Desactivar recurso sin borrarlo"}
             >
               Desactivar
-            </button>
+            </Button>
           ) : null}
           {canDeactivate && isInactive ? (
-            <button
+            <Button
               type="button"
               onClick={() => onReactivate?.(row)}
-              className="rounded border border-emerald-200 bg-emerald-50 px-2 py-0.5 text-[11px] text-emerald-800 hover:bg-emerald-100"
+              size="sm"
+              variant="ghost"
+              className="ops-table-row-action ops-table-row-action--success"
               title="Reactivar recurso y volver a mostrarlo como activo"
             >
               Reactivar
-            </button>
+            </Button>
           ) : null}
         </div>
       ) : (
-        <span className="rounded border border-border px-2 py-0.5 text-[11px] text-stone-500">Solo lectura</span>
+        <Badge tone="neutral">Solo lectura</Badge>
       );
     }
     return null;
@@ -471,62 +476,69 @@ export function ResourcesTable({
 
   return (
     <div
-      className={`app-table-card min-h-0 min-w-0 overflow-hidden rounded-xl border border-border bg-panel ${
+      className={`app-table-card ops-table-card min-h-0 ${
         isWidthsReady ? "opacity-100" : "opacity-0"
       }`}
     >
-      <div className="flex min-w-0 items-center justify-between gap-2 border-b border-border px-2 py-1.5">
-        <FieldLabelIcon icon="tags" label="Log de recursos" className="min-w-0 text-xs font-medium text-stone-700" />
-        <div className="ml-auto flex shrink-0 items-center gap-1.5">
+      <div className="ops-list-toolbar">
+        <div className="ops-list-title-group">
+          <FieldLabelIcon icon="tags" label="Log de recursos" className="ops-list-title" />
+          <Badge tone="neutral">{rows.length} visibles</Badge>
+        </div>
+        <div className="ops-list-actions">
           {canViewActions ? (
-            <button
+            <Button
               type="button"
               onClick={onClearFilters}
-              className="inline-flex h-6 min-h-6 items-center gap-1 rounded-md border border-border px-2 text-xs leading-none text-stone-600 hover:bg-stone-100"
+              size="sm"
+              variant="ghost"
+              className="ops-list-action"
               title="Limpiar filtros y orden"
             >
-              <FieldLabelIcon icon="sliders-horizontal" label="Limpiar filtros" className="text-xs text-stone-600" />
-            </button>
+              <FieldLabelIcon icon="sliders-horizontal" label="Limpiar filtros" className="ops-list-action-label" />
+            </Button>
           ) : null}
           {canViewActions && !canCreate ? (
-            <button
+            <Button
               type="button"
               disabled
-              className="inline-flex h-6 min-h-6 items-center gap-1 whitespace-nowrap rounded-md border border-border px-2 text-xs leading-none text-stone-400 disabled:cursor-not-allowed disabled:opacity-70"
+              size="sm"
+              variant="ghost"
+              className="ops-list-action"
               title="Crear recursos requiere Supabase y permiso can_create"
             >
               <span className="text-sm leading-none">+</span>
               <span>Nuevo recurso</span>
-            </button>
+            </Button>
           ) : canViewActions ? (
-            <button
+            <Button
               type="button"
               onClick={onCreate}
-              className="inline-flex h-6 min-h-6 items-center gap-1 rounded-md border border-border px-2 text-xs leading-none text-stone-600 hover:bg-stone-100"
+              size="sm"
+              variant="secondary"
+              className="ops-list-action"
               title="Nuevo recurso"
             >
               <span className="text-sm leading-none">+</span>
               <span>Nuevo recurso</span>
-            </button>
+            </Button>
           ) : null}
         </div>
       </div>
 
       <div className="app-table-scroll min-h-0 w-full min-w-0">
-        <table className="w-max min-w-full table-fixed border-collapse text-[11px] [&_td]:border-r [&_td]:border-stone-200/60 [&_td:last-child]:border-r-0 [&_th]:border-r [&_th]:border-stone-200/70 [&_th:last-child]:border-r-0">
+        <table className="ops-table">
           <colgroup>
             {visibleColumns.map((column) => (
               <col key={`col-${column.key}`} style={{ width: `${columnWidths[column.key] ?? column.minWidth ?? 120}px` }} />
             ))}
           </colgroup>
-          <thead className="sticky top-0 z-10 bg-stone-50 text-muted">
+          <thead className="ops-table-head">
             <tr>
               {visibleColumns.map((column) => (
                 <th
                   key={column.key}
-                  className={`relative h-8 border-b border-border px-2 py-1 text-left font-semibold ${
-                    column.align === "right" ? "text-right" : ""
-                  }`}
+                  className={`ops-table-th ${alignmentClass(column.align)}`}
                 >
                   {!column.sortField ? (
                     <TableColumnHeader icon={column.icon} label={column.label} />
@@ -534,17 +546,17 @@ export function ResourcesTable({
                     <button
                       type="button"
                       onClick={() => toggleSort(column)}
-                      className="flex w-full items-center justify-between gap-1 rounded px-0.5 text-left hover:bg-stone-100"
+                      className="ops-table-sort-button"
                       title="Ordenar"
                     >
                       <TableColumnHeader icon={column.icon} label={column.label} />
-                      <span className="text-[9px] leading-none text-stone-400">{sortIndicator(column)}</span>
+                      <span className="ops-table-sort-indicator">{sortIndicator(column)}</span>
                     </button>
                   )}
                   <button
                     type="button"
                     onMouseDown={(event) => startColumnResize(event, column.key)}
-                    className="absolute right-[-3px] top-0 z-20 h-full w-2.5 cursor-col-resize bg-transparent hover:bg-stone-300/70"
+                    className="ops-table-resizer"
                     style={{ touchAction: "none" }}
                     aria-label={`Ajustar ancho de ${column.label}`}
                     title={`Ajustar ancho de ${column.label}`}
@@ -552,16 +564,19 @@ export function ResourcesTable({
                 </th>
               ))}
             </tr>
-            <tr className="h-8">
+            <tr className="ops-table-filter-row">
               {visibleColumns.map((column) => (
-                <th key={`filter-${column.key}`} className="border-b border-border bg-stone-50 px-2 py-1">
+                <th
+                  key={`filter-${column.key}`}
+                  className={`ops-table-filter-cell ${alignmentClass(column.align)}`}
+                >
                   {!column.filterKey ? (
-                    <span className="block h-6" />
+                    <span className="ops-table-filter-placeholder" />
                   ) : column.filterType === "select" ? (
                     <select
                       value={filters[column.filterKey]}
                       onChange={(event) => onFilterChange(column.filterKey!, event.target.value)}
-                      className="h-6 w-full rounded border border-stone-200 bg-white px-1 text-[10px] leading-none outline-none focus:border-stone-400"
+                      className="ops-table-filter-input"
                     >
                       <option value="">Todos</option>
                       {getSelectOptions(column, filterOptions).map((value) => (
@@ -574,7 +589,7 @@ export function ResourcesTable({
                     <input
                       value={filters[column.filterKey]}
                       onChange={(event) => onFilterChange(column.filterKey!, event.target.value)}
-                      className="h-6 w-full rounded border border-stone-200 bg-white px-1 text-[10px] leading-none outline-none focus:border-stone-400"
+                      className="ops-table-filter-input"
                       placeholder=""
                     />
                   )}
@@ -584,8 +599,8 @@ export function ResourcesTable({
           </thead>
           <tbody>
             {rows.length === 0 ? (
-              <tr>
-                <td colSpan={visibleColumns.length} className="h-20 px-3 py-6 text-center text-xs text-muted">
+              <tr className="ops-table-empty-row">
+                <td colSpan={visibleColumns.length} className="ops-table-empty-cell">
                   {emptyMessage}
                 </td>
               </tr>
@@ -595,14 +610,12 @@ export function ResourcesTable({
               return (
                 <tr
                   key={row.id}
-                  className={`h-8 border-t border-border align-middle ${
-                    isInactive ? "bg-stone-50 text-stone-500 hover:bg-stone-100" : "hover:bg-stone-50"
-                  }`}
+                  className={`ops-table-row ${isInactive ? "ops-table-row--inactive" : ""}`}
                 >
                   {visibleColumns.map((column) => (
                     <td
                       key={`${row.id}-${column.key}`}
-                      className={`h-8 px-2 py-1 ${column.align === "right" ? "text-right" : ""}`}
+                      className={`ops-table-td ${alignmentClass(column.align)}`}
                     >
                       {renderCell(row, column)}
                     </td>
