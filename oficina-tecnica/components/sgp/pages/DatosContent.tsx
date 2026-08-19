@@ -3,7 +3,8 @@
 import { useEffect, useMemo, useState } from "react";
 import { CatalogFormModal } from "@/components/sgp/catalogs/CatalogFormModal";
 import { CatalogTable } from "@/components/sgp/catalogs/CatalogTable";
-import { FieldLabelIcon } from "@/components/sgp/ui/FieldLabelIcon";
+import { PageHeader } from "@/components/shell/PageHeader";
+import { Badge, Button, Tab, Tabs } from "@/components/ui";
 import {
   listCatalogMap,
   removeCatalogItem,
@@ -651,42 +652,60 @@ export default function DatosContent() {
 
   return (
     <section className="sgp-page app-table-section min-w-0">
-      <div className="mb-3 flex items-center justify-between">
-        <FieldLabelIcon icon="layout-grid" label="Datos y catálogos" className="text-sm font-semibold text-stone-700" />
-        <button
+      <PageHeader
+        eyebrow="SGP"
+        title="Datos y catálogos"
+        description="Mantenimiento operativo de catálogos usados por recursos, requerimientos y cotizaciones."
+        actions={
+          <>
+            <Badge tone="neutral">{tabGroups.length} grupos</Badge>
+            <Badge tone="info">{rows.length} registros</Badge>
+          </>
+        }
+      />
+
+      <div className="ops-list-toolbar mb-3 rounded-lg border border-border">
+        <div className="ops-list-title-group">
+          <span className="ops-list-title">Catálogo activo</span>
+          <Badge tone="neutral">{tabGroups.flatMap((group) => group.tabs).find((tab) => tab.key === activeTab)?.label ?? activeTab}</Badge>
+        </div>
+        <div className="ops-list-actions">
+        <Button
+          type="button"
           onClick={openNew}
-          className="inline-flex h-7 items-center rounded-md border border-border px-2.5 text-xs text-stone-700 hover:bg-stone-100"
+          size="sm"
+          variant="secondary"
+          className="ops-list-action"
         >
           + Agregar
-        </button>
+        </Button>
+        </div>
       </div>
 
       <div className="mb-3 grid gap-2 md:grid-cols-2">
         {tabGroups.map((group) => (
-          <div key={group.group} className="rounded-lg border border-border bg-panel px-2 py-2">
-            <p className="mb-1 text-[11px] font-semibold text-stone-600">{group.group}</p>
-            <div className="flex flex-wrap gap-1">
+          <div key={group.group} className="ops-table-card px-2 py-2">
+            <p className="mb-1 text-[11px] font-semibold text-muted">{group.group}</p>
+            <Tabs className="flex-wrap">
               {group.tabs.map((tab) => (
-                <button
+                <Tab
                   key={tab.key}
+                  active={activeTab === tab.key}
                   onClick={() => {
                     setActiveTab(tab.key);
                     setWarning(null);
                   }}
-                  className={`rounded-md border px-2 py-1 text-xs ${
-                    activeTab === tab.key ? "border-stone-300 bg-stone-100" : "border-border bg-panel"
-                  }`}
                 >
                   {tab.label}
-                </button>
+                </Tab>
               ))}
-            </div>
+            </Tabs>
           </div>
         ))}
       </div>
 
-      {loadingCatalogs ? <p className="mb-2 text-xs text-stone-500">Cargando catálogos desde Supabase...</p> : null}
-      {warning ? <p className="mb-2 text-xs text-amber-700">{warning}</p> : null}
+      {loadingCatalogs ? <div className="ops-list-state mb-2">Cargando catálogos desde Supabase...</div> : null}
+      {warning ? <div className="ops-list-state ops-list-state--warning mb-2">{warning}</div> : null}
 
       <CatalogTable
         rows={rows}

@@ -1,6 +1,7 @@
 "use client";
 
 import { useMemo, useState } from "react";
+import { Badge, Button } from "@/components/ui";
 import { FieldLabelIcon, type IconName } from "@/components/sgp/ui/FieldLabelIcon";
 import { TableColumnHeader } from "@/components/sgp/ui/TableColumnHeader";
 
@@ -104,77 +105,98 @@ export function CatalogTable<T extends { id: string } & Record<string, unknown>>
     return sortDirection === "asc" ? "↑" : "↓";
   }
 
+  function renderValue(row: T, key: string) {
+    if (key === "activo") {
+      return Boolean(row[key]) ? <Badge tone="success">Activo</Badge> : <Badge tone="neutral">Inactivo</Badge>;
+    }
+    return String(row[key] ?? "-");
+  }
+
   return (
-    <div className="app-table-card min-w-0 overflow-hidden rounded-xl border border-border bg-panel">
-      <div className="flex items-center justify-between border-b border-border px-2 py-1.5">
-        <FieldLabelIcon icon="layout-grid" label="Tabla de catálogo" className="text-xs font-medium text-stone-700" />
-        <button
+    <div className="app-table-card ops-table-card">
+      <div className="ops-list-toolbar">
+        <div className="ops-list-title-group">
+          <FieldLabelIcon icon="layout-grid" label="Tabla de catálogo" className="ops-list-title" />
+          <Badge tone="neutral">{visibleRows.length} registros</Badge>
+        </div>
+        <div className="ops-list-actions">
+        <Button
           type="button"
           onClick={clearTableView}
-          className="inline-flex h-6 min-h-6 items-center gap-1 rounded-md border border-border px-2 text-xs leading-none text-stone-600 hover:bg-stone-100"
+          size="sm"
+          variant="ghost"
+          className="ops-list-action"
           title="Limpiar filtros y orden"
         >
-          <FieldLabelIcon icon="sliders-horizontal" label="Limpiar filtros" className="text-xs text-stone-600" />
-        </button>
+          <FieldLabelIcon icon="sliders-horizontal" label="Limpiar filtros" className="ops-list-action-label" />
+        </Button>
+        </div>
       </div>
       <div className="app-table-scroll max-h-[56vh]">
-        <table className="w-max min-w-full border-collapse text-[11px] [&_td]:border-r [&_td]:border-stone-200/60 [&_td:last-child]:border-r-0 [&_th]:border-r [&_th]:border-stone-200/70 [&_th:last-child]:border-r-0">
-          <thead className="sticky top-0 z-10 bg-stone-50 text-muted">
+        <table className="ops-table">
+          <thead className="ops-table-head">
             <tr>
               {columns.map((column) => (
-                <th key={column.key} className="h-8 border-b border-border px-2 py-1 text-left font-semibold">
+                <th key={column.key} className="ops-table-th">
                   <button
                     type="button"
                     onClick={() => toggleSort(column.key)}
-                    className="flex w-full items-center justify-between gap-1 rounded px-0.5 text-left hover:bg-stone-100"
+                    className="ops-table-sort-button"
                     title="Ordenar"
                   >
                     <TableColumnHeader icon={iconForCatalogColumn(column.key, column.title)} label={column.title} />
-                    <span className="text-[9px] leading-none text-stone-400">{sortIndicator(column.key)}</span>
+                    <span className="ops-table-sort-indicator">{sortIndicator(column.key)}</span>
                   </button>
                 </th>
               ))}
-              <th className="h-8 border-b border-border px-2 py-1 text-left font-semibold">
+              <th className="ops-table-th">
                 <TableColumnHeader icon="settings2" label="Acciones" />
               </th>
             </tr>
-            <tr className="h-8">
+            <tr className="ops-table-filter-row">
               {columns.map((column) => (
-                <th key={`filter-${column.key}`} className="border-b border-border bg-stone-50 px-2 py-1">
+                <th key={`filter-${column.key}`} className="ops-table-filter-cell">
                   <input
                     value={columnFilters[column.key] ?? ""}
                     onChange={(event) =>
                       setColumnFilters((prev) => ({ ...prev, [column.key]: event.target.value }))
                     }
-                    className="h-6 w-full rounded border border-stone-200 bg-white px-1 text-[10px] leading-none outline-none focus:border-stone-400"
+                    className="ops-table-filter-input"
                     placeholder=""
                   />
                 </th>
               ))}
-              <th className="border-b border-border bg-stone-50 px-2 py-1">
-                <span className="block h-6" />
+              <th className="ops-table-filter-cell">
+                <span className="ops-table-filter-placeholder" />
               </th>
             </tr>
           </thead>
           <tbody>
+            {visibleRows.length === 0 ? (
+              <tr className="ops-table-empty-row">
+                <td colSpan={columns.length + 1} className="ops-table-empty-cell">
+                  No hay registros para los filtros aplicados.
+                </td>
+              </tr>
+            ) : null}
             {visibleRows.map(({ row }) => (
-              <tr key={row.id} className="h-8 border-t border-border align-middle">
+              <tr key={row.id} className="ops-table-row">
                 {columns.map((column) => (
-                  <td key={`${row.id}-${String(column.key)}`} className="h-8 px-2 py-1">
-                    {String(row[column.key] ?? "-")}
+                  <td key={`${row.id}-${String(column.key)}`} className="ops-table-td">
+                    {renderValue(row, column.key)}
                   </td>
                 ))}
-                <td className="h-8 px-2 py-1">
+                <td className="ops-table-td">
                   <div className="flex gap-1">
-                    <button onClick={() => onEdit(row)} className="rounded border border-border px-2 py-0.5 text-[11px]">
+                    <Button type="button" onClick={() => onEdit(row)} size="sm" variant="ghost" className="ops-table-row-action">
                       Editar
-                    </button>
-                    <button onClick={() => onDeactivate(row)} className="rounded border border-border px-2 py-0.5 text-[11px]">
+                    </Button>
+                    <Button type="button" onClick={() => onDeactivate(row)} size="sm" variant="ghost" className="ops-table-row-action ops-table-row-action--warning">
                       Desactivar
-                    </button>
-                    <button onClick={() => onDelete(row)} className="rounded border border-border px-2 py-0.5 text-[11px]">
+                    </Button>
+                    <Button type="button" onClick={() => onDelete(row)} size="sm" variant="danger" className="ops-table-row-action">
                       Eliminar
-                    </button>
+                    </Button>
                   </div>
                 </td>
               </tr>

@@ -2,6 +2,8 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useAuth, type AppRole, type AppStatus } from "@/components/sgp/auth/AuthContext";
+import { PageHeader } from "@/components/shell/PageHeader";
+import { Badge, Button, Tab, Tabs, type BadgeTone } from "@/components/ui";
 import {
   getModulePermissions,
   listModulePermissionEmails,
@@ -66,29 +68,11 @@ const STANDARD_PERMISSION_LABELS: Record<StandardPermissionKey, string> = {
   can_upload_files: "Puede subir archivos",
 };
 
-function buttonClassName(disabled = false): string {
-  return [
-    "inline-flex h-8 items-center justify-center rounded-md border px-3 text-xs font-semibold transition",
-    disabled
-      ? "cursor-not-allowed border-stone-200 bg-stone-100 text-stone-400"
-      : "border-stone-300 bg-white text-stone-700 hover:border-stone-400 hover:text-stone-900",
-  ].join(" ");
-}
-
-function filterButtonClassName(active: boolean): string {
-  return [
-    "inline-flex h-8 items-center rounded-md border px-3 text-xs font-semibold transition",
-    active
-      ? "border-stone-400 bg-stone-100 text-stone-900"
-      : "border-stone-200 bg-white text-stone-600 hover:border-stone-300 hover:text-stone-900",
-  ].join(" ");
-}
-
-function statusBadgeClassName(status?: string | null): string {
-  if (status === "approved") return "border-emerald-200 bg-emerald-50 text-emerald-700";
-  if (status === "rejected") return "border-red-200 bg-red-50 text-red-700";
-  if (status === "disabled" || status === "blocked") return "border-stone-300 bg-stone-100 text-stone-700";
-  return "border-amber-200 bg-amber-50 text-amber-700";
+function statusBadgeTone(status?: string | null): BadgeTone {
+  if (status === "approved") return "success";
+  if (status === "rejected") return "danger";
+  if (status === "disabled" || status === "blocked") return "neutral";
+  return "warning";
 }
 
 function formatDate(value?: string | null): string {
@@ -560,7 +544,7 @@ export default function AdministradorContent() {
   const content = useMemo(() => {
     if (!isAdmin) {
       return (
-        <div className="rounded-xl border border-border bg-panel p-6 text-sm text-muted">
+        <div className="ops-list-state ops-list-state--warning">
           Solo los usuarios con rol administrador pueden gestionar usuarios.
         </div>
       );
@@ -568,78 +552,79 @@ export default function AdministradorContent() {
 
     if (section === "users") {
       return (
-        <div className="rounded-xl border border-border bg-panel p-4">
-          <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
-            <div>
-              <p className="text-sm font-semibold text-stone-700">Usuarios registrados</p>
-              <p className="text-xs text-stone-500">Fuente principal: user_profiles.</p>
+        <div className="app-table-card ops-table-card">
+          <div className="ops-list-toolbar">
+            <div className="ops-list-title-group">
+              <span className="ops-list-title">Usuarios registrados</span>
+              <Badge tone="neutral">user_profiles</Badge>
+              <Badge tone="info">{visibleProfiles.length} visibles</Badge>
             </div>
-            <button onClick={() => void loadProfiles()} className={buttonClassName(loading)} disabled={loading}>
+            <div className="ops-list-actions">
+            <Button type="button" onClick={() => void loadProfiles()} size="sm" variant="ghost" className="ops-list-action" disabled={loading}>
               {loading ? "Actualizando..." : "Actualizar"}
-            </button>
+            </Button>
+            </div>
           </div>
 
-          <div className="mb-3 flex flex-wrap gap-2">
+          <div className="ops-list-meta px-2 pb-2">
             {FILTERS.map((item) => (
-              <button
+              <Button
                 key={item.value}
                 type="button"
                 onClick={() => setFilter(item.value)}
-                className={filterButtonClassName(filter === item.value)}
+                size="sm"
+                variant={filter === item.value ? "secondary" : "ghost"}
+                className="ops-list-action"
               >
                 {item.label}
-              </button>
+              </Button>
             ))}
           </div>
 
-          {error ? <p className="mb-3 rounded-md border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-700">{error}</p> : null}
+          {error ? <div className="ops-list-state ops-list-state--warning mx-2 mb-2">{error}</div> : null}
           {message ? (
-            <p className="mb-3 rounded-md border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs text-emerald-700">{message}</p>
+            <div className="ops-list-state mx-2 mb-2">{message}</div>
           ) : null}
 
-          <div className="overflow-x-auto">
-            <table className="min-w-full border-collapse text-xs">
-              <thead>
-                <tr className="border-b border-stone-200 bg-stone-50 text-left text-stone-600">
-                  <th className="px-2 py-2 font-semibold">Nombre completo</th>
-                  <th className="px-2 py-2 font-semibold">Email</th>
-                  <th className="px-2 py-2 font-semibold">Provider</th>
-                  <th className="px-2 py-2 font-semibold">Rol actual</th>
-                  <th className="px-2 py-2 font-semibold">Estado actual</th>
-                  <th className="px-2 py-2 font-semibold">Fecha creacion</th>
-                  <th className="px-2 py-2 font-semibold">Fecha aprobacion</th>
-                  <th className="px-2 py-2 font-semibold">Ultimo acceso</th>
-                  <th className="px-2 py-2 font-semibold">Rol</th>
-                  <th className="px-2 py-2 font-semibold">Acciones</th>
+          <div className="app-table-scroll">
+            <table className="ops-table min-w-[1120px]">
+              <thead className="ops-table-head">
+                <tr>
+                  <th className="ops-table-th">Nombre completo</th>
+                  <th className="ops-table-th">Email</th>
+                  <th className="ops-table-th">Provider</th>
+                  <th className="ops-table-th">Rol actual</th>
+                  <th className="ops-table-th">Estado actual</th>
+                  <th className="ops-table-th">Fecha creacion</th>
+                  <th className="ops-table-th">Fecha aprobacion</th>
+                  <th className="ops-table-th">Ultimo acceso</th>
+                  <th className="ops-table-th">Rol</th>
+                  <th className="ops-table-th">Acciones</th>
                 </tr>
               </thead>
               <tbody>
                 {visibleProfiles.length === 0 ? (
-                  <tr>
-                    <td colSpan={10} className="px-2 py-4 text-center text-stone-500">
+                  <tr className="ops-table-empty-row">
+                    <td colSpan={10} className="ops-table-empty-cell">
                       No hay usuarios para este filtro.
                     </td>
                   </tr>
                 ) : (
                   visibleProfiles.map((profileItem) => (
-                    <tr key={profileItem.id} className="border-b border-stone-100 text-stone-700">
-                      <td className="px-2 py-2">{profileItem.full_name ?? "-"}</td>
-                      <td className="px-2 py-2">{profileItem.email ?? "-"}</td>
-                      <td className="px-2 py-2">{getProvider(profileItem)}</td>
-                      <td className="px-2 py-2">{profileItem.role ?? "consulta"}</td>
-                      <td className="px-2 py-2">
-                        <span
-                          className={`inline-flex rounded-full border px-2 py-0.5 text-[11px] font-semibold ${statusBadgeClassName(
-                            profileItem.status,
-                          )}`}
-                        >
+                    <tr key={profileItem.id} className="ops-table-row">
+                      <td className="ops-table-td">{profileItem.full_name ?? "-"}</td>
+                      <td className="ops-table-td">{profileItem.email ?? "-"}</td>
+                      <td className="ops-table-td">{getProvider(profileItem)}</td>
+                      <td className="ops-table-td">{profileItem.role ?? "consulta"}</td>
+                      <td className="ops-table-td">
+                        <Badge tone={statusBadgeTone(profileItem.status)}>
                           {profileItem.status ?? "pending"}
-                        </span>
+                        </Badge>
                       </td>
-                      <td className="px-2 py-2">{formatDate(profileItem.created_at)}</td>
-                      <td className="px-2 py-2">{formatDate(profileItem.approved_at)}</td>
-                      <td className="px-2 py-2">{getLastAccess(profileItem)}</td>
-                      <td className="px-2 py-2">
+                      <td className="ops-table-td">{formatDate(profileItem.created_at)}</td>
+                      <td className="ops-table-td">{formatDate(profileItem.approved_at)}</td>
+                      <td className="ops-table-td">{getLastAccess(profileItem)}</td>
+                      <td className="ops-table-td">
                         <select
                           value={selectedRole[profileItem.id] ?? profileItem.role ?? "consulta"}
                           onChange={(event) =>
@@ -648,7 +633,7 @@ export default function AdministradorContent() {
                               [profileItem.id]: event.target.value as AppRole,
                             }))
                           }
-                          className="h-8 rounded-md border border-stone-300 bg-white px-2 text-xs outline-none"
+                          className="ops-table-filter-input"
                         >
                           {ROLE_OPTIONS.map((roleOption) => (
                             <option key={roleOption} value={roleOption}>
@@ -657,36 +642,48 @@ export default function AdministradorContent() {
                           ))}
                         </select>
                       </td>
-                      <td className="px-2 py-2">
+                      <td className="ops-table-td">
                         <div className="flex flex-wrap gap-2">
-                          <button
+                          <Button
+                            type="button"
                             onClick={() => void approveProfile(profileItem)}
-                            className={buttonClassName(actionLoadingId === profileItem.id)}
+                            size="sm"
+                            variant="ghost"
+                            className="ops-table-row-action ops-table-row-action--success"
                             disabled={actionLoadingId === profileItem.id}
                           >
                             Aprobar
-                          </button>
-                          <button
+                          </Button>
+                          <Button
+                            type="button"
                             onClick={() => void changeRole(profileItem)}
-                            className={buttonClassName(actionLoadingId === profileItem.id)}
+                            size="sm"
+                            variant="ghost"
+                            className="ops-table-row-action"
                             disabled={actionLoadingId === profileItem.id}
                           >
                             Cambiar rol
-                          </button>
-                          <button
+                          </Button>
+                          <Button
+                            type="button"
                             onClick={() => void rejectProfile(profileItem)}
-                            className={buttonClassName(actionLoadingId === profileItem.id)}
+                            size="sm"
+                            variant="ghost"
+                            className="ops-table-row-action ops-table-row-action--warning"
                             disabled={actionLoadingId === profileItem.id}
                           >
                             Rechazar
-                          </button>
-                          <button
+                          </Button>
+                          <Button
+                            type="button"
                             onClick={() => void suspendProfile(profileItem)}
-                            className={buttonClassName(actionLoadingId === profileItem.id)}
+                            size="sm"
+                            variant="danger"
+                            className="ops-table-row-action"
                             disabled={actionLoadingId === profileItem.id}
                           >
                             Suspender
-                          </button>
+                          </Button>
                         </div>
                       </td>
                     </tr>
@@ -714,44 +711,49 @@ export default function AdministradorContent() {
     const hasPermissionChanges = JSON.stringify(permissionForm) !== JSON.stringify(baselinePermissionForm);
 
     return (
-      <div className="rounded-xl border border-border bg-panel">
+      <div className="app-table-card ops-table-card">
         <div className="border-b border-border p-3">
-        <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+        <div className="ops-list-toolbar rounded-lg border border-border">
           <div>
-            <p className="text-sm font-semibold text-stone-700">Permisos</p>
-            <p className="text-xs text-stone-500">{selectedModuleCatalog.description}</p>
+            <p className="ops-list-title">Permisos</p>
+            <p className="text-xs text-muted">{selectedModuleCatalog.description}</p>
           </div>
-          <div className="flex flex-wrap items-center justify-end gap-2">
+          <div className="ops-list-actions">
             {!canManagePermissions ? (
-              <span className="rounded-md border border-amber-200 bg-amber-50 px-2 py-1 text-xs text-amber-700">
+              <Badge tone="warning">
                 No tienes permisos para administrar accesos
-              </span>
+              </Badge>
             ) : null}
-            <button
+            <Button
               type="button"
               onClick={resetPermissionConfig}
-              className={buttonClassName(permissionSaving || permissionLoading || !hasPermissionChanges)}
+              size="sm"
+              variant="ghost"
+              className="ops-list-action"
               disabled={permissionSaving || permissionLoading || !hasPermissionChanges}
             >
               Cancelar cambios
-            </button>
-            <button
+            </Button>
+            <Button
+              type="button"
               onClick={() => void savePermissionConfig()}
-              className={buttonClassName(permissionSaving || permissionLoading || !canManagePermissions)}
+              size="sm"
+              variant="secondary"
+              className="ops-list-action"
               disabled={permissionSaving || permissionLoading || !canManagePermissions}
             >
               {permissionSaving ? "Guardando..." : "Guardar cambios"}
-            </button>
+            </Button>
           </div>
         </div>
 
         <div className="grid gap-2 md:grid-cols-2">
-          <label className="grid gap-1 text-xs font-semibold text-stone-600">
+          <label className="grid gap-1 text-xs font-semibold text-muted">
             Usuario
             <select
               value={selectedPermissionUser}
               onChange={(event) => setSelectedPermissionUser(event.target.value)}
-              className="h-9 rounded-md border border-stone-300 bg-white px-2 text-xs outline-none"
+              className="ops-table-filter-input h-9"
             >
               {permissionUserOptions.length === 0 ? <option value="">Sin usuarios disponibles</option> : null}
               {permissionUserOptions.map((emailOption) => (
@@ -761,12 +763,12 @@ export default function AdministradorContent() {
               ))}
             </select>
           </label>
-          <label className="grid gap-1 text-xs font-semibold text-stone-600">
+          <label className="grid gap-1 text-xs font-semibold text-muted">
             Modulo
             <select
               value={selectedPermissionModule}
               onChange={(event) => setSelectedPermissionModule(event.target.value as PermissionModuleKey)}
-              className="h-9 rounded-md border border-stone-300 bg-white px-2 text-xs outline-none"
+              className="ops-table-filter-input h-9"
             >
               {modulePermissionGroups.map(([groupLabel, options]) => (
                 <optgroup key={groupLabel} label={groupLabel}>
@@ -782,22 +784,22 @@ export default function AdministradorContent() {
           </label>
         </div>
 
-        <div className="mt-3 rounded-lg border border-stone-200 bg-stone-50 px-3 py-2">
-          <p className="text-[11px] text-stone-500">
+        <div className="ops-list-meta rounded-lg border border-border bg-panel px-3 py-2">
+          <p>
             {hasPermissionChanges ? "Hay cambios pendientes por guardar." : "Sin cambios pendientes."}
           </p>
         </div>
 
         {permissionError ? (
-          <p className="mt-3 rounded-md border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-700">{permissionError}</p>
+          <div className="ops-list-state ops-list-state--warning mt-3">{permissionError}</div>
         ) : null}
         {permissionMessage ? (
-          <p className="mt-3 rounded-md border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs text-emerald-700">{permissionMessage}</p>
+          <div className="ops-list-state mt-3">{permissionMessage}</div>
         ) : null}
         {moduleNotReady ? (
-          <p className="mt-3 rounded-md border border-stone-200 bg-stone-50 px-3 py-2 text-xs text-stone-600">
+          <div className="ops-list-state mt-3">
             {MODULE_PREPARING_MESSAGE}
-          </p>
+          </div>
         ) : null}
         </div>
 
@@ -957,18 +959,34 @@ export default function AdministradorContent() {
   ]);
 
   return (
-    <section className="sgp-page">
-      <div className="mb-3 flex flex-wrap gap-2">
+    <section className="sgp-page app-table-section min-w-0">
+      <PageHeader
+        eyebrow="SGP"
+        title="Administrador"
+        description="Gestión operativa de usuarios, roles, estados y permisos por módulo."
+        actions={
+          <>
+            <Badge tone="neutral">{profiles.length} usuarios</Badge>
+            <Badge tone={canManagePermissions ? "success" : "warning"}>
+              {canManagePermissions ? "Permisos habilitados" : "Permisos restringidos"}
+            </Badge>
+          </>
+        }
+      />
+      <div className="ops-list-toolbar mb-3 rounded-lg border border-border">
+        <div className="ops-list-title-group">
+          <Tabs>
         {SECTIONS.map((item) => (
-          <button
+          <Tab
             key={item.value}
-            type="button"
+            active={section === item.value}
             onClick={() => setSection(item.value)}
-            className={filterButtonClassName(section === item.value)}
           >
             {item.label}
-          </button>
+          </Tab>
         ))}
+          </Tabs>
+        </div>
       </div>
       {content}
     </section>
