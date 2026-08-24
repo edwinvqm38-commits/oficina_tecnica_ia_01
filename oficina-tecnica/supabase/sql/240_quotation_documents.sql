@@ -18,7 +18,7 @@ create table if not exists public.quotation_documents (
   drive_file_id text not null,
   drive_file_url text not null,
   original_name text not null,
-  drive_name text not nu@
+  drive_name text not null,
   mime_type text,
   file_size bigint not null default 0 check (file_size >= 0),
   document_type text not null default 'attachment',

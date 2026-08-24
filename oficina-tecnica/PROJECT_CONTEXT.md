@@ -496,3 +496,18 @@ Las entidades deben abrirse usando los workspaces reales de la aplicación, mant
 
 ### Commit de cierre
 - 7e7de05 - feat: mejorar contexto y navegacion de mesa de trabajo
+
+
+## 2026-08-24 | Supabase | Cierre AG-2A de historial de migraciones
+
+### Proyecto
+OFICINA_IA
+
+### Alcance
+- Se reconcilia el historial local/remoto de migraciones Supabase al cierre de AG-2A.
+- La migración `20260824090000_reconcile_technical_proposal_rpc.sql` documenta el estado aplicado de las RPC de Propuestas Técnicas.
+- `save_full_technical_proposal` mantiene guardado atómico de propuestas técnicas.
+- La autorización de Propuestas Técnicas queda alineada con `can_use_module`.
+
+### Regla operativa
+Antes de nuevas migraciones Supabase, verificar `supabase migration list` y confirmar que local/remoto continúan reconciliados.

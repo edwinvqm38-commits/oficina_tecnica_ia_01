@@ -1,49 +1,9 @@
--- 022_technical_proposals_rpc.sql
--- PROPUESTA NO DESTRUCTIVA.
--- Crea RPC transaccional para guardar Propuesta Tecnica completa.
---
--- Alcance:
--- - no conecta frontend
--- - no modifica UI
--- - no toca Requerimientos ni formato RQ
--- - no toca importacion historica
--- - no modifica public.recursos
--- - evita DELETE directo desde frontend: la limpieza de hijos ocurre dentro de RPC validada
+-- 20260824090000_reconcile_technical_proposal_rpc.sql
+-- Forward-only reconciliation for OFICINA_IA.
+-- Creates the technical proposal RPCs that are missing in the remote schema.
+-- Does not alter RLS policies or existing technical proposal tables.
 
 begin;
-
--- ============================================================
--- 1. Permitir evento full_saved para la RPC transaccional
--- ============================================================
--- SQL 020 creo un CHECK cerrado de event_type. La RPC registra full_saved,
--- por lo que esta migracion amplía el contrato sin cambiar datos existentes.
-
-alter table public.technical_proposal_events
-drop constraint if exists technical_proposal_events_event_type_check;
-
-alter table public.technical_proposal_events
-add constraint technical_proposal_events_event_type_check
-check (
-  event_type in (
-    'created',
-    'updated',
-    'status_changed',
-    'resource_assigned',
-    'resource_reused',
-    'logo_resolved',
-    'exported_word',
-    'exported_html',
-    'exported_json',
-    'printed_pdf',
-    'full_saved'
-  )
-);
-
--- ============================================================
--- 2. Helper de permiso para Propuesta Tecnica
--- ============================================================
--- Mantiene el patron real del proyecto:
--- user_profiles + admin_module_permissions via can_use_module.
 
 create or replace function public.can_manage_technical_proposals()
 returns boolean
@@ -58,16 +18,6 @@ as $$
       or public.can_use_module('technical_proposals', 'create')
     );
 $$;
-
--- ============================================================
--- 3. RPC principal de guardado completo
--- ============================================================
--- Estrategia:
--- - upsert controlado de cabecera
--- - delete interno de hijos en orden seguro: files -> resources -> items
--- - reinsercion completa de items/resources/files
--- - mapeo item -> resource via client_key/client_item_key
--- - evento full_saved
 
 create or replace function public.save_full_technical_proposal(
   p_proposal jsonb,
@@ -88,6 +38,7 @@ declare
   v_existing_id uuid;
   v_requested_id uuid;
   v_cotizacion_id uuid;
+  v_resolved_cotizacion_id uuid;
   v_code text;
   v_cotizacion_codigo text;
   v_revision text;
@@ -101,6 +52,8 @@ declare
   v_client_key text;
   v_resource_item_key text;
   v_resource_item_id uuid;
+  v_resource_id uuid;
+  v_resource_snapshot_id uuid;
   v_item_map jsonb := '{}'::jsonb;
   v_items_count integer := 0;
   v_resources_count integer := 0;
@@ -171,16 +124,51 @@ begin
     end if;
   end if;
 
+  if v_cotizacion_id is not null then
+    select c.id
+    into v_resolved_cotizacion_id
+    from public.cotizaciones c
+    where c.id = v_cotizacion_id
+      and c.codigo = v_cotizacion_codigo
+      and c.deleted_at is null
+    limit 1;
+
+    if v_resolved_cotizacion_id is null then
+      raise exception 'p_proposal.cotizacion_id no coincide con p_proposal.cotizacion_codigo.';
+    end if;
+  else
+    select c.id
+    into v_resolved_cotizacion_id
+    from public.cotizaciones c
+    where c.codigo = v_cotizacion_codigo
+      and c.deleted_at is null
+    limit 1;
+
+    if v_resolved_cotizacion_id is null then
+      raise exception 'No existe una cotizacion activa para p_proposal.cotizacion_codigo.';
+    end if;
+  end if;
+
+  v_cotizacion_id := v_resolved_cotizacion_id;
   v_document_date := nullif(p_proposal ->> 'document_date', '')::date;
 
   if v_requested_id is not null then
     select tp.id
     into v_existing_id
     from public.technical_proposals tp
-    where tp.id = v_requested_id;
+    where tp.id = v_requested_id
+      and (
+        tp.code = v_code
+        or (tp.cotizacion_id = v_cotizacion_id and tp.revision = v_revision)
+      )
+    limit 1;
+
+    if v_existing_id is null then
+      raise exception 'p_proposal.id no corresponde a la propuesta tecnica solicitada.';
+    end if;
   end if;
 
-  if v_existing_id is null and v_cotizacion_id is not null then
+  if v_existing_id is null then
     select tp.id
     into v_existing_id
     from public.technical_proposals tp
@@ -195,6 +183,16 @@ begin
     from public.technical_proposals tp
     where tp.code = v_code
     limit 1;
+
+    if v_existing_id is not null and not exists (
+      select 1
+      from public.technical_proposals tp
+      where tp.id = v_existing_id
+        and tp.cotizacion_id = v_cotizacion_id
+        and tp.revision = v_revision
+    ) then
+      raise exception 'p_proposal.code ya pertenece a otra cotizacion o revision.';
+    end if;
   end if;
 
   if v_existing_id is not null then
@@ -281,7 +279,6 @@ begin
     returning id into v_proposal_id;
   end if;
 
-  -- Limpieza transaccional de hijos. Primero referencias dependientes, luego resources, luego items.
   delete from public.technical_proposal_files
   where technical_proposal_id = v_proposal_id;
 
@@ -396,7 +393,6 @@ begin
     v_resource_item_id := nullif(v_item_map ->> v_resource_item_key, '')::uuid;
 
     if v_resource_item_id is null then
-      -- Fallback para payloads futuros que envien technical_proposal_item_id real.
       if v_resource_item_key ~* v_uuid_pattern then
         if exists (
           select 1
@@ -413,8 +409,19 @@ begin
       end if;
     end if;
 
+    v_resource_id := null;
+    if nullif(v_resource ->> 'resource_id', '') is not null then
+      if (v_resource ->> 'resource_id') ~* v_uuid_pattern then
+        v_resource_id := (v_resource ->> 'resource_id')::uuid;
+        if not exists (select 1 from public.recursos r where r.id = v_resource_id and r.deleted_at is null) then
+          raise exception 'Resource resource_id % no existe o esta inactivo.', v_resource_id;
+        end if;
+      else
+        raise exception 'Resource resource_id debe ser UUID si se envia.';
+      end if;
+    end if;
+
     insert into public.technical_proposal_resources (
-      id,
       technical_proposal_id,
       technical_proposal_item_id,
       resource_id,
@@ -436,18 +443,9 @@ begin
       metadata,
       sort_order
     ) values (
-      case
-        when nullif(v_resource ->> 'id', '') is not null and (v_resource ->> 'id') ~* v_uuid_pattern
-          then (v_resource ->> 'id')::uuid
-        else gen_random_uuid()
-      end,
       v_proposal_id,
       v_resource_item_id,
-      case
-        when nullif(v_resource ->> 'resource_id', '') is not null and (v_resource ->> 'resource_id') ~* v_uuid_pattern
-          then (v_resource ->> 'resource_id')::uuid
-        else null
-      end,
+      v_resource_id,
       v_resource ->> 'resource_category',
       nullif(v_resource ->> 'codigo_recurso', ''),
       nullif(v_resource ->> 'codigo_fabricante', ''),
@@ -482,11 +480,28 @@ begin
 
     v_resource_item_key := trim(coalesce(v_file ->> 'client_item_key', v_file ->> 'technical_proposal_item_id', ''));
     v_resource_item_id := null;
+    v_resource_snapshot_id := null;
 
     if v_resource_item_key <> '' then
       v_resource_item_id := nullif(v_item_map ->> v_resource_item_key, '')::uuid;
       if v_resource_item_id is null and v_resource_item_key ~* v_uuid_pattern then
         v_resource_item_id := nullif(v_resource_item_key, '')::uuid;
+      end if;
+    end if;
+
+    if nullif(v_file ->> 'resource_snapshot_id', '') is not null then
+      if (v_file ->> 'resource_snapshot_id') ~* v_uuid_pattern then
+        v_resource_snapshot_id := (v_file ->> 'resource_snapshot_id')::uuid;
+        if not exists (
+          select 1
+          from public.technical_proposal_resources tpr
+          where tpr.id = v_resource_snapshot_id
+            and tpr.technical_proposal_id = v_proposal_id
+        ) then
+          raise exception 'File resource_snapshot_id % no pertenece a la propuesta tecnica actual.', v_resource_snapshot_id;
+        end if;
+      else
+        raise exception 'File resource_snapshot_id debe ser UUID si se envia.';
       end if;
     end if;
 
@@ -506,11 +521,7 @@ begin
     ) values (
       v_proposal_id,
       v_resource_item_id,
-      case
-        when nullif(v_file ->> 'resource_snapshot_id', '') is not null and (v_file ->> 'resource_snapshot_id') ~* v_uuid_pattern
-          then (v_file ->> 'resource_snapshot_id')::uuid
-        else null
-      end,
+      v_resource_snapshot_id,
       v_file ->> 'file_type',
       nullif(v_file ->> 'title', ''),
       nullif(v_file ->> 'relation_label', ''),
@@ -556,6 +567,7 @@ revoke all on function public.can_manage_technical_proposals() from service_role
 revoke all on function public.save_full_technical_proposal(jsonb, jsonb, jsonb, jsonb, text) from public;
 revoke all on function public.save_full_technical_proposal(jsonb, jsonb, jsonb, jsonb, text) from anon;
 revoke all on function public.save_full_technical_proposal(jsonb, jsonb, jsonb, jsonb, text) from service_role;
+
 grant execute on function public.can_manage_technical_proposals() to authenticated;
 grant execute on function public.save_full_technical_proposal(jsonb, jsonb, jsonb, jsonb, text) to authenticated;
 
@@ -563,27 +575,6 @@ comment on function public.can_manage_technical_proposals() is
   'Valida si el usuario autenticado puede crear o editar Propuestas Tecnicas segun can_use_module.';
 
 comment on function public.save_full_technical_proposal(jsonb, jsonb, jsonb, jsonb, text) is
-  'Guarda una Propuesta Tecnica completa en una transaccion. Actualiza/inserta cabecera, reemplaza items/resources/files para evitar registros fantasma, no modifica public.recursos, requiere client_key en items y client_item_key en resources para mapear snapshots a actividades, y queda preparada para ser llamada desde frontend cuando se conecte el boton Guardar.';
-
--- Validacion manual: funciones creadas y grant EXECUTE a authenticated.
-select
-  routine_name,
-  routine_type,
-  security_type
-from information_schema.routines
-where specific_schema = 'public'
-  and routine_name in ('can_manage_technical_proposals', 'save_full_technical_proposal')
-order by routine_name;
-
-select
-  routine_schema,
-  routine_name,
-  grantee,
-  privilege_type
-from information_schema.routine_privileges
-where routine_schema = 'public'
-  and routine_name in ('can_manage_technical_proposals', 'save_full_technical_proposal')
-  and grantee = 'authenticated'
-order by routine_name, privilege_type;
+  'Guarda una Propuesta Tecnica completa de forma atomica. Valida usuario, permisos de modulo, cotizacion origen y payload; reemplaza hijos dentro de la RPC para evitar DELETE directo desde frontend.';
 
 commit;

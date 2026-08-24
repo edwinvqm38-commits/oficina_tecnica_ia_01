@@ -316,6 +316,8 @@ Secuencia mínima recomendada:
 4. prueba funcional en navegador
 5. `git status --short`
 
+Antes de crear o aplicar migraciones Supabase, ejecutar `supabase migration list` y confirmar que el historial local/remoto está reconciliado.
+
 Estado conocido de validación al 2026-08-12:
 - ESLint: 0 errores.
 - 76 warnings preexistentes en la validación global.
@@ -477,6 +479,7 @@ npm run dev
 | 2026-08-12 | Tablas y enlaces de entidades se renderizan mediante `MdText` compartido | Mejorar legibilidad y navegación | Codex GPT-5.5 |
 | 2026-08-12 | RQ y Cotizaciones se abren desde Mesa usando workspaces embebidos reales y sin `iframe` | Mantener conversación, scroll y capacidad de edición | ChatGPT + Codex GPT-5.5 |
 | 2026-08-12 | Se cierra la fase de Context Resolver/Mesa con commit `7e7de05` en `feature/requirement-email-thread` | Mantener trazabilidad de la implementación validada | Git |
+| 2026-08-24 | Reconciliar migration history local/remoto antes de continuar con nuevas migraciones | Evitar drift de Supabase y futuros fallos de db push | Supabase CLI + Codex |
 
 ## Métricas sugeridas
 
