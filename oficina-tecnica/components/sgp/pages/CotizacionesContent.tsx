@@ -45,6 +45,13 @@ import {
   deleteNewRequirementIfEmpty,
   updateRequirementSupabase,
 } from "@/lib/sgp/requirementsRepository";
+import {
+  confirmQuotationAdjudication,
+  getAdjudicatedProjectForQuotation,
+  listTechnicalProposalOptionsForQuotation,
+  type AdjudicatedProject,
+  type AdjudicatedTechnicalProposalOption,
+} from "@/lib/sgp/adjudicatedProjectsRepository";
 import { saveRequirementItemsForRequirement } from "@/lib/sgp/requirementItemsRepository";
 import { createCotizacion, CreateCotizacionError, updateCotizacion, UpdateCotizacionError } from "@/lib/sgp/quotationsRepository";
 import {
@@ -611,6 +618,13 @@ export default function CotizacionesPage({ embeddedWorkspace = null }: Cotizacio
   const [draft, setDraft] = useState<Cotizacion | null>(null);
   const [isQuotationSaving, setIsQuotationSaving] = useState(false);
   const [requirementCreationError, setRequirementCreationError] = useState<string | null>(null);
+  const [adjudicatedProjectsByQuotationId, setAdjudicatedProjectsByQuotationId] = useState<Record<string, AdjudicatedProject | null>>({});
+  const [technicalProposalOptionsByQuotationId, setTechnicalProposalOptionsByQuotationId] = useState<
+    Record<string, AdjudicatedTechnicalProposalOption[]>
+  >({});
+  const [adjudicationLoading, setAdjudicationLoading] = useState(false);
+  const [adjudicationError, setAdjudicationError] = useState<string | null>(null);
+  const [adjudicationMessage, setAdjudicationMessage] = useState<string | null>(null);
   const [pendingNewQuotationConfirm, setPendingNewQuotationConfirm] = useState(false);
   const [selectedRequirementId, setSelectedRequirementId] = useState<string | null>(null);
   const [requirementDraft, setRequirementDraft] = useState<Requerimiento | null>(null);
@@ -1427,11 +1441,37 @@ export default function CotizacionesPage({ embeddedWorkspace = null }: Cotizacio
     });
   }
 
+  async function loadAdjudicationContext(cotizacion: Cotizacion) {
+    setAdjudicationError(null);
+    setAdjudicationMessage(null);
+
+    if (dataSource !== "supabase") {
+      setAdjudicatedProjectsByQuotationId((prev) => ({ ...prev, [cotizacion.id]: null }));
+      setTechnicalProposalOptionsByQuotationId((prev) => ({ ...prev, [cotizacion.id]: [] }));
+      return;
+    }
+
+    try {
+      const [project, proposalOptions] = await Promise.all([
+        getAdjudicatedProjectForQuotation(cotizacion),
+        listTechnicalProposalOptionsForQuotation(cotizacion),
+      ]);
+      setAdjudicatedProjectsByQuotationId((prev) => ({ ...prev, [cotizacion.id]: project }));
+      setTechnicalProposalOptionsByQuotationId((prev) => ({ ...prev, [cotizacion.id]: proposalOptions }));
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "No se pudo cargar el contexto de adjudicación.";
+      setAdjudicationError(message);
+      setAdjudicatedProjectsByQuotationId((prev) => ({ ...prev, [cotizacion.id]: null }));
+      setTechnicalProposalOptionsByQuotationId((prev) => ({ ...prev, [cotizacion.id]: [] }));
+    }
+  }
+
   function openEditQuotation(row: Cotizacion, options: { persist?: boolean } = {}) {
     const normalized = normalizeCotizacionDraft(row);
     setEditingId(row.id);
     setDraft(normalized);
     setRequirementCreationError(null);
+    void loadAdjudicationContext(normalized);
     void loadItemsForQuotation(normalized, "workspace-open");
     if (options.persist !== false) {
       persistWorkspaceState({ quotationCode: normalized.codigo, rqCode: null });
@@ -1459,6 +1499,8 @@ export default function CotizacionesPage({ embeddedWorkspace = null }: Cotizacio
     setEditingId(null);
     setDraft(null);
     setRequirementCreationError(null);
+    setAdjudicationError(null);
+    setAdjudicationMessage(null);
     if (isEmbeddedWorkspace) {
       embeddedWorkspace?.onClose();
       return;
@@ -2107,6 +2149,46 @@ export default function CotizacionesPage({ embeddedWorkspace = null }: Cotizacio
     }
   }
 
+  async function handleConfirmAdjudication(propuestaTecnicaId: string | null) {
+    if (!draft) return;
+
+    if (dataSource !== "supabase") {
+      setAdjudicationError("La confirmación de adjudicación requiere Supabase.");
+      return;
+    }
+
+    if (draft.estado !== "Ganada" && draft.estado !== "Adjudicado") {
+      setAdjudicationError("Solo se pueden confirmar adjudicaciones de cotizaciones Ganada o Adjudicado histórico.");
+      return;
+    }
+
+    setAdjudicationLoading(true);
+    setAdjudicationError(null);
+    setAdjudicationMessage(null);
+
+    try {
+      const project = await confirmQuotationAdjudication({
+        cotizacionId: draft.id,
+        propuestaTecnicaId,
+        eventMessage: propuestaTecnicaId
+          ? "Confirmación contractual con propuesta técnica adjudicada desde Cotizaciones."
+          : "Confirmación contractual sin propuesta técnica registrada desde Cotizaciones.",
+      });
+
+      setAdjudicatedProjectsByQuotationId((prev) => ({ ...prev, [draft.id]: project }));
+      clearCoreAppDataCache();
+      setAdjudicationMessage(`Proyecto adjudicado ${project.codigo_proyecto} confirmado.`);
+      setWarning(`Proyecto adjudicado ${project.codigo_proyecto} confirmado.`);
+      await refreshCotizacionesData();
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "No se pudo confirmar la adjudicación.";
+      setAdjudicationError(message);
+      setWarning(message);
+    } finally {
+      setAdjudicationLoading(false);
+    }
+  }
+
   async function createRequirementFromQuotation() {
     if (!draft) return;
 
@@ -2422,6 +2504,11 @@ export default function CotizacionesPage({ embeddedWorkspace = null }: Cotizacio
         canEditQuotation={canSaveCurrentQuotation}
         canUploadQuotationDocuments={canUploadQuotationDocumentsInCurrentSource}
         isSavingQuotation={isQuotationSaving}
+        adjudicatedProject={draft ? adjudicatedProjectsByQuotationId[draft.id] ?? null : null}
+        technicalProposalOptions={draft ? technicalProposalOptionsByQuotationId[draft.id] ?? [] : []}
+        adjudicationLoading={adjudicationLoading}
+        adjudicationError={adjudicationError}
+        adjudicationMessage={adjudicationMessage}
         onClose={closeModal}
         onSave={saveDraft}
         onDraftChange={updateDraft}
@@ -2437,6 +2524,7 @@ export default function CotizacionesPage({ embeddedWorkspace = null }: Cotizacio
             ? deleteRequirementFromQuotation
             : undefined
         }
+        onConfirmAdjudication={canViewQuotationActions && canEditQuotationInCurrentSource ? handleConfirmAdjudication : undefined}
         canDeleteAssociatedRequirements={canDeleteAssociatedRequirements}
         requirementCreationError={requirementCreationError}
         hiddenBusinessFields={hiddenBusinessFields}

@@ -11,10 +11,7 @@ import { supabase } from "@/lib/sgp/supabaseClient";
 import { listCatalogItems } from "@/lib/sgp/catalogsRepository";
 import {
   CURRENT_RQ_CODE_PATTERN,
-  findExactProjectForQuotation,
-  nextProjectCodeForYear,
   nextRqCorrelativeForQuotation,
-  normalizeProjectTag,
   normalizeString,
   normalizeToken,
   planProjectTagForQuotation,
@@ -210,80 +207,6 @@ async function loadRequirementProjectReservationRows(anio: number): Promise<Requ
   }
 
   return Array.from(byKey.values());
-}
-
-async function ensureProjectTagForQuotation(
-  cotizacion: CotizacionWithRequirementMetadata,
-  catalogs: RequirementCodeCatalogs,
-  reservedRequirements: RequirementProjectReservationRow[],
-  codigoCliente: string,
-  codigoUnidad: string,
-  anio: number,
-): Promise<{ ok: true; projectTag: string; created: boolean } | { ok: false; message: string }> {
-  const cotizacionCodigo = readCotizacionField(cotizacion, "codigo", "codigo");
-  const cliente = readCotizacionField(cotizacion, "cliente_nombre", "cliente");
-  const unidad = readCotizacionField(cotizacion, "unidad_trabajo_nombre", "unidad_trabajo");
-  const oc = readCotizacionField(cotizacion, "oc", "oc");
-
-  const existing = findExactProjectForQuotation(catalogs.proyectos, cotizacionCodigo, anio);
-  const existingTag = normalizeProjectTag(existing?.codigo_proyecto);
-  if (existingTag) return { ok: true, projectTag: existingTag, created: false };
-
-  let currentCatalogs = catalogs;
-  let currentReservedRequirements = reservedRequirements;
-  for (let attempt = 0; attempt < 3; attempt += 1) {
-    const generatedProjectCode = nextProjectCodeForYear(currentCatalogs.proyectos, anio, currentReservedRequirements);
-    const payload: ProyectoAdjudicado = {
-      id: `pa-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`,
-      anio,
-      codigo_proyecto: generatedProjectCode,
-      cotizacion: cotizacionCodigo,
-      oc,
-      cliente,
-      codigo_cliente: codigoCliente,
-      unidad_trabajo: unidad,
-      codigo_unidad: codigoUnidad,
-      fecha_adjudicacion:
-        readCotizacionField(cotizacion, "fecha_oc", "fecha_oc") ||
-        readCotizacionField(cotizacion, "fecha_entregada", "fecha_entregada") ||
-        readCotizacionField(cotizacion, "fecha_entrega", "fecha_entrega") ||
-        new Date().toISOString().slice(0, 10),
-      estado: "Activo",
-      activo: true,
-    };
-
-    const { error } = await supabase.from("proyectos_adjudicados").insert(payload);
-    if (!error) return { ok: true, projectTag: generatedProjectCode, created: true };
-
-    if (process.env.NODE_ENV === "development") {
-      console.warn("[requirementsRepository] No se pudo registrar proyecto adjudicado automático", {
-        cotizacion: cotizacionCodigo,
-        generatedProjectCode,
-        attempt: attempt + 1,
-        error,
-      });
-    }
-
-    if (error.code !== "23505") {
-      return {
-        ok: false,
-        message: `No se pudo registrar el proyecto adjudicado automático ${generatedProjectCode}: ${error.message}`,
-      };
-    }
-
-    [currentCatalogs, currentReservedRequirements] = await Promise.all([
-      loadRequirementCodeCatalogs(),
-      loadRequirementProjectReservationRows(anio),
-    ]);
-    const concurrentExact = findExactProjectForQuotation(currentCatalogs.proyectos, cotizacionCodigo, anio);
-    const concurrentExactTag = normalizeProjectTag(concurrentExact?.codigo_proyecto);
-    if (concurrentExactTag) return { ok: true, projectTag: concurrentExactTag, created: false };
-  }
-
-  return {
-    ok: false,
-    message: "No se pudo reservar un P### único para la cotización. Reintente para recalcular el siguiente código disponible.",
-  };
 }
 
 function resolveClientUnitCodesFromQuotation(
@@ -563,31 +486,10 @@ export async function createRequirementFromWonQuotationSupabase(
       message: `No se pudo leer los P### reservados en requerimientos para el año ${anio}: ${error instanceof Error ? error.message : String(error)}`,
     };
   }
-  let partsResult = resolveRequirementCodePartsForNewFormat(cotizacion, relatedRequirements ?? [], catalogs, reservedProjectRequirements);
+  const partsResult = resolveRequirementCodePartsForNewFormat(cotizacion, relatedRequirements ?? [], catalogs, reservedProjectRequirements);
 
   if (!partsResult.ok && partsResult.message.includes("Código de Proyecto")) {
-    const baseCodes = resolveClientUnitCodesFromQuotation(cotizacion, catalogs);
-    if (baseCodes.codigoCliente && baseCodes.codigoUnidad) {
-      const generatedProjectTag = await ensureProjectTagForQuotation(
-        cotizacion,
-        catalogs,
-        reservedProjectRequirements,
-        baseCodes.codigoCliente,
-        baseCodes.codigoUnidad,
-        anio,
-      );
-      if (!generatedProjectTag.ok) return { ok: false, message: generatedProjectTag.message };
-      partsResult = {
-        ok: true,
-        parts: {
-          codigoCliente: baseCodes.codigoCliente,
-          codigoUnidad: baseCodes.codigoUnidad,
-          projectTag: normalizeProjectTag(generatedProjectTag.projectTag),
-          anio,
-          source: generatedProjectTag.created ? "new_project" : "exact_project",
-        },
-      };
-    }
+    return { ok: false, message: "Primero confirma la adjudicación de la cotización." };
   }
   if (!partsResult.ok) return partsResult;
   const { parts } = partsResult;

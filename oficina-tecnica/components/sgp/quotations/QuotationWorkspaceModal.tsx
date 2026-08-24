@@ -11,6 +11,7 @@ import { QuotationDocumentationPanel, type QuotationDocumentationPanelHandle } f
 import { TechnicalProposalWorkspaceModal } from "@/components/sgp/quotations/TechnicalProposalWorkspaceModal";
 import { EmailThreadButton } from "@/components/sgp/EmailThreadButton";
 import type { Cotizacion, DetalleRequerimientoItem, Recurso, Requerimiento } from "@/lib/sgp/demoData";
+import type { AdjudicatedProject, AdjudicatedTechnicalProposalOption } from "@/lib/sgp/adjudicatedProjectsRepository";
 import { computeQuotationEconomicRows, normalizeCotizacionEconomicSummary } from "@/lib/sgp/quotationEconomics";
 import { collectQuotationCashflowItems, computeQuotationCashflow, computeQuotationCashflowWeeklyDrilldown, type QuotationCashflowData } from "@/lib/sgp/quotationCashflow";
 import { formatCurrencyNumber, formatDate, normalizeDateForStorage } from "@/lib/sgp/utils";
@@ -34,6 +35,11 @@ type QuotationWorkspaceModalProps = {
   canEditQuotation?: boolean;
   canUploadQuotationDocuments?: boolean;
   isSavingQuotation?: boolean;
+  adjudicatedProject?: AdjudicatedProject | null;
+  technicalProposalOptions?: AdjudicatedTechnicalProposalOption[];
+  adjudicationLoading?: boolean;
+  adjudicationError?: string | null;
+  adjudicationMessage?: string | null;
   onClose: () => void;
   onSave: (finalPatch?: Partial<Cotizacion>) => Cotizacion | boolean | void | Promise<Cotizacion | boolean | void>;
   onDraftChange: (patch: Partial<Cotizacion>) => void;
@@ -44,6 +50,7 @@ type QuotationWorkspaceModalProps = {
   onOpenRequirement?: (requirementId: string) => void;
   onCreateRequirement?: () => RequirementCreationResult | void | Promise<RequirementCreationResult | void>;
   onDeleteRequirement?: (requirementId: string) => boolean | void | Promise<boolean | void>;
+  onConfirmAdjudication?: (proposalId: string | null) => void | Promise<void>;
   canDeleteAssociatedRequirements?: boolean;
   requirementCreationError?: string | null;
   hiddenBusinessFields?: string[];
@@ -333,6 +340,11 @@ export function QuotationWorkspaceModal({
   canEditQuotation = true,
   canUploadQuotationDocuments = canEditQuotation,
   isSavingQuotation = false,
+  adjudicatedProject = null,
+  technicalProposalOptions = [],
+  adjudicationLoading = false,
+  adjudicationError = null,
+  adjudicationMessage = null,
   onClose,
   onSave,
   onDraftChange,
@@ -340,6 +352,7 @@ export function QuotationWorkspaceModal({
   onOpenRequirement,
   onCreateRequirement,
   onDeleteRequirement,
+  onConfirmAdjudication,
   canDeleteAssociatedRequirements = false,
   requirementCreationError,
   hiddenBusinessFields = [],
@@ -372,6 +385,8 @@ export function QuotationWorkspaceModal({
   const [montoDraft, setMontoDraft] = useState<string | null>(null);
   const [avanceDraft, setAvanceDraft] = useState<string | null>(null);
   const [technicalProposalOpen, setTechnicalProposalOpen] = useState(false);
+  const [adjudicationConfirmOpen, setAdjudicationConfirmOpen] = useState(false);
+  const [selectedAwardProposalId, setSelectedAwardProposalId] = useState("");
   const [documentationPendingCount, setDocumentationPendingCount] = useState(0);
   const leftWorkspaceRef = useRef<HTMLDivElement | null>(null);
   const documentationPanelRef = useRef<QuotationDocumentationPanelHandle | null>(null);
@@ -392,6 +407,8 @@ export function QuotationWorkspaceModal({
   const canViewQuotationEconomicSummary = viewGroupPermissions?.quotation_economic_summary !== false;
   const canViewQuotationRelatedRequirements = viewGroupPermissions?.quotation_related_requirements !== false;
   const canViewQuotationActions = viewGroupPermissions?.quotation_actions !== false;
+  const isAwardableQuotation = draft?.estado === "Ganada" || draft?.estado === "Adjudicado";
+  const canShowAdjudicationAction = canViewQuotationActions && canViewQuotationGeneralData && isAwardableQuotation && Boolean(onConfirmAdjudication);
 
   useEffect(() => {
     if (!open) return;
@@ -411,6 +428,8 @@ export function QuotationWorkspaceModal({
     setAvanceDraft(null);
     setPendingConfirm(null);
     setCashflowViewMode("summary");
+    setAdjudicationConfirmOpen(false);
+    setSelectedAwardProposalId(adjudicatedProject?.propuesta_tecnica_id ?? "");
     setCashflowTypeFilters([]);
     setCashflowFilterOpen(false);
     setCashflowConfigOpen(false);
@@ -422,12 +441,13 @@ export function QuotationWorkspaceModal({
     setEconomicTypeDrill(null);
     setEconomicRightPanelView("requirements");
     setFlatMensualDraft(Boolean(draft?.flat_mensual));
-  }, [open, draft?.id, draft?.flat_mensual, autoEditOnOpen]);
+  }, [open, draft?.id, draft?.flat_mensual, autoEditOnOpen, adjudicatedProject?.propuesta_tecnica_id]);
 
   useEffect(() => {
     if (open) return;
     setPendingConfirm(null);
     setTechnicalProposalOpen(false);
+    setAdjudicationConfirmOpen(false);
   }, [open]);
 
   useEffect(() => {
@@ -945,6 +965,12 @@ export function QuotationWorkspaceModal({
     void Promise.resolve(nextAction());
   }
 
+  async function handleConfirmAdjudication() {
+    if (!onConfirmAdjudication || adjudicationLoading) return;
+    await onConfirmAdjudication(selectedAwardProposalId || null);
+    setAdjudicationConfirmOpen(false);
+  }
+
   function handleActivateCashflowMonth(monthKey: string) {
     setSelectedCashflowMonth(monthKey);
     setSelectedCashflowDrill(null);
@@ -1150,6 +1176,22 @@ export function QuotationWorkspaceModal({
                   >
                     <FieldLabelIcon icon="file-text" label="PT REV00" className="text-[11px] font-medium" />
                   </button>
+                  {canShowAdjudicationAction ? (
+                    <button
+                      type="button"
+                      onClick={() => setAdjudicationConfirmOpen(true)}
+                      className={`${actionButtonClassName()} ${
+                        adjudicatedProject ? "border-emerald-200 bg-emerald-50 text-emerald-700" : "border-amber-200 bg-amber-50 text-amber-700"
+                      }`}
+                      title={adjudicatedProject ? `Proyecto adjudicado ${adjudicatedProject.codigo_proyecto}` : "Confirmar adjudicación"}
+                    >
+                      <FieldLabelIcon
+                        icon="clipboard-check"
+                        label={adjudicatedProject ? "Proyecto adjudicado" : "Confirmar adjudicación"}
+                        className="text-[11px] font-medium"
+                      />
+                    </button>
+                  ) : null}
                   {canViewQuotationActions && canViewQuotationGeneralData ? (
                   <FieldLockButton
                     locked={!isQuotationEditing}
@@ -2491,6 +2533,91 @@ export function QuotationWorkspaceModal({
                   className={`${actionButtonClassName()} border-stone-300 bg-stone-100 text-stone-700 hover:bg-stone-200`}
                 >
                   Aplicar
+                </button>
+              </div>
+            </div>
+          </div>
+        ) : null}
+        {adjudicationConfirmOpen ? (
+          <div className="absolute inset-0 z-[88] flex items-center justify-center bg-black/25 p-3">
+            <div className="w-full max-w-[520px] rounded-lg border border-stone-300 bg-panel p-3 shadow-md">
+              <div className="flex items-start justify-between gap-3 border-b border-stone-200 pb-2">
+                <div>
+                  <p className="text-[13px] font-semibold text-stone-800">
+                    {adjudicatedProject ? "Proyecto adjudicado" : "Confirmar adjudicación"}
+                  </p>
+                  <p className="mt-0.5 text-[11px] text-stone-500">{draft.codigo}</p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setAdjudicationConfirmOpen(false)}
+                  className={actionButtonClassName(true)}
+                  aria-label="Cerrar confirmación de adjudicación"
+                  title="Cerrar"
+                >
+                  <ModalActionIcon name="close" />
+                </button>
+              </div>
+
+              <div className="mt-3 grid grid-cols-1 gap-2 text-[11px] text-stone-700 md:grid-cols-2">
+                <LabelValueRow icon="file-text" label="Cotización" value={draft.codigo} />
+                <LabelValueRow icon="clipboard-check" label="Estado" value={draft.estado} />
+                <LabelValueRow icon="align-left" label="Proyecto" value={draft.proyecto || "-"} />
+                <LabelValueRow icon="file-text" label="Cliente" value={draft.cliente || "-"} />
+                <LabelValueRow icon="file-text" label="OC" value={draft.oc || "-"} />
+                <LabelValueRow
+                  icon="clipboard-check"
+                  label="Proyecto adjudicado"
+                  value={adjudicatedProject ? `${adjudicatedProject.codigo_proyecto} · ${adjudicatedProject.estado}` : "Pendiente"}
+                />
+              </div>
+
+              <div className="mt-3 rounded border border-stone-200 bg-white p-2">
+                {technicalProposalOptions.length > 0 ? (
+                  <label className="flex flex-col gap-1 text-[11px] font-medium text-stone-700">
+                    Revisión técnica adjudicada
+                    <select
+                      value={selectedAwardProposalId}
+                      onChange={(event) => setSelectedAwardProposalId(event.target.value)}
+                      disabled={adjudicationLoading}
+                      className="h-8 rounded border border-stone-300 bg-white px-2 text-[11px] text-stone-800 outline-none"
+                    >
+                      <option value="">Sin propuesta técnica adjudicada</option>
+                      {technicalProposalOptions.map((option) => (
+                        <option key={option.id} value={option.id}>
+                          {option.revision || "REV"} · {option.code} · {option.status || option.work_status || "Sin estado"}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                ) : (
+                  <p className="text-[11px] font-medium text-amber-700">
+                    No hay propuesta técnica registrada. El proyecto será creado como Pendiente de revisión adjudicada.
+                  </p>
+                )}
+                {adjudicatedProject?.revision_adjudicada ? (
+                  <p className="mt-2 text-[11px] text-stone-500">
+                    Revisión confirmada: {adjudicatedProject.revision_adjudicada}
+                    {adjudicatedProject.fecha_confirmacion_adjudicacion
+                      ? ` · ${formatDate(adjudicatedProject.fecha_confirmacion_adjudicacion)}`
+                      : ""}
+                  </p>
+                ) : null}
+                {adjudicationMessage ? <p className="mt-2 text-[11px] font-medium text-emerald-700">{adjudicationMessage}</p> : null}
+                {adjudicationError ? <p className="mt-2 text-[11px] font-medium text-red-700">{adjudicationError}</p> : null}
+              </div>
+
+              <div className="mt-3 flex items-center justify-end gap-2">
+                <button type="button" onClick={() => setAdjudicationConfirmOpen(false)} className={actionButtonClassName()}>
+                  Cancelar
+                </button>
+                <button
+                  type="button"
+                  onClick={() => void handleConfirmAdjudication()}
+                  disabled={adjudicationLoading}
+                  className={`${actionButtonClassName()} border-stone-300 bg-stone-100 text-stone-700 hover:bg-stone-200 disabled:cursor-wait disabled:opacity-60`}
+                >
+                  {adjudicationLoading ? "Confirmando..." : adjudicatedProject ? "Actualizar confirmación" : "Confirmar adjudicación"}
                 </button>
               </div>
             </div>
