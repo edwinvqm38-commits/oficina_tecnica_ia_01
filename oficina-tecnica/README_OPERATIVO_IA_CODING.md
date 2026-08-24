@@ -316,7 +316,7 @@ Secuencia mínima recomendada:
 4. prueba funcional en navegador
 5. `git status --short`
 
-Antes de crear o aplicar migraciones Supabase, ejecutar `supabase migration list` y confirmar que el historial local/remoto está reconciliado.
+Antes de crear o aplicar migraciones Supabase, ejecutar `supabase migration list` y confirmar que el historial local/remoto está reconciliado. Las migraciones Supabase versionadas deben mantenerse sincronizadas entre repositorio e historial remoto; evitar aplicar manualmente SQL que ya existe como migración local pendiente.
 
 Estado conocido de validación al 2026-08-12:
 - ESLint: 0 errores.
@@ -480,6 +480,7 @@ npm run dev
 | 2026-08-12 | RQ y Cotizaciones se abren desde Mesa usando workspaces embebidos reales y sin `iframe` | Mantener conversación, scroll y capacidad de edición | ChatGPT + Codex GPT-5.5 |
 | 2026-08-12 | Se cierra la fase de Context Resolver/Mesa con commit `7e7de05` en `feature/requirement-email-thread` | Mantener trazabilidad de la implementación validada | Git |
 | 2026-08-24 | Reconciliar migration history local/remoto antes de continuar con nuevas migraciones | Evitar drift de Supabase y futuros fallos de db push | Supabase CLI + Codex |
+| 2026-08-24 | Las decisiones excepcionales de negocio deben conservar actor y fecha originales mientras el estado que originó la decisión no cambie | Evitar pérdida de trazabilidad por guardados posteriores de información no relacionada | Codex GPT-5.5 para implementación; ChatGPT para diseño y validación |
 
 ## Métricas sugeridas
 

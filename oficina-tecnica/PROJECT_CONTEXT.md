@@ -511,3 +511,36 @@ OFICINA_IA
 
 ### Regla operativa
 Antes de nuevas migraciones Supabase, verificar `supabase migration list` y confirmar que local/remoto continúan reconciliados.
+
+
+## 2026-08-24 | AG-2B - Control contractual de propuesta tecnica
+
+### Estado
+CERRADO
+
+### Commit
+`7e54efe`
+
+### Migracion
+`20260824204939_ag2b_r1_contractual_pt_required`
+
+### Reglas funcionales
+1. Toda cotizacion historica queda por default con `requiere_propuesta_tecnica = true`.
+2. Para adjudicaciones nuevas con `requiere_propuesta_tecnica = true`:
+   - Debe seleccionarse una propuesta tecnica valida.
+   - La PT debe pertenecer a la cotizacion.
+   - La revision contractual se obtiene desde `technical_proposals.revision`.
+3. Para `requiere_propuesta_tecnica = false`:
+   - Se exige justificacion.
+   - Se registra `user_id`.
+   - Se conserva snapshot de email.
+   - Se registra timestamp de decision.
+4. Transiciones:
+   - `true -> false`: nueva auditoria.
+   - `false -> false`: preserva actor/email/timestamp.
+   - `false -> true`: limpia auditoria.
+   - Nueva transicion `true -> false`: genera nueva auditoria.
+5. Idempotencia: la RPC busca primero un proyecto adjudicado activo existente antes de aplicar los nuevos bloqueos de PT.
+6. Historico preservado: cotizacion `529a0184-589b-4573-8db2-11c7f22ef125` continua asociada al proyecto `pa-5d631cceb74e426da6d466752e2df2ae` sin duplicacion.
+7. Riesgo conocido no bloqueante: FK `no_requiere_pt_decidido_por_user_id` usa `ON DELETE SET NULL`. Actualmente no existe flujo normal de DELETE fisico de `user_profiles`; revisar si en el futuro se implementa eliminacion fisica de usuarios.
+8. AG-2C: NO iniciado.
