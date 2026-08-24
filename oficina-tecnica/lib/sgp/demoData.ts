@@ -56,6 +56,11 @@ export type Cotizacion = {
   fecha_inicio_analisis?: string;
   fecha_fin_analisis?: string;
   meses_analisis?: number | null;
+  requiere_propuesta_tecnica?: boolean;
+  no_requiere_pt_justificacion?: string;
+  no_requiere_pt_decidido_por_user_id?: string | null;
+  no_requiere_pt_decidido_por_email?: string | null;
+  no_requiere_pt_decidido_at?: string | null;
 };
 
 export type Requerimiento = {

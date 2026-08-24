@@ -409,6 +409,17 @@ export function QuotationWorkspaceModal({
   const canViewQuotationActions = viewGroupPermissions?.quotation_actions !== false;
   const isAwardableQuotation = draft?.estado === "Ganada" || draft?.estado === "Adjudicado";
   const canShowAdjudicationAction = canViewQuotationActions && canViewQuotationGeneralData && isAwardableQuotation && Boolean(onConfirmAdjudication);
+  const requiresTechnicalProposal = draft?.requiere_propuesta_tecnica !== false;
+  const noRequiresPtJustification = draft?.no_requiere_pt_justificacion?.trim() ?? "";
+  const isExistingAdjudication = Boolean(adjudicatedProject);
+  const adjudicationBlockingMessage =
+    !isExistingAdjudication && requiresTechnicalProposal && technicalProposalOptions.length === 0
+      ? "Esta cotización requiere una Propuesta Técnica. Registre y seleccione la PT adjudicada antes de confirmar la adjudicación."
+      : !isExistingAdjudication && requiresTechnicalProposal && !selectedAwardProposalId
+        ? "Seleccione la PT/revisión adjudicada antes de confirmar la adjudicación."
+        : !isExistingAdjudication && !requiresTechnicalProposal && !noRequiresPtJustification
+          ? "Debe indicar por qué esta cotización no requiere Propuesta Técnica."
+          : null;
 
   useEffect(() => {
     if (!open) return;
@@ -1668,6 +1679,55 @@ export function QuotationWorkspaceModal({
                       />
                     }
                   />
+                  <LabelValueRow
+                    icon="file-text"
+                    label="Propuesta Técnica"
+                    className="xl:col-span-2"
+                    valueAlign="left"
+                    value={
+                      isQuotationEditing ? (
+                        <select
+                          value={requiresTechnicalProposal ? "required" : "not_required"}
+                          onChange={(event) => {
+                            const requiresPt = event.target.value === "required";
+                            onDraftChange({
+                              requiere_propuesta_tecnica: requiresPt,
+                              no_requiere_pt_justificacion: requiresPt ? "" : draft.no_requiere_pt_justificacion ?? "",
+                            });
+                          }}
+                          className={`${editableInputClassName("lg", true)} text-left`}
+                        >
+                          <option value="required">Requiere PT</option>
+                          <option value="not_required">No requiere PT</option>
+                        </select>
+                      ) : (
+                        <span className={readOnlyValueClassName("lg", "left")}>
+                          {requiresTechnicalProposal ? "Requiere PT" : "No requiere PT"}
+                        </span>
+                      )
+                    }
+                  />
+                  {!requiresTechnicalProposal ? (
+                    <LabelValueRow
+                      icon="align-left"
+                      label="Justificación"
+                      className="xl:col-span-2"
+                      valueAlign="left"
+                      value={
+                        isQuotationEditing ? (
+                          <input
+                            value={draft.no_requiere_pt_justificacion ?? ""}
+                            onChange={(event) => onDraftChange({ no_requiere_pt_justificacion: event.target.value })}
+                            disabled={!isQuotationEditing}
+                            required
+                            className={`${editableInputClassName("xl", isQuotationEditing)} text-left`}
+                          />
+                        ) : (
+                          <span className={readOnlyValueClassName("xl", "left")}>{draft.no_requiere_pt_justificacion || "-"}</span>
+                        )
+                      }
+                    />
+                  ) : null}
                 </div>
               </div>
               ) : (
@@ -2565,6 +2625,7 @@ export function QuotationWorkspaceModal({
                 <LabelValueRow icon="align-left" label="Proyecto" value={draft.proyecto || "-"} />
                 <LabelValueRow icon="file-text" label="Cliente" value={draft.cliente || "-"} />
                 <LabelValueRow icon="file-text" label="OC" value={draft.oc || "-"} />
+                <LabelValueRow icon="file-text" label="Propuesta Técnica" value={requiresTechnicalProposal ? "Requiere PT" : "No requiere PT"} />
                 <LabelValueRow
                   icon="clipboard-check"
                   label="Proyecto adjudicado"
@@ -2573,7 +2634,7 @@ export function QuotationWorkspaceModal({
               </div>
 
               <div className="mt-3 rounded border border-stone-200 bg-white p-2">
-                {technicalProposalOptions.length > 0 ? (
+                {requiresTechnicalProposal && technicalProposalOptions.length > 0 ? (
                   <label className="flex flex-col gap-1 text-[11px] font-medium text-stone-700">
                     Revisión técnica adjudicada
                     <select
@@ -2582,7 +2643,7 @@ export function QuotationWorkspaceModal({
                       disabled={adjudicationLoading}
                       className="h-8 rounded border border-stone-300 bg-white px-2 text-[11px] text-stone-800 outline-none"
                     >
-                      <option value="">Sin propuesta técnica adjudicada</option>
+                      {adjudicatedProject ? <option value="">Sin cambio de revisión</option> : null}
                       {technicalProposalOptions.map((option) => (
                         <option key={option.id} value={option.id}>
                           {option.revision || "REV"} · {option.code} · {option.status || option.work_status || "Sin estado"}
@@ -2590,9 +2651,18 @@ export function QuotationWorkspaceModal({
                       ))}
                     </select>
                   </label>
+                ) : requiresTechnicalProposal && adjudicatedProject ? (
+                  <p className="text-[11px] font-medium text-stone-600">
+                    Proyecto adjudicado existente recuperado. No se creará un duplicado.
+                  </p>
+                ) : !requiresTechnicalProposal ? (
+                  <div className="rounded border border-emerald-200 bg-emerald-50 px-2 py-1.5">
+                    <p className="text-[11px] font-semibold text-emerald-700">Cotización registrada como "No requiere PT"</p>
+                    <p className="mt-1 text-[11px] text-emerald-800">{noRequiresPtJustification || "Sin justificación registrada."}</p>
+                  </div>
                 ) : (
                   <p className="text-[11px] font-medium text-amber-700">
-                    No hay propuesta técnica registrada. El proyecto será creado como Pendiente de revisión adjudicada.
+                    Esta cotización requiere una Propuesta Técnica. Registre y seleccione la PT adjudicada antes de confirmar la adjudicación.
                   </p>
                 )}
                 {adjudicatedProject?.revision_adjudicada ? (
@@ -2604,6 +2674,7 @@ export function QuotationWorkspaceModal({
                   </p>
                 ) : null}
                 {adjudicationMessage ? <p className="mt-2 text-[11px] font-medium text-emerald-700">{adjudicationMessage}</p> : null}
+                {adjudicationBlockingMessage ? <p className="mt-2 text-[11px] font-medium text-amber-700">{adjudicationBlockingMessage}</p> : null}
                 {adjudicationError ? <p className="mt-2 text-[11px] font-medium text-red-700">{adjudicationError}</p> : null}
               </div>
 
@@ -2614,7 +2685,7 @@ export function QuotationWorkspaceModal({
                 <button
                   type="button"
                   onClick={() => void handleConfirmAdjudication()}
-                  disabled={adjudicationLoading}
+                  disabled={adjudicationLoading || Boolean(adjudicationBlockingMessage)}
                   className={`${actionButtonClassName()} border-stone-300 bg-stone-100 text-stone-700 hover:bg-stone-200 disabled:cursor-wait disabled:opacity-60`}
                 >
                   {adjudicationLoading ? "Confirmando..." : adjudicatedProject ? "Actualizar confirmación" : "Confirmar adjudicación"}

@@ -310,6 +310,11 @@ function normalizeCotizacionDraft(row: Cotizacion): Cotizacion {
       typeof row.meses_analisis === "number" && Number.isFinite(row.meses_analisis) && row.meses_analisis > 0
         ? Math.round(row.meses_analisis)
         : null,
+    requiere_propuesta_tecnica: row.requiere_propuesta_tecnica !== false,
+    no_requiere_pt_justificacion: row.requiere_propuesta_tecnica === false ? row.no_requiere_pt_justificacion || "" : "",
+    no_requiere_pt_decidido_por_user_id: row.requiere_propuesta_tecnica === false ? row.no_requiere_pt_decidido_por_user_id ?? null : null,
+    no_requiere_pt_decidido_por_email: row.requiere_propuesta_tecnica === false ? row.no_requiere_pt_decidido_por_email ?? null : null,
+    no_requiere_pt_decidido_at: row.requiere_propuesta_tecnica === false ? row.no_requiere_pt_decidido_at ?? null : null,
   };
 }
 
@@ -640,6 +645,7 @@ export default function CotizacionesPage({ embeddedWorkspace = null }: Cotizacio
   const [resourcePermissionsLoading, setResourcePermissionsLoading] = useState(true);
   const [resourceModulePermissions, setResourceModulePermissions] = useState<ModulePermissions | null>(null);
   const currentUserEmail = (profile.email ?? user.email ?? "").trim().toLowerCase();
+  const currentUserId = (profile.id || user.id || "").trim();
   const currentObservationUser = useMemo<ObservationUser | null>(() => {
     if (!user.id) return null;
     return {
@@ -1401,6 +1407,11 @@ export default function CotizacionesPage({ embeddedWorkspace = null }: Cotizacio
       fecha_inicio_analisis: "",
       fecha_fin_analisis: "",
       meses_analisis: null,
+      requiere_propuesta_tecnica: true,
+      no_requiere_pt_justificacion: "",
+      no_requiere_pt_decidido_por_user_id: null,
+      no_requiere_pt_decidido_por_email: null,
+      no_requiere_pt_decidido_at: null,
     };
   }
 
@@ -1542,6 +1553,11 @@ export default function CotizacionesPage({ embeddedWorkspace = null }: Cotizacio
           return false;
         }
 
+        if (normalized.requiere_propuesta_tecnica === false && !normalized.no_requiere_pt_justificacion?.trim()) {
+          setWarning("Debe indicar por qué esta cotización no requiere Propuesta Técnica.");
+          return false;
+        }
+
         if (process.env.NODE_ENV === "development") {
           console.debug("[cotizaciones] guardando cotizacion en Supabase", {
             id: editingId,
@@ -1559,7 +1575,7 @@ export default function CotizacionesPage({ embeddedWorkspace = null }: Cotizacio
         }
 
         try {
-          const updated = normalizeCotizacionDraft(await updateCotizacion(editingId, normalized, { userEmail: currentUserEmail }));
+          const updated = normalizeCotizacionDraft(await updateCotizacion(editingId, normalized, { userId: currentUserId, userEmail: currentUserEmail }));
           clearCoreAppDataCache();
           setCotizaciones((prev) => prev.map((row) => (row.id === editingId ? updated : row)));
           setDraft(updated);
@@ -1613,6 +1629,11 @@ export default function CotizacionesPage({ embeddedWorkspace = null }: Cotizacio
           return false;
         }
 
+        if (normalized.requiere_propuesta_tecnica === false && !normalized.no_requiere_pt_justificacion?.trim()) {
+          setWarning("Debe indicar por qué esta cotización no requiere Propuesta Técnica.");
+          return false;
+        }
+
         try {
           const created = normalizeCotizacionDraft(
             await createCotizacion(
@@ -1620,7 +1641,7 @@ export default function CotizacionesPage({ embeddedWorkspace = null }: Cotizacio
                 ...normalized,
                 estado: "Borrador",
               },
-              { userEmail: currentUserEmail },
+              { userId: currentUserId, userEmail: currentUserEmail },
             ),
           );
           clearCoreAppDataCache();
@@ -2159,6 +2180,20 @@ export default function CotizacionesPage({ embeddedWorkspace = null }: Cotizacio
 
     if (draft.estado !== "Ganada" && draft.estado !== "Adjudicado") {
       setAdjudicationError("Solo se pueden confirmar adjudicaciones de cotizaciones Ganada o Adjudicado histórico.");
+      return;
+    }
+
+    const requiresTechnicalProposal = draft.requiere_propuesta_tecnica !== false;
+    const hasExistingAdjudication = Boolean(adjudicatedProjectsByQuotationId[draft.id]);
+    if (!hasExistingAdjudication && requiresTechnicalProposal && !propuestaTecnicaId) {
+      setAdjudicationError(
+        "Esta cotización requiere una Propuesta Técnica. Registre y seleccione la PT adjudicada antes de confirmar la adjudicación.",
+      );
+      return;
+    }
+
+    if (!hasExistingAdjudication && !requiresTechnicalProposal && !draft.no_requiere_pt_justificacion?.trim()) {
+      setAdjudicationError("Debe indicar por qué esta cotización no requiere Propuesta Técnica.");
       return;
     }
 

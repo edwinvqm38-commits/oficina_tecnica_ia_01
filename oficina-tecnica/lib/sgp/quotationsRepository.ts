@@ -19,10 +19,12 @@ export type QuotationsListResult = {
 };
 
 export type CreateCotizacionOptions = {
+  userId?: string;
   userEmail?: string;
 };
 
 export type UpdateCotizacionOptions = {
+  userId?: string;
   userEmail?: string;
 };
 
@@ -92,6 +94,11 @@ type SupabaseCotizacion = {
   fecha_inicio_analisis: string | null;
   fecha_fin_analisis: string | null;
   meses_analisis: number | null;
+  requiere_propuesta_tecnica: boolean | null;
+  no_requiere_pt_justificacion: string | null;
+  no_requiere_pt_decidido_por_user_id: string | null;
+  no_requiere_pt_decidido_por_email: string | null;
+  no_requiere_pt_decidido_at: string | null;
   metadata: Record<string, unknown> | null;
   deleted_at: string | null;
   created_at: string;
@@ -135,6 +142,11 @@ const QUOTATIONS_SELECT = `
   fecha_inicio_analisis,
   fecha_fin_analisis,
   meses_analisis,
+  requiere_propuesta_tecnica,
+  no_requiere_pt_justificacion,
+  no_requiere_pt_decidido_por_user_id,
+  no_requiere_pt_decidido_por_email,
+  no_requiere_pt_decidido_at,
   metadata,
   deleted_at,
   created_at,
@@ -339,6 +351,11 @@ function mapSupabaseCotizacion(row: SupabaseCotizacion): CotizacionWithSupabaseM
     fecha_fin_analisis: toIsoDate(row.fecha_fin_analisis),
     meses_analisis:
       typeof row.meses_analisis === "number" && Number.isFinite(row.meses_analisis) ? row.meses_analisis : null,
+    requiere_propuesta_tecnica: row.requiere_propuesta_tecnica !== false,
+    no_requiere_pt_justificacion: normalizeString(row.no_requiere_pt_justificacion),
+    no_requiere_pt_decidido_por_user_id: toNullableString(row.no_requiere_pt_decidido_por_user_id),
+    no_requiere_pt_decidido_por_email: toNullableString(row.no_requiere_pt_decidido_por_email),
+    no_requiere_pt_decidido_at: toNullableString(row.no_requiere_pt_decidido_at),
     metadata: row.metadata,
     historical_import_quality: quality ?? undefined,
   };
@@ -360,9 +377,69 @@ function buildDraftFields(row: Cotizacion): Record<string, unknown> {
   };
 }
 
+function isUuid(value: unknown): value is string {
+  return typeof value === "string" && /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value.trim());
+}
+
+type NoPtAuditState = Pick<
+  SupabaseCotizacion,
+  "requiere_propuesta_tecnica" | "no_requiere_pt_decidido_por_user_id" | "no_requiere_pt_decidido_por_email" | "no_requiere_pt_decidido_at"
+>;
+
+type NoPtAuditPayload = {
+  no_requiere_pt_justificacion: string | null;
+  no_requiere_pt_decidido_por_user_id: string | null;
+  no_requiere_pt_decidido_por_email: string | null;
+  no_requiere_pt_decidido_at: string | null;
+};
+
+function requireNoPtAuditActor(userId: unknown, errorFactory: (message: string) => Error): string {
+  if (isUuid(userId)) return userId.trim();
+  throw errorFactory("No se encontró el usuario autenticado para auditar la decisión No requiere PT.");
+}
+
+function buildNoPtAuditFields(
+  row: Cotizacion,
+  options: { userId?: string; userEmail?: string },
+  current: NoPtAuditState | null,
+  errorFactory: (message: string) => Error,
+): NoPtAuditPayload {
+  const requiresPt = row.requiere_propuesta_tecnica !== false;
+  if (requiresPt) {
+    return {
+      no_requiere_pt_justificacion: null,
+      no_requiere_pt_decidido_por_user_id: null,
+      no_requiere_pt_decidido_por_email: null,
+      no_requiere_pt_decidido_at: null,
+    };
+  }
+
+  const justification = normalizeString(row.no_requiere_pt_justificacion);
+  if (!justification) {
+    throw errorFactory("Debe indicar por qué esta cotización no requiere Propuesta Técnica.");
+  }
+
+  if (current?.requiere_propuesta_tecnica === false) {
+    return {
+      no_requiere_pt_justificacion: justification,
+      no_requiere_pt_decidido_por_user_id: current.no_requiere_pt_decidido_por_user_id,
+      no_requiere_pt_decidido_por_email: current.no_requiere_pt_decidido_por_email,
+      no_requiere_pt_decidido_at: current.no_requiere_pt_decidido_at,
+    };
+  }
+
+  return {
+    no_requiere_pt_justificacion: justification,
+    no_requiere_pt_decidido_por_user_id: requireNoPtAuditActor(options.userId, errorFactory),
+    no_requiere_pt_decidido_por_email: toNullableString(options.userEmail),
+    no_requiere_pt_decidido_at: new Date().toISOString(),
+  };
+}
+
 function buildWritableCotizacionFields(row: Cotizacion) {
   const codigo = normalizeString(row.codigo);
   const proyecto = normalizeString(row.proyecto);
+  const requierePropuestaTecnica = row.requiere_propuesta_tecnica !== false;
 
   if (!codigo || !proyecto) {
     throw new CreateCotizacionError("Código y proyecto son obligatorios para crear una cotización.", "missing_required_fields");
@@ -399,11 +476,18 @@ function buildWritableCotizacionFields(row: Cotizacion) {
     fecha_inicio_analisis: toDateOrNull(row.fecha_inicio_analisis),
     fecha_fin_analisis: toDateOrNull(row.fecha_fin_analisis),
     meses_analisis: row.meses_analisis ?? null,
+    requiere_propuesta_tecnica: requierePropuestaTecnica,
   };
 }
 
 function buildCreateCotizacionPayload(row: Cotizacion, options: CreateCotizacionOptions = {}) {
   const writableFields = buildWritableCotizacionFields(row);
+  const noPtAuditFields = buildNoPtAuditFields(
+    row,
+    options,
+    null,
+    (message) => new CreateCotizacionError(message, "missing_required_fields"),
+  );
   const initialMetadata = /^COT-EKA-\d{4}-\d{3}$/i.test(writableFields.codigo)
     ? {
         codigo_madre: writableFields.codigo,
@@ -426,6 +510,7 @@ function buildCreateCotizacionPayload(row: Cotizacion, options: CreateCotizacion
 
   return {
     ...writableFields,
+    ...noPtAuditFields,
     estado: "Borrador",
     responsable_tecnico: toNullableString(row.responsable_tecnico || options.userEmail),
     fecha_registro: toDateOrNull(row.fecha_registro) ?? new Date().toISOString().slice(0, 10),
@@ -465,13 +550,20 @@ async function createQuotationDriveMetadata(quotationCode: string): Promise<Reco
 
 function buildUpdateCotizacionPayload(
   row: Cotizacion,
-  existingMetadata: Record<string, unknown> | null,
+  currentRow: Pick<SupabaseCotizacion, "metadata"> & NoPtAuditState,
   options: UpdateCotizacionOptions = {},
 ) {
   const writableFields = buildWritableCotizacionFields(row);
-  const metadata = existingMetadata ?? {};
+  const noPtAuditFields = buildNoPtAuditFields(
+    row,
+    options,
+    currentRow,
+    (message) => new UpdateCotizacionError(message, "missing_required_fields"),
+  );
+  const metadata = currentRow.metadata ?? {};
   return {
     ...writableFields,
+    ...noPtAuditFields,
     updated_at: new Date().toISOString(),
     metadata: {
       ...metadata,
@@ -584,7 +676,7 @@ export async function updateCotizacion(
 
   const { data: current, error: currentError } = await supabase
     .from("cotizaciones")
-    .select("id,codigo,metadata")
+    .select("id,codigo,metadata,requiere_propuesta_tecnica,no_requiere_pt_decidido_por_user_id,no_requiere_pt_decidido_por_email,no_requiere_pt_decidido_at")
     .eq("id", normalizedId)
     .maybeSingle();
 
@@ -607,7 +699,7 @@ export async function updateCotizacion(
     throw new UpdateCotizacionError("No se encontró la cotización a guardar.", "not_found");
   }
 
-  const currentRow = current as { id: string; codigo: string | null; metadata: Record<string, unknown> | null };
+  const currentRow = current as Pick<SupabaseCotizacion, "id" | "codigo" | "metadata"> & NoPtAuditState;
   if (normalizeString(currentRow.codigo).toLowerCase() !== codigo.toLowerCase()) {
     const { data: duplicate, error: duplicateCheckError } = await supabase
       .from("cotizaciones")
@@ -636,7 +728,7 @@ export async function updateCotizacion(
     }
   }
 
-  const payload = removeUndefinedValues(buildUpdateCotizacionPayload(row, currentRow.metadata, options));
+  const payload = removeUndefinedValues(buildUpdateCotizacionPayload(row, currentRow, options));
   if (process.env.NODE_ENV === "development") {
     console.debug("[quotationsRepository] updateCotizacion payload", {
       id: normalizedId,
