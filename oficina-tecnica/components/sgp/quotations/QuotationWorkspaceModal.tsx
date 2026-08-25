@@ -7,6 +7,7 @@ import { DateTextInput } from "@/components/sgp/ui/DateTextInput";
 import { QuotationCashflowDashboardView } from "@/components/sgp/quotations/QuotationCashflowDashboardView";
 import { QuotationCashflowDrilldownPanel } from "@/components/sgp/quotations/QuotationCashflowDrilldownPanel";
 import { QuotationMonthlyCashflowView } from "@/components/sgp/quotations/QuotationMonthlyCashflowView";
+import { QuotationBudgetPanel } from "@/components/sgp/quotations/QuotationBudgetPanel";
 import { QuotationDocumentationPanel, type QuotationDocumentationPanelHandle } from "@/components/sgp/quotations/QuotationDocumentationPanel";
 import { TechnicalProposalWorkspaceModal } from "@/components/sgp/quotations/TechnicalProposalWorkspaceModal";
 import { EmailThreadButton } from "@/components/sgp/EmailThreadButton";
@@ -362,7 +363,7 @@ export function QuotationWorkspaceModal({
   const [isQuotationEditing, setIsQuotationEditing] = useState(false);
   const [isEconomicEditing, setIsEconomicEditing] = useState(false);
   const [rightPanelMode, setRightPanelMode] = useState<"detail" | "documents">("detail");
-  const [summaryViewMode, setSummaryViewMode] = useState<"economic" | "cashflow">("economic");
+  const [summaryViewMode, setSummaryViewMode] = useState<"economic" | "budget" | "cashflow">("economic");
   const [cashflowViewMode, setCashflowViewMode] = useState<"summary" | "dashboard">("summary");
   const [cashflowTypeFilters, setCashflowTypeFilters] = useState<string[]>([]);
   const [cashflowFilterOpen, setCashflowFilterOpen] = useState(false);
@@ -603,7 +604,7 @@ export function QuotationWorkspaceModal({
   }, [monthlyCashflowWeekly, cashflowTypeFilters]);
 
   useEffect(() => {
-    if (summaryViewMode === "economic") {
+    if (summaryViewMode !== "cashflow") {
       setSelectedCashflowMonth(null);
       setSelectedCashflowDrill(null);
     }
@@ -1753,6 +1754,15 @@ export function QuotationWorkspaceModal({
                       </button>
                       <button
                         type="button"
+                        onClick={() => setSummaryViewMode("budget")}
+                        className={`rounded px-2 py-0.5 text-[10px] font-medium ${
+                          summaryViewMode === "budget" ? "bg-stone-100 text-stone-700" : "text-stone-500"
+                        }`}
+                      >
+                        Presupuesto
+                      </button>
+                      <button
+                        type="button"
                         onClick={() => {
                           if (!draft.flat_mensual) return;
                           setSummaryViewMode("cashflow");
@@ -2044,6 +2054,15 @@ export function QuotationWorkspaceModal({
                       Información económica oculta por permisos.
                     </div>
                   )
+                  ) : summaryViewMode === "budget" ? (
+                    <QuotationBudgetPanel
+                      key={draft.id}
+                      cotizacionId={draft.id}
+                      monedaCodigo={draft.moneda_cotizacion}
+                      recursos={recursos}
+                      canEdit={canEditQuotation && canViewQuotationActions}
+                      canViewPrices={canShowEconomicValues}
+                    />
                   ) : (
                     <div className="flex min-h-0 flex-col border-t border-stone-200 pt-2">
                       <div className="mb-2 flex flex-wrap items-center gap-2">
@@ -2189,7 +2208,9 @@ export function QuotationWorkspaceModal({
                       ? "Documentación"
                       : summaryViewMode === "economic"
                         ? "Requerimientos asociados"
-                        : "Detalle mensual"
+                        : summaryViewMode === "budget"
+                          ? "Presupuesto detallado"
+                          : "Detalle mensual"
                   }
                   className="text-[11px] font-medium"
                 />
@@ -2217,6 +2238,10 @@ export function QuotationWorkspaceModal({
                     </div>
                     ) : null
                   )
+                ) : summaryViewMode === "budget" ? (
+                  <div className="rounded border border-stone-200 bg-stone-50 px-2 py-1 text-[10px] text-stone-500">
+                    BASE / OFERTADO
+                  </div>
                 ) : (
                   <div className="rounded border border-stone-200 bg-stone-50 px-2 py-1 text-[10px] text-stone-500">
                     Semanas e ítems del gasto real
@@ -2243,6 +2268,20 @@ export function QuotationWorkspaceModal({
                     onPendingCountChange={handleDocumentationPendingCountChange}
                   />
                 )
+              ) : summaryViewMode === "budget" ? (
+                <div className="mt-1 flex min-h-0 flex-1 flex-col rounded border border-border bg-white px-3 py-3 text-[11px] text-stone-600">
+                  <div className="space-y-2">
+                    <div className="rounded border border-stone-200 bg-stone-50 px-2 py-2">
+                      El presupuesto detallado utiliza recursos del catalogo maestro y calcula BASE / OFERTADO desde sus cantidades y precios.
+                    </div>
+                    <div className="rounded border border-stone-200 bg-white px-2 py-2">
+                      La revision puede editarse solo en BORRADOR. LISTO_PARA_ADJUDICAR queda preparada para una adjudicacion futura controlada.
+                    </div>
+                    <div className="rounded border border-stone-200 bg-white px-2 py-2">
+                      RQ, REAL, linea base contractual y cambios contractuales permanecen fuera de esta fase.
+                    </div>
+                  </div>
+                </div>
               ) : !canViewQuotationRelatedRequirements ? (
                 <div className="mt-1 flex min-h-0 flex-1 items-center justify-center rounded border border-border bg-white px-3 py-8 text-center text-[11px] text-stone-500">
                   Requerimientos asociados ocultos por permisos.
