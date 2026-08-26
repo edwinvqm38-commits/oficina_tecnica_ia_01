@@ -13,6 +13,7 @@ import { TechnicalProposalWorkspaceModal } from "@/components/sgp/quotations/Tec
 import { EmailThreadButton } from "@/components/sgp/EmailThreadButton";
 import type { Cotizacion, DetalleRequerimientoItem, Recurso, Requerimiento } from "@/lib/sgp/demoData";
 import type { AdjudicatedProject, AdjudicatedTechnicalProposalOption } from "@/lib/sgp/adjudicatedProjectsRepository";
+import type { QuotationBudget } from "@/lib/sgp/quotationBudgetsRepository";
 import { computeQuotationEconomicRows, normalizeCotizacionEconomicSummary } from "@/lib/sgp/quotationEconomics";
 import { collectQuotationCashflowItems, computeQuotationCashflow, computeQuotationCashflowWeeklyDrilldown, type QuotationCashflowData } from "@/lib/sgp/quotationCashflow";
 import { formatCurrencyNumber, formatDate, normalizeDateForStorage } from "@/lib/sgp/utils";
@@ -38,6 +39,7 @@ type QuotationWorkspaceModalProps = {
   isSavingQuotation?: boolean;
   adjudicatedProject?: AdjudicatedProject | null;
   technicalProposalOptions?: AdjudicatedTechnicalProposalOption[];
+  adjudicationBudgetOptions?: QuotationBudget[];
   adjudicationLoading?: boolean;
   adjudicationError?: string | null;
   adjudicationMessage?: string | null;
@@ -51,7 +53,7 @@ type QuotationWorkspaceModalProps = {
   onOpenRequirement?: (requirementId: string) => void;
   onCreateRequirement?: () => RequirementCreationResult | void | Promise<RequirementCreationResult | void>;
   onDeleteRequirement?: (requirementId: string) => boolean | void | Promise<boolean | void>;
-  onConfirmAdjudication?: (proposalId: string | null) => void | Promise<void>;
+  onConfirmAdjudication?: (proposalId: string | null, budgetId: string | null) => void | Promise<void>;
   canDeleteAssociatedRequirements?: boolean;
   requirementCreationError?: string | null;
   hiddenBusinessFields?: string[];
@@ -343,6 +345,7 @@ export function QuotationWorkspaceModal({
   isSavingQuotation = false,
   adjudicatedProject = null,
   technicalProposalOptions = [],
+  adjudicationBudgetOptions = [],
   adjudicationLoading = false,
   adjudicationError = null,
   adjudicationMessage = null,
@@ -388,6 +391,7 @@ export function QuotationWorkspaceModal({
   const [technicalProposalOpen, setTechnicalProposalOpen] = useState(false);
   const [adjudicationConfirmOpen, setAdjudicationConfirmOpen] = useState(false);
   const [selectedAwardProposalId, setSelectedAwardProposalId] = useState("");
+  const [selectedAwardBudgetId, setSelectedAwardBudgetId] = useState("");
   const [documentationPendingCount, setDocumentationPendingCount] = useState(0);
   const leftWorkspaceRef = useRef<HTMLDivElement | null>(null);
   const documentationPanelRef = useRef<QuotationDocumentationPanelHandle | null>(null);
@@ -413,10 +417,29 @@ export function QuotationWorkspaceModal({
   const requiresTechnicalProposal = draft?.requiere_propuesta_tecnica !== false;
   const noRequiresPtJustification = draft?.no_requiere_pt_justificacion?.trim() ?? "";
   const isExistingAdjudication = Boolean(adjudicatedProject);
+  const readyBudgetOptions = useMemo(
+    () => adjudicationBudgetOptions.filter((budget) => budget.estado === "LISTO_PARA_ADJUDICAR"),
+    [adjudicationBudgetOptions],
+  );
+  const existingAwardBudget = adjudicatedProject?.presupuesto_adjudicado_id
+    ? adjudicationBudgetOptions.find((budget) => budget.id === adjudicatedProject.presupuesto_adjudicado_id) ?? null
+    : null;
+  const existingAwardProposal = adjudicatedProject?.propuesta_tecnica_id
+    ? technicalProposalOptions.find((option) => option.id === adjudicatedProject.propuesta_tecnica_id) ?? null
+    : null;
+  const selectedAwardBudget = selectedAwardBudgetId
+    ? adjudicationBudgetOptions.find((budget) => budget.id === selectedAwardBudgetId) ?? null
+    : null;
+  const hasValidAwardBudget =
+    Boolean(adjudicatedProject?.presupuesto_adjudicado_id && selectedAwardBudgetId === adjudicatedProject.presupuesto_adjudicado_id) ||
+    selectedAwardBudget?.estado === "LISTO_PARA_ADJUDICAR";
+  const hasConfirmedTechnicalProposal = Boolean(adjudicatedProject?.propuesta_tecnica_id || selectedAwardProposalId);
   const adjudicationBlockingMessage =
-    !isExistingAdjudication && requiresTechnicalProposal && technicalProposalOptions.length === 0
+    !hasValidAwardBudget
+      ? "Seleccione una revisión de presupuesto en estado LISTO_PARA_ADJUDICAR."
+      : requiresTechnicalProposal && !adjudicatedProject?.propuesta_tecnica_id && technicalProposalOptions.length === 0
       ? "Esta cotización requiere una Propuesta Técnica. Registre y seleccione la PT adjudicada antes de confirmar la adjudicación."
-      : !isExistingAdjudication && requiresTechnicalProposal && !selectedAwardProposalId
+      : requiresTechnicalProposal && !hasConfirmedTechnicalProposal
         ? "Seleccione la PT/revisión adjudicada antes de confirmar la adjudicación."
         : !isExistingAdjudication && !requiresTechnicalProposal && !noRequiresPtJustification
           ? "Debe indicar por qué esta cotización no requiere Propuesta Técnica."
@@ -442,6 +465,7 @@ export function QuotationWorkspaceModal({
     setCashflowViewMode("summary");
     setAdjudicationConfirmOpen(false);
     setSelectedAwardProposalId(adjudicatedProject?.propuesta_tecnica_id ?? "");
+    setSelectedAwardBudgetId(adjudicatedProject?.presupuesto_adjudicado_id ?? "");
     setCashflowTypeFilters([]);
     setCashflowFilterOpen(false);
     setCashflowConfigOpen(false);
@@ -453,7 +477,14 @@ export function QuotationWorkspaceModal({
     setEconomicTypeDrill(null);
     setEconomicRightPanelView("requirements");
     setFlatMensualDraft(Boolean(draft?.flat_mensual));
-  }, [open, draft?.id, draft?.flat_mensual, autoEditOnOpen, adjudicatedProject?.propuesta_tecnica_id]);
+  }, [
+    open,
+    draft?.id,
+    draft?.flat_mensual,
+    autoEditOnOpen,
+    adjudicatedProject?.propuesta_tecnica_id,
+    adjudicatedProject?.presupuesto_adjudicado_id,
+  ]);
 
   useEffect(() => {
     if (open) return;
@@ -979,7 +1010,7 @@ export function QuotationWorkspaceModal({
 
   async function handleConfirmAdjudication() {
     if (!onConfirmAdjudication || adjudicationLoading) return;
-    await onConfirmAdjudication(selectedAwardProposalId || null);
+    await onConfirmAdjudication(selectedAwardProposalId || null, selectedAwardBudgetId || null);
     setAdjudicationConfirmOpen(false);
   }
 
@@ -2670,10 +2701,53 @@ export function QuotationWorkspaceModal({
                   label="Proyecto adjudicado"
                   value={adjudicatedProject ? `${adjudicatedProject.codigo_proyecto} · ${adjudicatedProject.estado}` : "Pendiente"}
                 />
+                <LabelValueRow
+                  icon="coins"
+                  label="Presupuesto"
+                  value={
+                    adjudicatedProject?.presupuesto_adjudicado_id
+                      ? existingAwardBudget
+                        ? `Rev. ${existingAwardBudget.revision} · ${existingAwardBudget.estado}`
+                        : adjudicatedProject.presupuesto_adjudicado_id
+                      : "Pendiente"
+                  }
+                />
               </div>
 
               <div className="mt-3 rounded border border-stone-200 bg-white p-2">
-                {requiresTechnicalProposal && technicalProposalOptions.length > 0 ? (
+                {adjudicatedProject?.presupuesto_adjudicado_id ? (
+                  <div className="mb-2 rounded border border-emerald-200 bg-emerald-50 px-2 py-1.5 text-[11px] text-emerald-800">
+                    Presupuesto adjudicado:{" "}
+                    {existingAwardBudget
+                      ? `Revision ${existingAwardBudget.revision} (${existingAwardBudget.estado})`
+                      : adjudicatedProject.presupuesto_adjudicado_id}
+                  </div>
+                ) : (
+                  <label className="mb-2 flex flex-col gap-1 text-[11px] font-medium text-stone-700">
+                    Revisión presupuestal adjudicada
+                    <select
+                      value={selectedAwardBudgetId}
+                      onChange={(event) => setSelectedAwardBudgetId(event.target.value)}
+                      disabled={adjudicationLoading}
+                      className="h-8 rounded border border-stone-300 bg-white px-2 text-[11px] text-stone-800 outline-none"
+                    >
+                      <option value="">Seleccione presupuesto listo</option>
+                      {readyBudgetOptions.map((budget) => (
+                        <option key={budget.id} value={budget.id}>
+                          Revision {budget.revision} · {budget.estado}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                )}
+                {requiresTechnicalProposal && adjudicatedProject?.propuesta_tecnica_id ? (
+                  <div className="rounded border border-emerald-200 bg-emerald-50 px-2 py-1.5 text-[11px] text-emerald-800">
+                    PT adjudicada:{" "}
+                    {existingAwardProposal
+                      ? `${existingAwardProposal.revision || "REV"} · ${existingAwardProposal.code}`
+                      : adjudicatedProject.propuesta_tecnica_id}
+                  </div>
+                ) : requiresTechnicalProposal && technicalProposalOptions.length > 0 ? (
                   <label className="flex flex-col gap-1 text-[11px] font-medium text-stone-700">
                     Revisión técnica adjudicada
                     <select
@@ -2682,7 +2756,6 @@ export function QuotationWorkspaceModal({
                       disabled={adjudicationLoading}
                       className="h-8 rounded border border-stone-300 bg-white px-2 text-[11px] text-stone-800 outline-none"
                     >
-                      {adjudicatedProject ? <option value="">Sin cambio de revisión</option> : null}
                       {technicalProposalOptions.map((option) => (
                         <option key={option.id} value={option.id}>
                           {option.revision || "REV"} · {option.code} · {option.status || option.work_status || "Sin estado"}

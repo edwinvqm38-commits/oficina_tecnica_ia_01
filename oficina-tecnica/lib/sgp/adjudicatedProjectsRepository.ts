@@ -17,6 +17,7 @@ export type AdjudicatedProject = {
   cotizacion_id: string | null;
   propuesta_tecnica_id: string | null;
   revision_adjudicada: string | null;
+  presupuesto_adjudicado_id: string | null;
   fecha_confirmacion_adjudicacion: string | null;
   confirmado_por_user_id: string | null;
   confirmado_por_email: string | null;
@@ -38,6 +39,7 @@ export type AdjudicatedTechnicalProposalOption = {
 
 export type ConfirmAdjudicationInput = {
   cotizacionId: string;
+  presupuestoAdjudicadoId: string;
   propuestaTecnicaId?: string | null;
   eventMessage?: string | null;
 };
@@ -68,6 +70,7 @@ const PROJECT_SELECT = `
   cotizacion_id,
   propuesta_tecnica_id,
   revision_adjudicada,
+  presupuesto_adjudicado_id,
   fecha_confirmacion_adjudicacion,
   confirmado_por_user_id,
   confirmado_por_email,
@@ -133,6 +136,7 @@ function mapLegacyProject(row: Record<string, unknown>): AdjudicatedProject {
     cotizacion_id: null,
     propuesta_tecnica_id: null,
     revision_adjudicada: null,
+    presupuesto_adjudicado_id: null,
     fecha_confirmacion_adjudicacion: null,
     confirmado_por_user_id: null,
     confirmado_por_email: null,
@@ -144,7 +148,7 @@ function mapLegacyProject(row: Record<string, unknown>): AdjudicatedProject {
 
 function shouldFallbackToLegacyProjectSelect(error: unknown): boolean {
   const message = error && typeof error === "object" && "message" in error ? String(error.message) : String(error ?? "");
-  return /cotizacion_id|propuesta_tecnica_id|revision_adjudicada|adjudicacion_metadata|confirmado_por/i.test(message);
+  return /cotizacion_id|propuesta_tecnica_id|revision_adjudicada|presupuesto_adjudicado_id|adjudicacion_metadata|confirmado_por/i.test(message);
 }
 
 export async function getAdjudicatedProjectForQuotation(cotizacion: Cotizacion): Promise<AdjudicatedProject | null> {
@@ -212,9 +216,13 @@ export async function confirmQuotationAdjudication(input: ConfirmAdjudicationInp
   if (input.propuestaTecnicaId && !isUuid(input.propuestaTecnicaId)) {
     throw new ConfirmAdjudicationError("La propuesta técnica seleccionada no tiene un identificador válido.", "invalid_technical_proposal");
   }
+  if (!isUuid(input.presupuestoAdjudicadoId)) {
+    throw new ConfirmAdjudicationError("Seleccione una revisión de presupuesto válida antes de confirmar la adjudicación.", "invalid_budget");
+  }
 
   const { data, error } = await supabase.rpc("confirmar_adjudicacion_cotizacion", {
     p_cotizacion_id: input.cotizacionId,
+    p_presupuesto_id: input.presupuestoAdjudicadoId,
     p_propuesta_tecnica_id: input.propuestaTecnicaId || null,
     p_event_message: input.eventMessage || null,
   });

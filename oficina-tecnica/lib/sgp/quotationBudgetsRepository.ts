@@ -388,6 +388,10 @@ function mapBudget(row: SupabaseBudgetRow): QuotationBudget {
   };
 }
 
+function firstRpcRow<T>(data: T | T[] | null): T | null {
+  return Array.isArray(data) ? (data[0] ?? null) : data;
+}
+
 function mapNode(row: SupabaseBudgetNodeRow): QuotationBudgetNode {
   return {
     id: row.id,
@@ -778,15 +782,14 @@ export async function markBudgetReady(presupuestoId: string): Promise<QuotationB
     );
   }
 
-  const { data, error } = await supabase
-    .from("cotizacion_presupuestos")
-    .update({ estado: "LISTO_PARA_ADJUDICAR" })
-    .eq("id", normalizedPresupuestoId)
-    .select(BUDGET_SELECT)
-    .single();
+  const { data, error } = await supabase.rpc("marcar_cotizacion_presupuesto_listo", {
+    p_presupuesto_id: normalizedPresupuestoId,
+  });
 
   if (error) throw mapSupabaseError(error, "No se pudo marcar el presupuesto como listo para adjudicar");
-  return mapBudget(data as SupabaseBudgetRow);
+  const row = firstRpcRow(data as SupabaseBudgetRow | SupabaseBudgetRow[] | null);
+  if (!row) throw new QuotationBudgetRepositoryError("La transición no devolvió el presupuesto actualizado.", "supabase_error");
+  return mapBudget(row);
 }
 
 export async function returnBudgetToDraft(presupuestoId: string): Promise<QuotationBudget> {
@@ -803,15 +806,14 @@ export async function returnBudgetToDraft(presupuestoId: string): Promise<Quotat
     );
   }
 
-  const { data, error } = await supabase
-    .from("cotizacion_presupuestos")
-    .update({ estado: "BORRADOR" })
-    .eq("id", normalizedPresupuestoId)
-    .select(BUDGET_SELECT)
-    .single();
+  const { data, error } = await supabase.rpc("devolver_cotizacion_presupuesto_borrador", {
+    p_presupuesto_id: normalizedPresupuestoId,
+  });
 
   if (error) throw mapSupabaseError(error, "No se pudo devolver el presupuesto a borrador");
-  return mapBudget(data as SupabaseBudgetRow);
+  const row = firstRpcRow(data as SupabaseBudgetRow | SupabaseBudgetRow[] | null);
+  if (!row) throw new QuotationBudgetRepositoryError("La transición no devolvió el presupuesto actualizado.", "supabase_error");
+  return mapBudget(row);
 }
 
 export function computeQuotationBudgetDetailEconomics(detail: Pick<QuotationBudgetDetail, "partidas" | "recursos">): BudgetEconomicSummary {

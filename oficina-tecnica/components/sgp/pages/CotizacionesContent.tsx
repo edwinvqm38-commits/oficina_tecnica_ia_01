@@ -52,6 +52,7 @@ import {
   type AdjudicatedProject,
   type AdjudicatedTechnicalProposalOption,
 } from "@/lib/sgp/adjudicatedProjectsRepository";
+import { listQuotationBudgets, type QuotationBudget } from "@/lib/sgp/quotationBudgetsRepository";
 import { saveRequirementItemsForRequirement } from "@/lib/sgp/requirementItemsRepository";
 import { createCotizacion, CreateCotizacionError, updateCotizacion, UpdateCotizacionError } from "@/lib/sgp/quotationsRepository";
 import {
@@ -627,6 +628,7 @@ export default function CotizacionesPage({ embeddedWorkspace = null }: Cotizacio
   const [technicalProposalOptionsByQuotationId, setTechnicalProposalOptionsByQuotationId] = useState<
     Record<string, AdjudicatedTechnicalProposalOption[]>
   >({});
+  const [quotationBudgetOptionsByQuotationId, setQuotationBudgetOptionsByQuotationId] = useState<Record<string, QuotationBudget[]>>({});
   const [adjudicationLoading, setAdjudicationLoading] = useState(false);
   const [adjudicationError, setAdjudicationError] = useState<string | null>(null);
   const [adjudicationMessage, setAdjudicationMessage] = useState<string | null>(null);
@@ -1459,21 +1461,25 @@ export default function CotizacionesPage({ embeddedWorkspace = null }: Cotizacio
     if (dataSource !== "supabase") {
       setAdjudicatedProjectsByQuotationId((prev) => ({ ...prev, [cotizacion.id]: null }));
       setTechnicalProposalOptionsByQuotationId((prev) => ({ ...prev, [cotizacion.id]: [] }));
+      setQuotationBudgetOptionsByQuotationId((prev) => ({ ...prev, [cotizacion.id]: [] }));
       return;
     }
 
     try {
-      const [project, proposalOptions] = await Promise.all([
+      const [project, proposalOptions, budgetOptions] = await Promise.all([
         getAdjudicatedProjectForQuotation(cotizacion),
         listTechnicalProposalOptionsForQuotation(cotizacion),
+        listQuotationBudgets(cotizacion.id),
       ]);
       setAdjudicatedProjectsByQuotationId((prev) => ({ ...prev, [cotizacion.id]: project }));
       setTechnicalProposalOptionsByQuotationId((prev) => ({ ...prev, [cotizacion.id]: proposalOptions }));
+      setQuotationBudgetOptionsByQuotationId((prev) => ({ ...prev, [cotizacion.id]: budgetOptions }));
     } catch (error) {
       const message = error instanceof Error ? error.message : "No se pudo cargar el contexto de adjudicación.";
       setAdjudicationError(message);
       setAdjudicatedProjectsByQuotationId((prev) => ({ ...prev, [cotizacion.id]: null }));
       setTechnicalProposalOptionsByQuotationId((prev) => ({ ...prev, [cotizacion.id]: [] }));
+      setQuotationBudgetOptionsByQuotationId((prev) => ({ ...prev, [cotizacion.id]: [] }));
     }
   }
 
@@ -2170,7 +2176,7 @@ export default function CotizacionesPage({ embeddedWorkspace = null }: Cotizacio
     }
   }
 
-  async function handleConfirmAdjudication(propuestaTecnicaId: string | null) {
+  async function handleConfirmAdjudication(propuestaTecnicaId: string | null, presupuestoAdjudicadoId: string | null) {
     if (!draft) return;
 
     if (dataSource !== "supabase") {
@@ -2184,7 +2190,32 @@ export default function CotizacionesPage({ embeddedWorkspace = null }: Cotizacio
     }
 
     const requiresTechnicalProposal = draft.requiere_propuesta_tecnica !== false;
-    const hasExistingAdjudication = Boolean(adjudicatedProjectsByQuotationId[draft.id]);
+    const existingAdjudication = adjudicatedProjectsByQuotationId[draft.id] ?? null;
+    const hasExistingAdjudication = Boolean(existingAdjudication);
+    const budgetOptions = quotationBudgetOptionsByQuotationId[draft.id] ?? [];
+    const selectedBudget = budgetOptions.find((budget) => budget.id === presupuestoAdjudicadoId) ?? null;
+    const existingBudgetId = existingAdjudication?.presupuesto_adjudicado_id ?? null;
+    const canReuseExistingBudget = Boolean(existingBudgetId && presupuestoAdjudicadoId === existingBudgetId);
+
+    if (!presupuestoAdjudicadoId) {
+      setAdjudicationError("Seleccione la revisión de presupuesto que se adjudicará contractualmente.");
+      return;
+    }
+
+    if (!canReuseExistingBudget && selectedBudget?.estado !== "LISTO_PARA_ADJUDICAR") {
+      setAdjudicationError("Solo se puede adjudicar un presupuesto en estado LISTO_PARA_ADJUDICAR.");
+      return;
+    }
+
+    if (
+      existingAdjudication?.propuesta_tecnica_id &&
+      propuestaTecnicaId &&
+      propuestaTecnicaId !== existingAdjudication.propuesta_tecnica_id
+    ) {
+      setAdjudicationError("La Propuesta Técnica adjudicada no puede reemplazarse desde esta confirmación.");
+      return;
+    }
+
     if (!hasExistingAdjudication && requiresTechnicalProposal && !propuestaTecnicaId) {
       setAdjudicationError(
         "Esta cotización requiere una Propuesta Técnica. Registre y seleccione la PT adjudicada antes de confirmar la adjudicación.",
@@ -2204,6 +2235,7 @@ export default function CotizacionesPage({ embeddedWorkspace = null }: Cotizacio
     try {
       const project = await confirmQuotationAdjudication({
         cotizacionId: draft.id,
+        presupuestoAdjudicadoId,
         propuestaTecnicaId,
         eventMessage: propuestaTecnicaId
           ? "Confirmación contractual con propuesta técnica adjudicada desde Cotizaciones."
@@ -2211,6 +2243,12 @@ export default function CotizacionesPage({ embeddedWorkspace = null }: Cotizacio
       });
 
       setAdjudicatedProjectsByQuotationId((prev) => ({ ...prev, [draft.id]: project }));
+      setQuotationBudgetOptionsByQuotationId((prev) => ({
+        ...prev,
+        [draft.id]: (prev[draft.id] ?? []).map((budget) =>
+          budget.id === presupuestoAdjudicadoId ? { ...budget, estado: "ADJUDICADO" } : budget,
+        ),
+      }));
       clearCoreAppDataCache();
       setAdjudicationMessage(`Proyecto adjudicado ${project.codigo_proyecto} confirmado.`);
       setWarning(`Proyecto adjudicado ${project.codigo_proyecto} confirmado.`);
@@ -2541,6 +2579,7 @@ export default function CotizacionesPage({ embeddedWorkspace = null }: Cotizacio
         isSavingQuotation={isQuotationSaving}
         adjudicatedProject={draft ? adjudicatedProjectsByQuotationId[draft.id] ?? null : null}
         technicalProposalOptions={draft ? technicalProposalOptionsByQuotationId[draft.id] ?? [] : []}
+        adjudicationBudgetOptions={draft ? quotationBudgetOptionsByQuotationId[draft.id] ?? [] : []}
         adjudicationLoading={adjudicationLoading}
         adjudicationError={adjudicationError}
         adjudicationMessage={adjudicationMessage}
