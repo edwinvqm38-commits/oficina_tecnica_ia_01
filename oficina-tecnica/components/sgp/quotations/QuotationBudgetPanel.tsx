@@ -127,6 +127,11 @@ function formatBudgetNumber(value: number | null | undefined): string {
   return Number.isFinite(value) ? String(value) : "";
 }
 
+function formNumber(value: string): number {
+  const numeric = Number(value.trim());
+  return Number.isFinite(numeric) ? numeric : 0;
+}
+
 function formatMoney(value: number, currency: MonedaPresupuestoCotizacion): string {
   return `${currency} ${formatCurrencyNumber(value)}`;
 }
@@ -278,6 +283,20 @@ export function QuotationBudgetPanel({
   );
   const catalogById = useMemo(() => new Map(recursos.map((resource) => [resource.id, resource])), [recursos]);
   const selectedCatalogResource = resourceForm.recursoId ? catalogById.get(resourceForm.recursoId) ?? null : null;
+  const resourceFormPreview = useMemo(() => {
+    const cantidad = formNumber(resourceForm.cantidad);
+    const precioBase = formNumber(resourceForm.precioBase);
+    const precioOfertado = formNumber(resourceForm.precioOfertado);
+    const base = cantidad * precioBase;
+    const ofertado = cantidad * precioOfertado;
+    const margen = ofertado - base;
+    return {
+      base,
+      ofertado,
+      margen,
+      porcentajeMargen: base > 0 ? margen / base : 0,
+    };
+  }, [resourceForm.cantidad, resourceForm.precioBase, resourceForm.precioOfertado]);
 
   const runAction = async (action: () => Promise<void>, successMessage?: string) => {
     if (mutationInFlightRef.current) return;
@@ -786,80 +805,101 @@ export function QuotationBudgetPanel({
               </table>
             </div>
             {canEditDraftResources ? (
-              <div className="grid grid-cols-1 gap-2 border-t border-stone-200 bg-stone-50 p-2 lg:grid-cols-[180px_1fr_88px_105px_105px_1fr_116px]">
-                <select
-                  value={resourceForm.partidaId}
-                  onChange={(event) => setResourceForm((prev) => ({ ...prev, partidaId: event.target.value }))}
-                  disabled={Boolean(resourceForm.editingId)}
-                  className="h-7 rounded border border-stone-200 bg-white px-2 text-[11px] disabled:bg-stone-100 disabled:text-stone-400"
-                >
-                  <option value="">Seleccionar partida</option>
-                  {partidas.map((partida) => (
-                    <option key={partida.id} value={partida.id}>
-                      {partida.codigo ? `${partida.codigo} - ` : ""}
-                      {partida.descripcion}
-                    </option>
-                  ))}
-                </select>
-                <select
-                  value={resourceForm.recursoId}
-                  onChange={(event) => setResourceForm((prev) => ({ ...prev, recursoId: event.target.value }))}
-                  className="h-7 rounded border border-stone-200 bg-white px-2 text-[11px]"
-                >
-                  <option value="">Recurso catalogo</option>
-                  {activeResources.map((resource) => (
-                    <option key={resource.id} value={resource.id}>
-                      {resourceLabel(resource)}
-                    </option>
-                  ))}
-                </select>
-                <input
-                  type="number"
-                  min="0"
-                  step="0.0001"
-                  value={resourceForm.cantidad}
-                  onChange={(event) => setResourceForm((prev) => ({ ...prev, cantidad: event.target.value }))}
-                  placeholder="Cantidad"
-                  className="h-7 rounded border border-stone-200 bg-white px-2 text-right text-[11px]"
-                />
-                <input
-                  type="number"
-                  min="0"
-                  step="0.0001"
-                  value={resourceForm.precioBase}
-                  onChange={(event) => setResourceForm((prev) => ({ ...prev, precioBase: event.target.value }))}
-                  placeholder="Base unit."
-                  className="h-7 rounded border border-stone-200 bg-white px-2 text-right text-[11px]"
-                />
-                <input
-                  type="number"
-                  min="0"
-                  step="0.0001"
-                  value={resourceForm.precioOfertado}
-                  onChange={(event) => setResourceForm((prev) => ({ ...prev, precioOfertado: event.target.value }))}
-                  placeholder="Oferta unit."
-                  className="h-7 rounded border border-stone-200 bg-white px-2 text-right text-[11px]"
-                />
-                <input
-                  value={resourceForm.observaciones}
-                  onChange={(event) => setResourceForm((prev) => ({ ...prev, observaciones: event.target.value }))}
-                  placeholder={
-                    selectedCatalogResource
-                      ? `Ref. ${selectedCatalogResource.moneda} ${formatCurrencyNumber(selectedCatalogResource.precio_unitario_ref)}`
-                      : "Observaciones"
-                  }
-                  className="h-7 rounded border border-stone-200 bg-white px-2 text-[11px]"
-                />
-                <div className="flex gap-1">
-                  <button
-                    type="button"
-                    onClick={handleResourceSubmit}
-                    disabled={saving || partidas.length === 0}
-                    className="h-7 flex-1 rounded border border-stone-300 bg-white px-2 text-[10px] font-medium text-stone-700 hover:bg-stone-100 disabled:cursor-not-allowed disabled:opacity-50"
-                  >
-                    {resourceForm.editingId ? "Guardar" : "Agregar"}
-                  </button>
-                  {resourceForm.editingId ? (
+              <div className="border-t border-stone-200 bg-stone-50 p-2">
+                <div className="mb-1 flex items-center justify-between gap-2">
+                  <span className="text-[10px] font-semibold uppercase tracking-wide text-stone-500">
+                    {resourceForm.editingId ? "Editar recurso presupuestado" : "Agregar recurso presupuestado"}
+                  </span>
+                  <span className="text-[10px] text-stone-400">Campos blancos: ingreso · Banda inferior: calculado / referencial</span>
+                </div>
+                <div className="grid grid-cols-1 gap-2 lg:grid-cols-[180px_minmax(220px,360px)_88px_105px_105px_minmax(140px,1fr)_116px]">
+                  <label className="min-w-0">
+                    <span className="mb-0.5 block text-[10px] font-semibold text-stone-500">Partida</span>
+                    <select
+                      value={resourceForm.partidaId}
+                      onChange={(event) => setResourceForm((prev) => ({ ...prev, partidaId: event.target.value }))}
+                      disabled={Boolean(resourceForm.editingId)}
+                      className="h-7 w-full min-w-0 rounded border border-stone-200 bg-white px-2 text-[11px] disabled:bg-stone-100 disabled:text-stone-400"
+                    >
+                      <option value="">Seleccionar partida</option>
+                      {partidas.map((partida) => (
+                        <option key={partida.id} value={partida.id}>
+                          {partida.codigo ? `${partida.codigo} - ` : ""}
+                          {partida.descripcion}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                  <label className="min-w-0">
+                    <span className="mb-0.5 block text-[10px] font-semibold text-stone-500">Recurso catalogo</span>
+                    <select
+                      value={resourceForm.recursoId}
+                      onChange={(event) => setResourceForm((prev) => ({ ...prev, recursoId: event.target.value }))}
+                      className="h-7 w-full min-w-0 truncate rounded border border-stone-200 bg-white px-2 text-[11px]"
+                    >
+                      <option value="">Recurso catalogo</option>
+                      {activeResources.map((resource) => (
+                        <option key={resource.id} value={resource.id}>
+                          {resourceLabel(resource)}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                  <label className="min-w-0">
+                    <span className="mb-0.5 block text-[10px] font-semibold text-stone-500">Cantidad</span>
+                    <input
+                      type="number"
+                      min="0"
+                      step="0.0001"
+                      value={resourceForm.cantidad}
+                      onChange={(event) => setResourceForm((prev) => ({ ...prev, cantidad: event.target.value }))}
+                      placeholder="Cant."
+                      className="h-7 w-full min-w-0 rounded border border-stone-200 bg-white px-2 text-right text-[11px]"
+                    />
+                  </label>
+                  <label className="min-w-0">
+                    <span className="mb-0.5 block text-[10px] font-semibold text-stone-500">Base unit.</span>
+                    <input
+                      type="number"
+                      min="0"
+                      step="0.0001"
+                      value={resourceForm.precioBase}
+                      onChange={(event) => setResourceForm((prev) => ({ ...prev, precioBase: event.target.value }))}
+                      placeholder="Base"
+                      className="h-7 w-full min-w-0 rounded border border-stone-200 bg-white px-2 text-right text-[11px]"
+                    />
+                  </label>
+                  <label className="min-w-0">
+                    <span className="mb-0.5 block text-[10px] font-semibold text-stone-500">Oferta unit.</span>
+                    <input
+                      type="number"
+                      min="0"
+                      step="0.0001"
+                      value={resourceForm.precioOfertado}
+                      onChange={(event) => setResourceForm((prev) => ({ ...prev, precioOfertado: event.target.value }))}
+                      placeholder="Oferta"
+                      className="h-7 w-full min-w-0 rounded border border-stone-200 bg-white px-2 text-right text-[11px]"
+                    />
+                  </label>
+                  <label className="min-w-0">
+                    <span className="mb-0.5 block text-[10px] font-semibold text-stone-500">Observaciones</span>
+                    <input
+                      value={resourceForm.observaciones}
+                      onChange={(event) => setResourceForm((prev) => ({ ...prev, observaciones: event.target.value }))}
+                      placeholder="Observaciones"
+                      className="h-7 w-full min-w-0 rounded border border-stone-200 bg-white px-2 text-[11px]"
+                    />
+                  </label>
+                  <div className="flex min-w-0 items-end gap-1">
+                    <button
+                      type="button"
+                      onClick={handleResourceSubmit}
+                      disabled={saving || partidas.length === 0}
+                      className="h-7 flex-1 rounded border border-stone-300 bg-white px-2 text-[10px] font-medium text-stone-700 hover:bg-stone-100 disabled:cursor-not-allowed disabled:opacity-50"
+                    >
+                      {resourceForm.editingId ? "Guardar" : "Agregar"}
+                    </button>
+                    {resourceForm.editingId ? (
                     <button
                       type="button"
                       onClick={() => setResourceForm(EMPTY_RESOURCE_FORM)}
@@ -868,7 +908,28 @@ export function QuotationBudgetPanel({
                     >
                       Cancelar
                     </button>
-                  ) : null}
+                    ) : null}
+                  </div>
+                </div>
+                <div className="mt-2 grid grid-cols-2 gap-1.5 rounded border border-stone-200 bg-white px-2 py-1.5 text-[10px] text-stone-600 md:grid-cols-6">
+                  <ReadOnlyPreview label="Tipo" value={selectedCatalogResource?.tipo_recurso || "-"} />
+                  <ReadOnlyPreview label="Und." value={selectedCatalogResource?.unidad || "-"} />
+                  <ReadOnlyPreview
+                    label="Referencial"
+                    value={
+                      selectedCatalogResource
+                        ? `${selectedCatalogResource.moneda} ${formatCurrencyNumber(selectedCatalogResource.precio_unitario_ref)}`
+                        : "-"
+                    }
+                    align="right"
+                  />
+                  <ReadOnlyPreview label="Base calc." value={formatMoney(resourceFormPreview.base, monedaCodigo)} align="right" />
+                  <ReadOnlyPreview label="Ofertado calc." value={formatMoney(resourceFormPreview.ofertado, monedaCodigo)} align="right" />
+                  <ReadOnlyPreview
+                    label="Margen calc."
+                    value={`${formatMoney(resourceFormPreview.margen, monedaCodigo)} · ${percentLabel(resourceFormPreview.porcentajeMargen)}`}
+                    align="right"
+                  />
                 </div>
               </div>
             ) : null}
@@ -916,6 +977,17 @@ function BudgetMetric({ label, value }: { label: string; value: string }) {
     <div className="rounded border border-stone-200 bg-stone-50 px-2 py-1.5">
       <div className="text-[10px] font-medium uppercase text-stone-500">{label}</div>
       <div className="mt-0.5 truncate text-right text-[12px] font-semibold text-stone-700" title={value}>
+        {value}
+      </div>
+    </div>
+  );
+}
+
+function ReadOnlyPreview({ label, value, align = "left" }: { label: string; value: string; align?: "left" | "right" }) {
+  return (
+    <div className="min-w-0">
+      <div className="text-[9px] font-semibold uppercase tracking-wide text-stone-400">{label}</div>
+      <div className={`mt-0.5 truncate font-medium tabular-nums text-stone-700 ${align === "right" ? "text-right" : "text-left"}`} title={value}>
         {value}
       </div>
     </div>
