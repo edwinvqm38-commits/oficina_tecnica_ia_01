@@ -4,7 +4,17 @@ import { Fragment } from "react";
 import { ResourceAutocompleteInput } from "@/components/sgp/technical-proposal/ResourceAutocompleteInput";
 import type { Recurso } from "@/lib/sgp/demoData";
 
-type ResourceCategoryKey = "mano_obra" | "materiales" | "equipos" | "herramientas" | "consumibles";
+type ResourceCategoryKey =
+  | "mano_obra_directa"
+  | "mano_obra_indirecta"
+  | "materiales"
+  | "consumibles"
+  | "equipos_herramientas"
+  | "subcontratos"
+  | "gastos_generales"
+  | "mano_obra"
+  | "equipos"
+  | "herramientas";
 
 type TechnicalProposalResourceSnapshot = {
   id: string;
@@ -43,6 +53,7 @@ type TechnicalProposalResourceGridProps = {
   selectedResourceRowId: string | null;
   editingResourceCellId: string | null;
   editingEnabled: boolean;
+  canViewPrices?: boolean;
   onAddResource: (category: ResourceCategoryKey) => void;
   onDeleteResource: (resourceId: string) => void;
   onUpdateResource: (resourceId: string, patch: Partial<TechnicalProposalResourceSnapshot>) => void;
@@ -110,6 +121,7 @@ export function TechnicalProposalResourceGrid({
   selectedResourceRowId,
   editingResourceCellId,
   editingEnabled,
+  canViewPrices = true,
   onAddResource,
   onDeleteResource,
   onUpdateResource,
@@ -172,6 +184,7 @@ export function TechnicalProposalResourceGrid({
               value={resource.descripcion}
               resources={resources}
               usedResourceLookup={usedResourceLookup}
+              canViewPrices={canViewPrices}
               className={spreadsheetInputClassName("bg-white")}
               placeholder="Buscar o escribir recurso"
               onTextChange={(value) =>
@@ -233,14 +246,18 @@ export function TechnicalProposalResourceGrid({
           />
         </td>
         <td className="border border-stone-200 p-0">
-          <input
-            type="number"
-            min={0}
-            value={resource.precio_unitario_ref}
-            onChange={(event) => onUpdateResource(resource.id, { precio_unitario_ref: toGridNumber(event.target.value) })}
-            className={spreadsheetInputClassName("text-right tabular-nums")}
-            disabled={!editingEnabled}
-          />
+          {canViewPrices ? (
+            <input
+              type="number"
+              min={0}
+              value={resource.precio_unitario_ref}
+              onChange={(event) => onUpdateResource(resource.id, { precio_unitario_ref: toGridNumber(event.target.value) })}
+              className={spreadsheetInputClassName("text-right tabular-nums")}
+              disabled={!editingEnabled}
+            />
+          ) : (
+            <span className="flex h-6 items-center justify-end px-1.5 text-[11px] font-semibold text-stone-400">Oculto</span>
+          )}
         </td>
         <td className="border border-stone-200 px-1 py-0.5">
           <span className={`inline-flex h-5 items-center border px-1.5 text-[10px] font-bold leading-none ${status.className}`}>

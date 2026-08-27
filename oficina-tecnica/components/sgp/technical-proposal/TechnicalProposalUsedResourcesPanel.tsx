@@ -2,7 +2,17 @@
 
 import { useMemo, useState } from "react";
 
-type ResourceCategoryKey = "mano_obra" | "materiales" | "equipos" | "herramientas" | "consumibles";
+type ResourceCategoryKey =
+  | "mano_obra_directa"
+  | "mano_obra_indirecta"
+  | "materiales"
+  | "consumibles"
+  | "equipos_herramientas"
+  | "subcontratos"
+  | "gastos_generales"
+  | "mano_obra"
+  | "equipos"
+  | "herramientas";
 
 export type UsedResourceItem = {
   rowId: string;

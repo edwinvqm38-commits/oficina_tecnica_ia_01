@@ -9,14 +9,22 @@ import { TechnicalProposalResourceInspector } from "@/components/sgp/technical-p
 import { TechnicalProposalTopbar } from "@/components/sgp/technical-proposal/TechnicalProposalTopbar";
 import { TechnicalProposalUsedResourcesPanel, type UsedResourceItem } from "@/components/sgp/technical-proposal/TechnicalProposalUsedResourcesPanel";
 import type { Cotizacion, Recurso } from "@/lib/sgp/demoData";
+import type { AdjudicatedTechnicalProposalOption } from "@/lib/sgp/adjudicatedProjectsRepository";
 import { findClientLogo, findDefaultCompanyLogo, readProposalLogos, type ProposalLogo } from "@/lib/sgp/proposalLogos";
 import { buildTechnicalProposalRpcPayload, validateTechnicalProposalRpcPayload } from "@/lib/sgp/technicalProposalMappers";
-import { saveFullTechnicalProposal } from "@/lib/sgp/technicalProposalsRepository";
+import {
+  getTechnicalProposalByCotizacionRevision,
+  listTechnicalProposalItems,
+  listTechnicalProposalResources,
+  saveFullTechnicalProposal,
+} from "@/lib/sgp/technicalProposalsRepository";
 
 type TechnicalProposalWorkspaceModalProps = {
   open: boolean;
   cotizacion: Cotizacion;
   recursos: Recurso[];
+  technicalProposalOptions?: AdjudicatedTechnicalProposalOption[];
+  canViewPrices?: boolean;
   onClose: () => void;
 };
 
@@ -24,19 +32,30 @@ type TechnicalProposalMetadata = {
   cotizacion_codigo: string;
   documento_codigo: string;
   documento_tipo: "PT";
-  revision: "REV00";
+  revision: string;
   carpeta_madre: string;
-  subcarpeta_revision: "02_PROPUESTA";
+  subcarpeta_revision: string;
   archivo_docx: string;
   archivo_pdf: string;
   estructura_documental_version: "cotizacion_drive_v2";
+  propuesta_tecnica_id?: string | null;
 };
 
 type ScopeKind = "group" | "subgroup" | "activity";
 type ProposalMode = "cliente" | "interno";
 type ProposalWorkStatus = "Borrador" | "En proceso" | "Completado";
 type RightPanelView = "document" | "selected_resource" | "used_resources";
-type ResourceCategoryKey = "mano_obra" | "materiales" | "equipos" | "herramientas" | "consumibles";
+type ResourceCategoryKey =
+  | "mano_obra_directa"
+  | "mano_obra_indirecta"
+  | "materiales"
+  | "consumibles"
+  | "equipos_herramientas"
+  | "subcontratos"
+  | "gastos_generales"
+  | "mano_obra"
+  | "equipos"
+  | "herramientas";
 
 type ScopeItem = {
   id: string;
@@ -155,11 +174,16 @@ const REVISION = "REV00";
 const REVISION_FOLDER = "02_PROPUESTA";
 
 const RESOURCE_CATEGORIES: Array<{ key: ResourceCategoryKey; label: string; shortLabel: string; hasTime: boolean }> = [
-  { key: "mano_obra", label: "Mano de obra", shortLabel: "MO", hasTime: true },
+  { key: "mano_obra_directa", label: "Mano de obra directa", shortLabel: "MOD", hasTime: true },
+  { key: "mano_obra_indirecta", label: "Mano de obra indirecta", shortLabel: "MOI", hasTime: true },
   { key: "materiales", label: "Materiales", shortLabel: "MAT", hasTime: false },
-  { key: "equipos", label: "Equipos", shortLabel: "EQP", hasTime: true },
-  { key: "herramientas", label: "Herramientas", shortLabel: "HER", hasTime: true },
-  { key: "consumibles", label: "Consumibles / otros", shortLabel: "CON", hasTime: false },
+  { key: "consumibles", label: "Consumibles", shortLabel: "CON", hasTime: false },
+  { key: "equipos_herramientas", label: "Equipos y herramientas", shortLabel: "EQH", hasTime: true },
+  { key: "subcontratos", label: "Subcontratos", shortLabel: "SUB", hasTime: false },
+  { key: "gastos_generales", label: "Gastos generales", shortLabel: "GG", hasTime: false },
+  { key: "mano_obra", label: "Mano de obra legacy", shortLabel: "MO", hasTime: true },
+  { key: "equipos", label: "Equipos legacy", shortLabel: "EQP", hasTime: true },
+  { key: "herramientas", label: "Herramientas legacy", shortLabel: "HER", hasTime: true },
 ];
 
 function uid(prefix: string): string {
@@ -170,23 +194,79 @@ function todayIsoDate(): string {
   return new Date().toISOString().slice(0, 10);
 }
 
-function buildDocumentMetadata(codigoCotizacion: string): TechnicalProposalMetadata {
-  const documentoCodigo = `${codigoCotizacion}-PT-${REVISION}`;
+function normalizeRevision(value: string): string {
+  const normalized = value.trim().toUpperCase();
+  if (/^REV\d{2}$/.test(normalized)) return normalized;
+  return REVISION;
+}
+
+function nextRevisionCode(currentRevision: string): string {
+  const normalized = normalizeRevision(currentRevision);
+  const numeric = Number(normalized.slice(3));
+  return `REV${String(Number.isFinite(numeric) ? numeric + 1 : 1).padStart(2, "0")}`;
+}
+
+function revisionFolderFor(revision: string): string {
+  const normalized = normalizeRevision(revision);
+  return normalized === REVISION ? REVISION_FOLDER : `${REVISION_FOLDER}_${normalized}`;
+}
+
+function buildDocumentMetadata(codigoCotizacion: string, revision = REVISION): TechnicalProposalMetadata {
+  const normalizedRevision = normalizeRevision(revision);
+  const documentoCodigo = `${codigoCotizacion}-PT-${normalizedRevision}`;
   return {
     cotizacion_codigo: codigoCotizacion,
     documento_codigo: documentoCodigo,
     documento_tipo: "PT",
-    revision: REVISION,
+    revision: normalizedRevision,
     carpeta_madre: codigoCotizacion,
-    subcarpeta_revision: REVISION_FOLDER,
+    subcarpeta_revision: revisionFolderFor(normalizedRevision),
     archivo_docx: `${documentoCodigo}.docx`,
     archivo_pdf: `${documentoCodigo}.pdf`,
     estructura_documental_version: "cotizacion_drive_v2",
   };
 }
 
-function buildStorageKey(codigoCotizacion: string): string {
-  return `opsia:technical-proposal:draft:${codigoCotizacion}:${REVISION}`;
+function buildStorageKey(codigoCotizacion: string, revision = REVISION): string {
+  return `opsia:technical-proposal:draft:${codigoCotizacion}:${normalizeRevision(revision)}`;
+}
+
+function cloneDraftAsNewRevision(draft: TechnicalProposalDraft, cotizacion: Cotizacion, nextRevision: string): TechnicalProposalDraft {
+  const scopeItemIdMap = new Map(draft.scope_items.map((item) => [item.id, uid("scope")]));
+  const resourceIdMap = new Map(draft.resources.map((resource) => [resource.id, uid("ptr")]));
+  const remapScopeItemId = (value: string | null): string | null => (value ? scopeItemIdMap.get(value) ?? null : null);
+  const remapResourceId = (value: string | null): string | null => (value ? resourceIdMap.get(value) ?? null : null);
+
+  const nextScopeItems = draft.scope_items.map((item) => ({
+    ...item,
+    id: scopeItemIdMap.get(item.id) ?? uid("scope"),
+    collapsed: false,
+  }));
+
+  return {
+    ...draft,
+    metadata: buildDocumentMetadata(cotizacion.codigo, nextRevision),
+    work_status: "Borrador",
+    scope_items: nextScopeItems,
+    scope_outline: scopeItemsToOutline(nextScopeItems),
+    resources: draft.resources.map((resource) => ({
+      ...resource,
+      id: resourceIdMap.get(resource.id) ?? uid("ptr"),
+      scope_item_id: remapScopeItemId(resource.scope_item_id) ?? resource.scope_item_id,
+    })),
+    general_images: draft.general_images.map((image) => ({
+      ...image,
+      id: uid("img"),
+      resource_id: remapResourceId(image.resource_id),
+    })),
+    activity_images: draft.activity_images.map((image) => ({
+      ...image,
+      id: uid("img"),
+      scope_item_id: remapScopeItemId(image.scope_item_id),
+      resource_id: remapResourceId(image.resource_id),
+    })),
+    updated_at: new Date().toISOString(),
+  };
 }
 
 function normalizeSearch(value: string): string {
@@ -204,10 +284,12 @@ function toFiniteNumber(value: unknown): number {
 
 function mapResourceCategory(tipoRecurso: string): ResourceCategoryKey {
   const normalized = normalizeSearch(tipoRecurso);
-  if (normalized.includes("mano de obra")) return "mano_obra";
+  if (normalized.includes("mano de obra") && normalized.includes("indirect")) return "mano_obra_indirecta";
+  if (normalized.includes("mano de obra")) return "mano_obra_directa";
   if (normalized.includes("material")) return "materiales";
-  if (normalized.includes("equipo") || normalized.includes("vehiculo")) return "equipos";
-  if (normalized.includes("herramienta")) return "herramientas";
+  if (normalized.includes("subcontr")) return "subcontratos";
+  if (normalized.includes("gasto general") || normalized.includes("indirecto")) return "gastos_generales";
+  if (normalized.includes("equipo") || normalized.includes("vehiculo") || normalized.includes("herramienta")) return "equipos_herramientas";
   return "consumibles";
 }
 
@@ -242,8 +324,8 @@ function defaultScopeItems(projectName: string): ScopeItem[] {
   ]);
 }
 
-function buildInitialDraft(cotizacion: Cotizacion): TechnicalProposalDraft {
-  const metadata = buildDocumentMetadata(cotizacion.codigo);
+function buildInitialDraft(cotizacion: Cotizacion, revision = REVISION): TechnicalProposalDraft {
+  const metadata = buildDocumentMetadata(cotizacion.codigo, revision);
   const scopeItems = defaultScopeItems(cotizacion.proyecto);
   return {
     metadata,
@@ -292,8 +374,12 @@ function buildInitialDraft(cotizacion: Cotizacion): TechnicalProposalDraft {
   };
 }
 
-function normalizeLegacyDraft(parsed: Partial<TechnicalProposalDraft> & Record<string, unknown>, cotizacion: Cotizacion): TechnicalProposalDraft {
-  const initial = buildInitialDraft(cotizacion);
+function normalizeLegacyDraft(
+  parsed: Partial<TechnicalProposalDraft> & Record<string, unknown>,
+  cotizacion: Cotizacion,
+  revision = REVISION,
+): TechnicalProposalDraft {
+  const initial = buildInitialDraft(cotizacion, revision);
   const legacyActivities = Array.isArray(parsed.actividades)
     ? (parsed.actividades as Array<{ id?: string; titulo?: string; descripcion?: string }>)
     : [];
@@ -359,17 +445,84 @@ function normalizeLegacyDraft(parsed: Partial<TechnicalProposalDraft> & Record<s
   };
 }
 
-function readStoredDraft(cotizacion: Cotizacion): TechnicalProposalDraft {
-  const initial = buildInitialDraft(cotizacion);
+function readStoredDraft(cotizacion: Cotizacion, revision = REVISION): TechnicalProposalDraft {
+  const initial = buildInitialDraft(cotizacion, revision);
   if (typeof window === "undefined") return initial;
 
   try {
-    const raw = window.localStorage.getItem(buildStorageKey(cotizacion.codigo));
+    const raw = window.localStorage.getItem(buildStorageKey(cotizacion.codigo, revision));
     if (!raw) return initial;
-    return normalizeLegacyDraft(JSON.parse(raw) as Partial<TechnicalProposalDraft> & Record<string, unknown>, cotizacion);
+    return normalizeLegacyDraft(JSON.parse(raw) as Partial<TechnicalProposalDraft> & Record<string, unknown>, cotizacion, revision);
   } catch {
     return initial;
   }
+}
+
+async function readPersistedDraft(cotizacion: Cotizacion, revision: string): Promise<TechnicalProposalDraft | null> {
+  const proposal = await getTechnicalProposalByCotizacionRevision(cotizacion.id, revision);
+  if (!proposal) return null;
+
+  const [items, resources] = await Promise.all([
+    listTechnicalProposalItems(proposal.id),
+    listTechnicalProposalResources(proposal.id),
+  ]);
+  const scopeItems = renumberScopeItems(
+    items.map((item) => ({
+      id: item.id,
+      level: item.level,
+      number: item.item_number,
+      kind: item.item_type,
+      title: item.title,
+      description: item.technical_description ?? "",
+      time_value: toFiniteNumber(item.estimated_time_value),
+      time_unit: item.estimated_time_unit ?? "dias",
+      complete: item.is_complete,
+      collapsed: false,
+      internal_comments: item.internal_comments ?? "",
+    })),
+  );
+
+  const resourceRows: TechnicalProposalResourceSnapshot[] = resources.map((resource) => ({
+    id: resource.id,
+    scope_item_id: resource.technical_proposal_item_id,
+    recurso_id: resource.resource_id,
+    codigo_recurso: resource.codigo_recurso ?? "",
+    codigo_fabricante: resource.codigo_fabricante ?? "",
+    tipo_recurso: resource.tipo_recurso ?? "",
+    resource_category: (resource.resource_category || mapResourceCategory(resource.tipo_recurso ?? "")) as ResourceCategoryKey,
+    descripcion: resource.descripcion,
+    unidad: resource.unidad ?? "",
+    precio_unitario_ref: toFiniteNumber(resource.precio_unitario_ref),
+    moneda: resource.moneda_codigo === "USD" ? "USD" : "PEN",
+    proveedor: resource.proveedor ?? "",
+    marca: resource.marca ?? "",
+    cantidad: toFiniteNumber(resource.cantidad),
+    tiempo: toFiniteNumber(resource.tiempo),
+    comentario: resource.comentario ?? "",
+    detalle_adicional: resource.detalle_adicional ?? "",
+    estado_origen: resource.origin_status === "catalogo_copiado" ? "catalogo_copiado" : "nuevo_por_formalizar",
+  }));
+
+  const persistedPayload = {
+    metadata: {
+      ...buildDocumentMetadata(cotizacion.codigo, proposal.revision),
+      propuesta_tecnica_id: proposal.id,
+    },
+    mode: proposal.mode,
+    work_status: proposal.work_status,
+    header: proposal.header,
+    recipient: proposal.recipient,
+    presentation: proposal.presentation,
+    conditions: proposal.commercial_terms,
+    scope_items: scopeItems.length ? scopeItems : defaultScopeItems(cotizacion.proyecto),
+    scope_outline: scopeItemsToOutline(scopeItems.length ? scopeItems : defaultScopeItems(cotizacion.proyecto)),
+    resources: resourceRows,
+    general_images: [],
+    activity_images: [],
+    updated_at: proposal.updated_at,
+  } as unknown as Partial<TechnicalProposalDraft> & Record<string, unknown>;
+
+  return normalizeLegacyDraft(persistedPayload, cotizacion, proposal.revision);
 }
 
 function scopeLineHasActivity(line: string): boolean {
@@ -677,9 +830,9 @@ function Field({ label, children, className = "" }: { label: string; children: R
 }
 
 function scopeKindLabel(kind: ScopeKind): string {
-  if (kind === "activity") return "Actividad";
-  if (kind === "subgroup") return "Subgrupo";
-  return "Grupo";
+  if (kind === "activity") return "Partida / actividad";
+  if (kind === "subgroup") return "Subtitulo";
+  return "Titulo";
 }
 
 function scopeGridRowClassName(item: ScopeItem, selected: boolean): string {
@@ -738,6 +891,7 @@ function TechnicalProposalQuickEntryModal({
   scopeItems,
   recursos,
   defaultScopeItemId,
+  canViewPrices,
   onClose,
   onApply,
 }: {
@@ -745,11 +899,12 @@ function TechnicalProposalQuickEntryModal({
   scopeItems: ScopeItem[];
   recursos: Recurso[];
   defaultScopeItemId: string;
+  canViewPrices: boolean;
   onClose: () => void;
   onApply: (scopeItemId: string, category: ResourceCategoryKey, rows: QuickEntryRow[]) => void;
 }) {
   const [scopeItemId, setScopeItemId] = useState(defaultScopeItemId);
-  const [category, setCategory] = useState<ResourceCategoryKey>("mano_obra");
+  const [category, setCategory] = useState<ResourceCategoryKey>("mano_obra_directa");
   const [rows, setRows] = useState<QuickEntryRow[]>([
     { id: uid("qr"), recurso_id: "", descripcion: "", cantidad: 1, unidad: "und", tiempo: 1, comentario: "" },
   ]);
@@ -757,7 +912,7 @@ function TechnicalProposalQuickEntryModal({
   useEffect(() => {
     if (!open) return;
     setScopeItemId(defaultScopeItemId);
-    setCategory("mano_obra");
+    setCategory("mano_obra_directa");
     setRows([{ id: uid("qr"), recurso_id: "", descripcion: "", cantidad: 1, unidad: "und", tiempo: 1, comentario: "" }]);
   }, [defaultScopeItemId, open]);
 
@@ -839,6 +994,7 @@ function TechnicalProposalQuickEntryModal({
                         resources={categoryResources}
                         className={inputClassName()}
                         placeholder="Buscar en Recursos"
+                        canViewPrices={canViewPrices}
                         onTextChange={(value) => updateRow(row.id, { descripcion: value, recurso_id: "" })}
                         onSelect={(resource) => selectResource(row.id, resource.id)}
                       />
@@ -898,7 +1054,15 @@ function TechnicalProposalQuickEntryModal({
   );
 }
 
-export function TechnicalProposalWorkspaceModal({ open, cotizacion, recursos, onClose }: TechnicalProposalWorkspaceModalProps) {
+export function TechnicalProposalWorkspaceModal({
+  open,
+  cotizacion,
+  recursos,
+  technicalProposalOptions = [],
+  canViewPrices = true,
+  onClose,
+}: TechnicalProposalWorkspaceModalProps) {
+  const [selectedRevision, setSelectedRevision] = useState(REVISION);
   const [draft, setDraft] = useState<TechnicalProposalDraft>(() => buildInitialDraft(cotizacion));
   const [selectedScopeItemId, setSelectedScopeItemId] = useState("scope-2");
   const [collapsedSections, setCollapsedSections] = useState<Record<string, boolean>>({ a: true, b: true, c: true, e: true });
@@ -917,10 +1081,16 @@ export function TechnicalProposalWorkspaceModal({ open, cotizacion, recursos, on
   const printInProgressRef = useRef(false);
   const previewDocumentRef = useRef<HTMLElement | null>(null);
   const scopeTextareaRef = useRef<HTMLTextAreaElement | null>(null);
+  const revisionOptions = useMemo(() => {
+    const revisions = new Set<string>([REVISION, selectedRevision, draft.metadata.revision]);
+    technicalProposalOptions.forEach((option) => revisions.add(normalizeRevision(option.revision)));
+    return [...revisions].sort((left, right) => Number(left.slice(3)) - Number(right.slice(3)));
+  }, [draft.metadata.revision, selectedRevision, technicalProposalOptions]);
 
   useEffect(() => {
     if (!open) return;
-    const next = readStoredDraft(cotizacion);
+    const next = readStoredDraft(cotizacion, selectedRevision);
+    let cancelled = false;
     setDraft(next);
     setSelectedScopeItemId(next.scope_items.find((item) => item.kind === "activity")?.id ?? next.scope_items[0]?.id ?? "scope-1");
     setStatusMessage(null);
@@ -933,12 +1103,26 @@ export function TechnicalProposalWorkspaceModal({ open, cotizacion, recursos, on
     setProposalLogos(readProposalLogos());
     setPreviewRefreshKey((current) => current + 1);
     setSavingToSupabase(false);
-  }, [cotizacion, open]);
+    void readPersistedDraft(cotizacion, selectedRevision)
+      .then((persistedDraft) => {
+        if (cancelled || !persistedDraft) return;
+        setDraft(persistedDraft);
+        setSelectedScopeItemId(
+          persistedDraft.scope_items.find((item) => item.kind === "activity")?.id ?? persistedDraft.scope_items[0]?.id ?? "scope-1",
+        );
+      })
+      .catch(() => {
+        if (!cancelled) setStatusMessage("No se pudo cargar la revision PT persistida; se muestra el borrador local.");
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [cotizacion, open, selectedRevision]);
 
   useEffect(() => {
     if (!open || typeof window === "undefined") return;
     const timeout = window.setTimeout(() => {
-      window.localStorage.setItem(buildStorageKey(cotizacion.codigo), JSON.stringify(draft));
+      window.localStorage.setItem(buildStorageKey(cotizacion.codigo, draft.metadata.revision), JSON.stringify(draft));
     }, 350);
     return () => window.clearTimeout(timeout);
   }, [cotizacion.codigo, draft, open]);
@@ -995,13 +1179,13 @@ export function TechnicalProposalWorkspaceModal({ open, cotizacion, recursos, on
   );
   const resourceInspectorPermissions = useMemo(
     () => ({
-      canViewPrices: true,
+      canViewPrices,
       canViewSupplier: true,
       canViewImages: true,
       canViewDocuments: true,
       canViewMetadata: true,
     }),
-    [],
+    [canViewPrices],
   );
 
   if (!open) return null;
@@ -1013,6 +1197,23 @@ export function TechnicalProposalWorkspaceModal({ open, cotizacion, recursos, on
 
   function patchDraft(patch: Partial<TechnicalProposalDraft>) {
     setDraftWithTouch((prev) => ({ ...prev, ...patch }));
+  }
+
+  function handleRevisionChange(revision: string) {
+    setSelectedRevision(normalizeRevision(revision));
+  }
+
+  function handleCreateNextRevision() {
+    const highestRevision = revisionOptions.at(-1) ?? draft.metadata.revision;
+    const nextRevision = nextRevisionCode(highestRevision);
+    const nextDraft = cloneDraftAsNewRevision(draft, cotizacion, nextRevision);
+    if (typeof window !== "undefined") {
+      window.localStorage.setItem(buildStorageKey(cotizacion.codigo, nextRevision), JSON.stringify(nextDraft));
+    }
+    setSelectedRevision(nextRevision);
+    setDraft(nextDraft);
+    setEditingLocked(false);
+    setStatusMessage(`Nueva revision ${nextRevision} creada desde ${draft.metadata.revision}.`);
   }
 
   function patchNested<K extends keyof TechnicalProposalDraft>(key: K, patch: Partial<TechnicalProposalDraft[K]>) {
@@ -1730,6 +1931,7 @@ ${clone.outerHTML}
         selectedResourceRowId={selectedResourceRowId}
         editingResourceCellId={editingResourceCellId}
         editingEnabled={isEditingProposalDocument}
+        canViewPrices={resourceInspectorPermissions.canViewPrices}
         onAddResource={(categoryKey) => addNewResource(activity.id, categoryKey)}
         onDeleteResource={deleteResource}
         onUpdateResource={updateResource}
@@ -1822,9 +2024,9 @@ ${clone.outerHTML}
               </Field>
               <Field label="Tipo">
                 <select value={item.kind} onChange={(event) => updateScopeItem(item.id, { kind: event.target.value as ScopeKind })} className={inputClassName()} disabled={!isEditingProposalDocument}>
-                  <option value="group">Grupo</option>
-                  <option value="subgroup">Subgrupo</option>
-                  <option value="activity">Actividad</option>
+                  <option value="group">Titulo</option>
+                  <option value="subgroup">Subtitulo</option>
+                  <option value="activity">Partida / actividad</option>
                 </select>
               </Field>
               <Field label="Tiempo estimado">
@@ -2057,6 +2259,28 @@ ${clone.outerHTML}
                   <FieldLabelIcon icon="table" label="Datos generales compactos" className="text-[12px] font-bold text-stone-800" />
                   <div className="flex items-center gap-2">
                     <label className="flex items-center gap-1 text-[10px] font-bold uppercase tracking-wide text-stone-500">
+                      Revision
+                      <select
+                        value={draft.metadata.revision}
+                        onChange={(event) => handleRevisionChange(event.target.value)}
+                        className="h-6 border border-stone-300 bg-white px-2 text-[11px] font-semibold normal-case text-stone-700 outline-none focus:border-teal-500"
+                      >
+                        {revisionOptions.map((revision) => (
+                          <option key={revision} value={revision}>
+                            {revision}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                    <button
+                      type="button"
+                      onClick={handleCreateNextRevision}
+                      className={smallButtonClassName("secondary")}
+                      disabled={!isEditingProposalDocument}
+                    >
+                      Nueva REV
+                    </button>
+                    <label className="flex items-center gap-1 text-[10px] font-bold uppercase tracking-wide text-stone-500">
                       Estado PT
                       <select
                         value={draft.work_status}
@@ -2260,13 +2484,13 @@ ${clone.outerHTML}
                         🗑
                       </button>
                       <button type="button" onClick={() => addScopeItem("group", selectedActionItem?.id)} className={smallButtonClassName("secondary")} disabled={!isEditingProposalDocument}>
-                        + Grupo
+                        + Titulo
                       </button>
                       <button type="button" onClick={() => addScopeItem("subgroup", selectedActionItem?.id)} className={smallButtonClassName("secondary")} disabled={!isEditingProposalDocument}>
-                        + Subgrupo
+                        + Subtitulo
                       </button>
                       <button type="button" onClick={() => addScopeItem("activity", selectedActionItem?.id)} className={smallButtonClassName("primary")} disabled={!isEditingProposalDocument}>
-                        + Actividad
+                        + Partida
                       </button>
                     </>
                   }
@@ -2308,9 +2532,9 @@ ${clone.outerHTML}
                                     className={spreadsheetControlClassName(scopeKindCellClassName(item.kind))}
                                     disabled={!isEditingProposalDocument}
                                   >
-                                    <option value="group">Grupo</option>
-                                    <option value="subgroup">Subgrupo</option>
-                                    <option value="activity">Actividad</option>
+                                    <option value="group">Titulo</option>
+                                    <option value="subgroup">Subtitulo</option>
+                                    <option value="activity">Partida / actividad</option>
                                   </select>
                                 </td>
                                 <td className="border border-stone-200 p-0 align-middle">
@@ -2602,6 +2826,7 @@ ${clone.outerHTML}
           scopeItems={draft.scope_items}
           recursos={recursos}
           defaultScopeItemId={selectedActivity?.id ?? draft.scope_items.find((item) => item.kind === "activity")?.id ?? ""}
+          canViewPrices={resourceInspectorPermissions.canViewPrices}
           onClose={() => setQuickEntryOpen(false)}
           onApply={applyQuickEntry}
         />

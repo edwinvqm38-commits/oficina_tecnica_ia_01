@@ -11,6 +11,7 @@ type ResourceAutocompleteInputProps = {
   placeholder?: string;
   className?: string;
   usedResourceLookup?: Map<string, { count: number; activityNumbers: string[] }>;
+  canViewPrices?: boolean;
   onTextChange: (value: string) => void;
   onSelect: (resource: Recurso) => void;
   onActiveResource?: (resource: Recurso | null) => void;
@@ -31,6 +32,7 @@ function resourceMatches(resource: Recurso, query: string): boolean {
     resource.codigo_fabricante,
     resource.descripcion,
     resource.tipo_recurso,
+    resource.unidad,
     resource.proveedor,
     resource.marca,
   ]
@@ -45,6 +47,7 @@ export function ResourceAutocompleteInput({
   placeholder = "Buscar o escribir recurso",
   className,
   usedResourceLookup,
+  canViewPrices = true,
   onTextChange,
   onSelect,
   onActiveResource,
@@ -249,7 +252,7 @@ export function ResourceAutocompleteInput({
               </span>
               <span className="block truncate text-stone-700">{resource.descripcion}</span>
               <span className="block truncate text-[10px] text-stone-400">
-                {resource.unidad || "-"} · {resource.moneda} {formatCurrencyNumber(resource.precio_unitario_ref)} · {resource.marca || "-"} /{" "}
+                {resource.unidad || "-"} · {canViewPrices ? `${resource.moneda} ${formatCurrencyNumber(resource.precio_unitario_ref)}` : "Precio oculto"} · {resource.marca || "-"} /{" "}
                 {resource.proveedor || "-"}
               </span>
               {usage ? (

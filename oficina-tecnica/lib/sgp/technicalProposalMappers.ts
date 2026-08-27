@@ -49,11 +49,12 @@ export type TechnicalProposalDraftLike = {
     cotizacion_codigo: string;
     documento_codigo: string;
     documento_tipo: "PT";
-    revision: "REV00";
-    subcarpeta_revision: "02_PROPUESTA";
+    revision: string;
+    subcarpeta_revision: string;
     archivo_docx: string;
     archivo_pdf: string;
     estructura_documental_version: "cotizacion_drive_v2";
+    propuesta_tecnica_id?: string | null;
   };
   mode: "cliente" | "interno";
   work_status: "Borrador" | "En proceso" | "Completado";
@@ -127,10 +128,7 @@ export function sortTechnicalProposalItemsForRpc(items: TechnicalProposalScopeIt
     return preparedItem;
   });
 
-  return prepared.sort((left, right) => {
-    if (left.level !== right.level) return left.level - right.level;
-    return left.originalIndex - right.originalIndex;
-  });
+  return prepared.sort((left, right) => left.originalIndex - right.originalIndex);
 }
 
 export function buildTechnicalProposalRpcPayload(
@@ -143,6 +141,7 @@ export function buildTechnicalProposalRpcPayload(
   const itemKeys = new Set(orderedItems.map((item) => item.clientKey));
 
   const proposal = {
+    id: toNullableUuid(draft.metadata.propuesta_tecnica_id),
     cotizacion_id: toNullableUuid(cotizacion.id),
     cotizacion_codigo: cotizacionCodigo,
     code,

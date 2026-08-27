@@ -2093,6 +2093,13 @@ export function QuotationWorkspaceModal({
                       recursos={recursos}
                       canEdit={canEditQuotation && canViewQuotationActions}
                       canViewPrices={canShowEconomicValues}
+                      technicalProposalOptions={technicalProposalOptions}
+                      onBudgetEconomicsSynced={async ({ montoOfertado, resumenEconomico }) => {
+                        await saveQuotationAndPendingDocuments({
+                          monto: montoOfertado,
+                          resumen_economico: resumenEconomico,
+                        });
+                      }}
                     />
                   ) : (
                     <div className="flex min-h-0 flex-col border-t border-stone-200 pt-2">
@@ -2830,6 +2837,8 @@ export function QuotationWorkspaceModal({
             open={technicalProposalOpen}
             cotizacion={draft}
             recursos={recursos}
+            technicalProposalOptions={technicalProposalOptions}
+            canViewPrices={canViewPrices}
             onClose={() => setTechnicalProposalOpen(false)}
           />
         ) : null}
