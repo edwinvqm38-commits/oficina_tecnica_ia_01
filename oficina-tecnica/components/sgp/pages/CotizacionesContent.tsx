@@ -588,7 +588,7 @@ function upsertResource(rows: Recurso[], resource: Recurso): Recurso[] {
 export default function CotizacionesPage({ embeddedWorkspace = null }: CotizacionesPageProps) {
   const embeddedQuotationCode = embeddedWorkspace?.quotationCode.trim() || null;
   const isEmbeddedWorkspace = Boolean(embeddedQuotationCode);
-  const { profile, user } = useAuth();
+  const { profile, user, accessStatus } = useAuth();
   const {
     users: approvedUsers,
     loading: loadingObservationUsers,
@@ -990,6 +990,21 @@ export default function CotizacionesPage({ embeddedWorkspace = null }: Cotizacio
   }
 
   useEffect(() => {
+    // Esperar a que Supabase termine de restaurar la sesión antes
+    // de ejecutar consultas protegidas por RLS.
+    if (accessStatus === "loading") {
+      setIsDataLoading(true);
+      return;
+    }
+
+    // Fuera de una sesión aprobada no conservar datos del usuario
+    // anterior ni resultados fallback en cache.
+    if (accessStatus !== "approved") {
+      clearCoreAppDataCache();
+      setIsDataLoading(false);
+      return;
+    }
+
     let active = true;
     const cached = getFreshCoreAppDataCache();
     const reason: ClientDataLoadReason = hasLoadedDataRef.current ? "auth-change" : cached ? "cache-hydration" : "initial-load";
@@ -1080,7 +1095,7 @@ export default function CotizacionesPage({ embeddedWorkspace = null }: Cotizacio
     return () => {
       active = false;
     };
-  }, [currentUserEmail]);
+  }, [accessStatus, currentUserEmail]);
 
   const cotizacionesColumns = useMemo(
     () => [

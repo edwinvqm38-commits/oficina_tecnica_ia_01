@@ -124,9 +124,20 @@ export async function loadCoreAppData(options: {
   });
 
   inFlightCoreAppData = Promise.all([listCotizaciones(), listRequerimientos()])
-    .then(([cotizaciones, requerimientos]) => {
-      const value = buildCoreData(cotizaciones, requerimientos);
-      coreAppDataCache = { value, expiresAt: Date.now() + CLIENT_DATA_TTL_MS };
+    .then(([cotizaciones, requerimientos]) => {      const value = buildCoreData(cotizaciones, requerimientos);
+
+      // Solo una respuesta íntegramente obtenida desde Supabase
+      // puede mantenerse como cache reutilizable.
+      // Un 401/error transitorio no debe fijar data demo durante 5 minutos.
+      if (value.source === "supabase") {
+        coreAppDataCache = {
+          value,
+          expiresAt: Date.now() + CLIENT_DATA_TTL_MS,
+        };
+      } else {
+        coreAppDataCache = null;
+      }
+
       return value;
     })
     .finally(() => {
