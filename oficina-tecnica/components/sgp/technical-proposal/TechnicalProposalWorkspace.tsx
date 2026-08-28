@@ -8,10 +8,44 @@ import { TechnicalProposalResourceGrid } from "@/components/sgp/technical-propos
 import { TechnicalProposalResourceInspector } from "@/components/sgp/technical-proposal/TechnicalProposalResourceInspector";
 import { TechnicalProposalTopbar } from "@/components/sgp/technical-proposal/TechnicalProposalTopbar";
 import { TechnicalProposalUsedResourcesPanel, type UsedResourceItem } from "@/components/sgp/technical-proposal/TechnicalProposalUsedResourcesPanel";
-import type { Cotizacion, Recurso } from "@/lib/sgp/demoData";
+import { ResourceCatalogPanel } from "@/components/sgp/resources/ResourceCatalogPanel";
+import { ResourceFormModal } from "@/components/sgp/resources/ResourceFormModal";
+import type {
+  CatalogEstadoRecurso,
+  CatalogMarca,
+  CatalogMoneda,
+  CatalogProveedor,
+  CatalogTipoRecurso,
+  CatalogUnidad,
+  Cotizacion,
+  Recurso,
+  ResourceFileMeta,
+} from "@/lib/sgp/demoData";
 import type { AdjudicatedTechnicalProposalOption } from "@/lib/sgp/adjudicatedProjectsRepository";
+import { listCatalogMap } from "@/lib/sgp/catalogsRepository";
 import { findClientLogo, findDefaultCompanyLogo, readProposalLogos, type ProposalLogo } from "@/lib/sgp/proposalLogos";
+import {
+  applyBudgetResourcePriceReview,
+  createQuotationBudgetFromTechnicalProposal,
+  getQuotationBudgetDetail,
+  listQuotationBudgets,
+  listResourcePriceHistories,
+  type ApplyBudgetResourcePriceReviewAction,
+  type MonedaPresupuestoCotizacion,
+  type QuotationBudgetDetail,
+  type ResourcePriceHistory,
+  type ResourcePriceHistorySource,
+} from "@/lib/sgp/quotationBudgetsRepository";
+import { buildTechnicalProposalResourceEconomics, buildTechnicalProposalResourceTree, consolidateTechnicalProposalResources } from "@/lib/sgp/technicalProposalResourceUsage";
 import { buildTechnicalProposalRpcPayload, validateTechnicalProposalRpcPayload } from "@/lib/sgp/technicalProposalMappers";
+import {
+  createRecurso,
+  createResourceFileSignedUrl,
+  getNextResourceDraftCode,
+  RecursoWriteError,
+  uploadResourceFile,
+  type ResourceStorageFileCategory,
+} from "@/lib/sgp/recursosRepository";
 import {
   getTechnicalProposalByCotizacionRevision,
   listTechnicalProposalItems,
@@ -25,6 +59,9 @@ type TechnicalProposalWorkspaceModalProps = {
   recursos: Recurso[];
   technicalProposalOptions?: AdjudicatedTechnicalProposalOption[];
   canViewPrices?: boolean;
+  canCreateResource?: boolean;
+  canManageResourceDocuments?: boolean;
+  canEditBudgetPrices?: boolean;
   onClose: () => void;
 };
 
@@ -44,7 +81,7 @@ type TechnicalProposalMetadata = {
 type ScopeKind = "group" | "subgroup" | "activity";
 type ProposalMode = "cliente" | "interno";
 type ProposalWorkStatus = "Borrador" | "En proceso" | "Completado";
-type RightPanelView = "document" | "selected_resource" | "used_resources";
+type RightPanelView = "resources" | "used_resources" | "document";
 type ResourceCategoryKey =
   | "mano_obra_directa"
   | "mano_obra_indirecta"
@@ -55,7 +92,9 @@ type ResourceCategoryKey =
   | "gastos_generales"
   | "mano_obra"
   | "equipos"
-  | "herramientas";
+  | "herramientas"
+  | "vehiculos"
+  | "transporte";
 
 type ScopeItem = {
   id: string;
@@ -158,6 +197,15 @@ type TechnicalProposalDraft = {
   updated_at: string;
 };
 
+type ResourceFormCatalogs = {
+  tipos: CatalogTipoRecurso[];
+  unidades: CatalogUnidad[];
+  marcas: CatalogMarca[];
+  proveedores: CatalogProveedor[];
+  monedas: CatalogMoneda[];
+  estados: CatalogEstadoRecurso[];
+};
+
 type ParsedScopeLine = {
   level: number;
   kind: ScopeKind;
@@ -174,17 +222,25 @@ const REVISION = "REV00";
 const REVISION_FOLDER = "02_PROPUESTA";
 
 const RESOURCE_CATEGORIES: Array<{ key: ResourceCategoryKey; label: string; shortLabel: string; hasTime: boolean }> = [
-  { key: "mano_obra_directa", label: "Mano de obra directa", shortLabel: "MOD", hasTime: true },
-  { key: "mano_obra_indirecta", label: "Mano de obra indirecta", shortLabel: "MOI", hasTime: true },
+  { key: "mano_obra", label: "Mano de obra", shortLabel: "MO", hasTime: true },
   { key: "materiales", label: "Materiales", shortLabel: "MAT", hasTime: false },
   { key: "consumibles", label: "Consumibles", shortLabel: "CON", hasTime: false },
-  { key: "equipos_herramientas", label: "Equipos y herramientas", shortLabel: "EQH", hasTime: true },
+  { key: "equipos", label: "Equipos", shortLabel: "EQP", hasTime: true },
+  { key: "herramientas", label: "Herramientas", shortLabel: "HER", hasTime: true },
   { key: "subcontratos", label: "Subcontratos", shortLabel: "SUB", hasTime: false },
+  { key: "vehiculos", label: "Vehiculos", shortLabel: "VEH", hasTime: true },
+  { key: "transporte", label: "Transporte", shortLabel: "TRA", hasTime: false },
   { key: "gastos_generales", label: "Gastos generales", shortLabel: "GG", hasTime: false },
-  { key: "mano_obra", label: "Mano de obra legacy", shortLabel: "MO", hasTime: true },
-  { key: "equipos", label: "Equipos legacy", shortLabel: "EQP", hasTime: true },
-  { key: "herramientas", label: "Herramientas legacy", shortLabel: "HER", hasTime: true },
 ];
+
+const EMPTY_RESOURCE_FORM_CATALOGS: ResourceFormCatalogs = {
+  tipos: [],
+  unidades: [],
+  marcas: [],
+  proveedores: [],
+  monedas: [],
+  estados: [],
+};
 
 function uid(prefix: string): string {
   return `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
@@ -284,13 +340,34 @@ function toFiniteNumber(value: unknown): number {
 
 function mapResourceCategory(tipoRecurso: string): ResourceCategoryKey {
   const normalized = normalizeSearch(tipoRecurso);
-  if (normalized.includes("mano de obra") && normalized.includes("indirect")) return "mano_obra_indirecta";
-  if (normalized.includes("mano de obra")) return "mano_obra_directa";
+  if (normalized.includes("mano de obra") || /\bmo[di]\b/.test(normalized)) return "mano_obra";
   if (normalized.includes("material")) return "materiales";
   if (normalized.includes("subcontr")) return "subcontratos";
+  if (normalized.includes("vehiculo")) return "vehiculos";
+  if (normalized.includes("transporte")) return "transporte";
   if (normalized.includes("gasto general") || normalized.includes("indirecto")) return "gastos_generales";
-  if (normalized.includes("equipo") || normalized.includes("vehiculo") || normalized.includes("herramienta")) return "equipos_herramientas";
+  if (normalized.includes("herramienta")) return "herramientas";
+  if (normalized.includes("equipo")) return "equipos";
   return "consumibles";
+}
+
+function normalizeResourceCategoryKey(value: string | null | undefined, tipoRecurso = ""): ResourceCategoryKey {
+  if (value === "mano_obra_directa" || value === "mano_obra_indirecta") return "mano_obra";
+  if (value === "equipos_herramientas") return mapResourceCategory(tipoRecurso || "Equipos");
+  if (
+    value === "materiales" ||
+    value === "consumibles" ||
+    value === "equipos" ||
+    value === "herramientas" ||
+    value === "subcontratos" ||
+    value === "gastos_generales" ||
+    value === "mano_obra" ||
+    value === "vehiculos" ||
+    value === "transporte"
+  ) {
+    return value;
+  }
+  return mapResourceCategory(tipoRecurso);
 }
 
 function defaultScopeItems(projectName: string): ScopeItem[] {
@@ -431,7 +508,7 @@ function normalizeLegacyDraft(
       return {
         ...legacyResource,
         scope_item_id: legacyResource.scope_item_id || legacyResource.activity_id || firstActivity?.id || "scope-1",
-        resource_category: legacyResource.resource_category || mapResourceCategory(legacyResource.tipo_recurso),
+        resource_category: normalizeResourceCategoryKey(legacyResource.resource_category, legacyResource.tipo_recurso),
         tiempo: toFiniteNumber(legacyResource.tiempo),
       };
     }),
@@ -489,7 +566,7 @@ async function readPersistedDraft(cotizacion: Cotizacion, revision: string): Pro
     codigo_recurso: resource.codigo_recurso ?? "",
     codigo_fabricante: resource.codigo_fabricante ?? "",
     tipo_recurso: resource.tipo_recurso ?? "",
-    resource_category: (resource.resource_category || mapResourceCategory(resource.tipo_recurso ?? "")) as ResourceCategoryKey,
+    resource_category: normalizeResourceCategoryKey(resource.resource_category, resource.tipo_recurso ?? ""),
     descripcion: resource.descripcion,
     unidad: resource.unidad ?? "",
     precio_unitario_ref: toFiniteNumber(resource.precio_unitario_ref),
@@ -886,6 +963,49 @@ function fileToDataUrl(file: File): Promise<string> {
   });
 }
 
+function emptyResourceFiles(): Recurso["resourceFiles"] {
+  return {
+    fichaTecnica: null,
+    imagen: null,
+    cotizacion: null,
+    fichasTecnicas: [],
+    imagenes: [],
+    cotizaciones: [],
+    archivos: [],
+  };
+}
+
+function buildTechnicalProposalResourceDraft(code: string): Recurso {
+  return {
+    id: `rec-${uid("draft")}`,
+    codigo_recurso: code,
+    codigo_eka: "",
+    codigo_fabricante: "",
+    tipo_recurso: "",
+    descripcion: "",
+    unidad: "und",
+    precio_unitario_ref: 0,
+    moneda: "PEN",
+    proveedor: "",
+    marca: "",
+    modelo: "",
+    tiempo_entrega_ref: "",
+    ficha_tecnica: "",
+    imagen: "",
+    archivos: "",
+    estado: "Por revisar",
+    fecha_actualizacion: todayIsoDate(),
+    observaciones: "",
+    resourceFiles: emptyResourceFiles(),
+  };
+}
+
+function upsertResource(rows: Recurso[], resource: Recurso): Recurso[] {
+  return rows.some((item) => item.id === resource.id)
+    ? rows.map((item) => (item.id === resource.id ? resource : item))
+    : [resource, ...rows];
+}
+
 function TechnicalProposalQuickEntryModal({
   open,
   scopeItems,
@@ -904,7 +1024,7 @@ function TechnicalProposalQuickEntryModal({
   onApply: (scopeItemId: string, category: ResourceCategoryKey, rows: QuickEntryRow[]) => void;
 }) {
   const [scopeItemId, setScopeItemId] = useState(defaultScopeItemId);
-  const [category, setCategory] = useState<ResourceCategoryKey>("mano_obra_directa");
+  const [category, setCategory] = useState<ResourceCategoryKey>("mano_obra");
   const [rows, setRows] = useState<QuickEntryRow[]>([
     { id: uid("qr"), recurso_id: "", descripcion: "", cantidad: 1, unidad: "und", tiempo: 1, comentario: "" },
   ]);
@@ -912,7 +1032,7 @@ function TechnicalProposalQuickEntryModal({
   useEffect(() => {
     if (!open) return;
     setScopeItemId(defaultScopeItemId);
-    setCategory("mano_obra_directa");
+    setCategory("mano_obra");
     setRows([{ id: uid("qr"), recurso_id: "", descripcion: "", cantidad: 1, unidad: "und", tiempo: 1, comentario: "" }]);
   }, [defaultScopeItemId, open]);
 
@@ -939,7 +1059,7 @@ function TechnicalProposalQuickEntryModal({
         <div className="flex items-center justify-between gap-3 border-b border-stone-200 bg-stone-50 px-3 py-2">
           <div>
             <h3 className="text-[13px] font-bold text-stone-800">Ingreso rapido de recursos</h3>
-            <p className="text-[11px] text-stone-500">Filas temporales aplicadas como snapshot editable a una actividad.</p>
+            <p className="text-[11px] text-stone-500">Filas temporales aplicadas como snapshot editable al item elegido.</p>
           </div>
           <button type="button" onClick={onClose} className={smallButtonClassName("ghost")}>
             Cerrar
@@ -947,15 +1067,13 @@ function TechnicalProposalQuickEntryModal({
         </div>
         <div className="min-h-0 overflow-y-auto p-3">
           <div className="grid grid-cols-1 gap-2 md:grid-cols-[1fr_auto]">
-            <Field label="Actividad destino">
+            <Field label="Item destino">
               <select value={scopeItemId} onChange={(event) => setScopeItemId(event.target.value)} className={inputClassName()}>
-                {scopeItems
-                  .filter((item) => item.kind === "activity")
-                  .map((item) => (
-                    <option key={item.id} value={item.id}>
-                      {item.number} {item.title}
-                    </option>
-                  ))}
+                {scopeItems.map((item) => (
+                  <option key={item.id} value={item.id}>
+                    {item.number} {item.title}
+                  </option>
+                ))}
               </select>
             </Field>
             <div className="flex flex-wrap items-end gap-1.5">
@@ -1060,6 +1178,9 @@ export function TechnicalProposalWorkspaceModal({
   recursos,
   technicalProposalOptions = [],
   canViewPrices = true,
+  canCreateResource = false,
+  canManageResourceDocuments = false,
+  canEditBudgetPrices = false,
   onClose,
 }: TechnicalProposalWorkspaceModalProps) {
   const [selectedRevision, setSelectedRevision] = useState(REVISION);
@@ -1069,18 +1190,31 @@ export function TechnicalProposalWorkspaceModal({
   const [quickEntryOpen, setQuickEntryOpen] = useState(false);
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
   const [editingLocked, setEditingLocked] = useState(true);
-  const [rightPanelView, setRightPanelView] = useState<RightPanelView>("document");
+  const [rightPanelView, setRightPanelView] = useState<RightPanelView>("resources");
+  const [createdResources, setCreatedResources] = useState<Recurso[]>([]);
   const [activeMasterResource, setActiveMasterResource] = useState<Recurso | null>(null);
   const [selectedResourceRowId, setSelectedResourceRowId] = useState<string | null>(null);
   const [activeResourceTargetRowId, setActiveResourceTargetRowId] = useState<string | null>(null);
   const [editingResourceCellId, setEditingResourceCellId] = useState<string | null>(null);
+  const [resourceModalOpen, setResourceModalOpen] = useState(false);
+  const [resourceDraft, setResourceDraft] = useState<Recurso | null>(null);
+  const [savingResource, setSavingResource] = useState(false);
+  const [resourceFormMessage, setResourceFormMessage] = useState<string | null>(null);
   const [proposalLogos, setProposalLogos] = useState<ProposalLogo[]>([]);
   const [previewRefreshKey, setPreviewRefreshKey] = useState(0);
   const [printingReady, setPrintingReady] = useState(false);
   const [savingToSupabase, setSavingToSupabase] = useState(false);
+  const [resourceCatalogs, setResourceCatalogs] = useState<ResourceFormCatalogs>(EMPTY_RESOURCE_FORM_CATALOGS);
+  const [linkedBudgetDetail, setLinkedBudgetDetail] = useState<QuotationBudgetDetail | null>(null);
+  const [resourcePriceHistories, setResourcePriceHistories] = useState<ResourcePriceHistory[]>([]);
+  const [budgetContextLoading, setBudgetContextLoading] = useState(false);
   const printInProgressRef = useRef(false);
   const previewDocumentRef = useRef<HTMLElement | null>(null);
   const scopeTextareaRef = useRef<HTMLTextAreaElement | null>(null);
+  const resourceCatalog = useMemo(
+    () => createdResources.reduce((rows, resource) => upsertResource(rows, resource), recursos),
+    [createdResources, recursos],
+  );
   const revisionOptions = useMemo(() => {
     const revisions = new Set<string>([REVISION, selectedRevision, draft.metadata.revision]);
     technicalProposalOptions.forEach((option) => revisions.add(normalizeRevision(option.revision)));
@@ -1095,11 +1229,15 @@ export function TechnicalProposalWorkspaceModal({
     setSelectedScopeItemId(next.scope_items.find((item) => item.kind === "activity")?.id ?? next.scope_items[0]?.id ?? "scope-1");
     setStatusMessage(null);
     setEditingLocked(true);
-    setRightPanelView("document");
+    setRightPanelView("resources");
     setActiveMasterResource(null);
     setSelectedResourceRowId(null);
     setActiveResourceTargetRowId(null);
     setEditingResourceCellId(null);
+    setResourceModalOpen(false);
+    setResourceDraft(null);
+    setSavingResource(false);
+    setResourceFormMessage(null);
     setProposalLogos(readProposalLogos());
     setPreviewRefreshKey((current) => current + 1);
     setSavingToSupabase(false);
@@ -1118,6 +1256,29 @@ export function TechnicalProposalWorkspaceModal({
       cancelled = true;
     };
   }, [cotizacion, open, selectedRevision]);
+
+  useEffect(() => {
+    if (!open) return;
+    let cancelled = false;
+    void listCatalogMap()
+      .then((result) => {
+        if (cancelled) return;
+        setResourceCatalogs({
+          tipos: (result.catalogs.catalogTipoRecurso ?? []) as CatalogTipoRecurso[],
+          unidades: (result.catalogs.catalogUnidades ?? []) as CatalogUnidad[],
+          marcas: (result.catalogs.catalogMarcas ?? []) as CatalogMarca[],
+          proveedores: (result.catalogs.catalogProveedores ?? []) as CatalogProveedor[],
+          monedas: (result.catalogs.catalogMonedas ?? []) as CatalogMoneda[],
+          estados: (result.catalogs.catalogEstadosRecurso ?? []) as CatalogEstadoRecurso[],
+        });
+      })
+      .catch(() => {
+        if (!cancelled) setResourceCatalogs(EMPTY_RESOURCE_FORM_CATALOGS);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [open]);
 
   useEffect(() => {
     if (!open || typeof window === "undefined") return;
@@ -1153,7 +1314,7 @@ export function TechnicalProposalWorkspaceModal({
     return lookup;
   }, [activityNumberById, draft.resources]);
   const selectedResourceSnapshot = draft.resources.find((resource) => resource.id === selectedResourceRowId) ?? null;
-  const selectedResourceMaster = selectedResourceSnapshot?.recurso_id ? recursos.find((resource) => resource.id === selectedResourceSnapshot.recurso_id) ?? null : null;
+  const selectedResourceMaster = selectedResourceSnapshot?.recurso_id ? resourceCatalog.find((resource) => resource.id === selectedResourceSnapshot.recurso_id) ?? null : null;
   const displayedResource = activeMasterResource ?? selectedResourceMaster;
   const displayedResourceSnapshot = activeMasterResource ? null : selectedResourceSnapshot;
   const usedResourceItems = useMemo<UsedResourceItem[]>(
@@ -1162,6 +1323,7 @@ export function TechnicalProposalWorkspaceModal({
         const activity = draft.scope_items.find((item) => item.id === resource.scope_item_id);
         return {
           rowId: resource.id,
+          scopeItemId: resource.scope_item_id,
           masterResourceId: resource.recurso_id,
           codigo: resource.codigo_recurso,
           descripcion: resource.descripcion,
@@ -1177,6 +1339,79 @@ export function TechnicalProposalWorkspaceModal({
       }),
     [draft.resources, draft.scope_items],
   );
+  const scopeItemsForResourceTree = useMemo(
+    () => draft.scope_items.map((item) => ({ id: item.id, level: item.level, number: item.number, kind: item.kind, title: item.title })),
+    [draft.scope_items],
+  );
+  const previewScopeTree = useMemo(
+    () => buildTechnicalProposalResourceTree(scopeItemsForResourceTree, usedResourceItems),
+    [scopeItemsForResourceTree, usedResourceItems],
+  );
+  const proposalResourceIds = useMemo(
+    () => Array.from(new Set(draft.resources.map((resource) => resource.recurso_id).filter((id): id is string => Boolean(id)))),
+    [draft.resources],
+  );
+  const proposalResourceIdKey = proposalResourceIds.join("|");
+  const technicalProposalId = draft.metadata.propuesta_tecnica_id ?? null;
+  const usedResourceEconomics = useMemo(() => {
+    if (!canViewPrices) return new Map();
+    return buildTechnicalProposalResourceEconomics(consolidateTechnicalProposalResources(usedResourceItems), {
+      resourceCatalog,
+      histories: resourcePriceHistories,
+      budget: linkedBudgetDetail
+        ? {
+            id: linkedBudgetDetail.presupuesto.id,
+            estado: linkedBudgetDetail.presupuesto.estado,
+            resources: linkedBudgetDetail.recursos,
+          }
+      : null,
+    });
+  }, [canViewPrices, linkedBudgetDetail, resourceCatalog, resourcePriceHistories, usedResourceItems]);
+
+  useEffect(() => {
+    if (!open || !canViewPrices) {
+      void Promise.resolve().then(() => {
+        setLinkedBudgetDetail(null);
+        setResourcePriceHistories([]);
+        setBudgetContextLoading(false);
+      });
+      return;
+    }
+
+    let cancelled = false;
+    async function loadBudgetContext() {
+      setBudgetContextLoading(true);
+      try {
+        const histories = proposalResourceIds.length > 0 ? await listResourcePriceHistories(proposalResourceIds) : [];
+        let detail: QuotationBudgetDetail | null = null;
+        if (technicalProposalId) {
+          const budgets = await listQuotationBudgets(cotizacion.id);
+          const linkedBudget = [...budgets]
+            .filter((budget) => budget.propuestaTecnicaId === technicalProposalId)
+            .sort((left, right) => right.revision - left.revision)[0];
+          detail = linkedBudget ? await getQuotationBudgetDetail(linkedBudget.id) : null;
+        }
+        if (!cancelled) {
+          setResourcePriceHistories(histories);
+          setLinkedBudgetDetail(detail);
+        }
+      } catch (error) {
+        if (!cancelled) {
+          setResourcePriceHistories([]);
+          setLinkedBudgetDetail(null);
+          setStatusMessage(error instanceof Error ? error.message : "No se pudo cargar economia de recursos usados.");
+        }
+      } finally {
+        if (!cancelled) setBudgetContextLoading(false);
+      }
+    }
+
+    void loadBudgetContext();
+    return () => {
+      cancelled = true;
+    };
+  }, [canViewPrices, cotizacion.id, open, proposalResourceIdKey, proposalResourceIds, technicalProposalId]);
+
   const resourceInspectorPermissions = useMemo(
     () => ({
       canViewPrices,
@@ -1304,6 +1539,175 @@ export function TechnicalProposalWorkspaceModal({
     setPreviewRefreshKey((current) => current + 1);
     setRightPanelView("document");
     setStatusMessage("Vista previa actualizada desde los datos locales.");
+  }
+
+  function selectedResourceTargetItem(): ScopeItem | null {
+    return selectedScopeItem ?? selectedActivity ?? draft.scope_items[0] ?? null;
+  }
+
+  function attachCatalogResourceToSelectedItem(resource: Recurso) {
+    if (!isEditingProposalDocument) {
+      setStatusMessage("Activa Editar para agregar recursos desde el catalogo.");
+      return;
+    }
+    const target = selectedResourceTargetItem();
+    if (!target) {
+      setStatusMessage("No hay un item de alcance seleccionado para asociar el recurso.");
+      return;
+    }
+    const snapshot = makeSnapshotFromResource(resource, target.id);
+    setDraftWithTouch((prev) => ({ ...prev, resources: [...prev.resources, snapshot] }));
+    setSelectedResourceRowId(snapshot.id);
+    setActiveResourceTargetRowId(snapshot.id);
+    setEditingResourceCellId(null);
+    setActiveMasterResource(resource);
+    setRightPanelView("resources");
+    setStatusMessage(`Recurso ${resource.codigo_recurso || resource.descripcion} agregado a ${target.number}.`);
+  }
+
+  function handleAddCatalogResource(resourceId: string) {
+    const resource = resourceCatalog.find((item) => item.id === resourceId);
+    if (!resource) {
+      setStatusMessage("El recurso seleccionado ya no esta disponible en el catalogo cargado.");
+      return;
+    }
+    attachCatalogResourceToSelectedItem(resource);
+  }
+
+  async function openCreateResourceFromTechnicalProposal() {
+    if (!isEditingProposalDocument) {
+      setStatusMessage("Activa Editar para crear recursos desde la propuesta tecnica.");
+      return;
+    }
+    if (!canCreateResource) {
+      setStatusMessage("No tienes permiso para crear recursos maestros.");
+      return;
+    }
+    setResourceFormMessage("Calculando siguiente codigo de recurso...");
+    try {
+      const code = await getNextResourceDraftCode();
+      setResourceDraft(buildTechnicalProposalResourceDraft(code));
+      setResourceModalOpen(true);
+      setResourceFormMessage(null);
+    } catch (error) {
+      setResourceFormMessage(null);
+      setStatusMessage(error instanceof Error ? error.message : "No se pudo preparar el formulario de recurso.");
+    }
+  }
+
+  async function saveCreatedResourceFromTechnicalProposal(value: Recurso) {
+    if (!canCreateResource) {
+      setResourceFormMessage("No tienes permiso para crear recursos maestros.");
+      return;
+    }
+    setSavingResource(true);
+    setResourceFormMessage(null);
+    try {
+      const savedResource = await createRecurso({
+        ...value,
+        estado: value.estado || "Por revisar",
+        metadata: {
+          origen_registro: "propuesta_tecnica",
+          cotizacion_id: cotizacion.id,
+          cotizacion_codigo: cotizacion.codigo,
+          propuesta_tecnica_revision: draft.metadata.revision,
+        },
+      });
+      setCreatedResources((prev) => upsertResource(prev, savedResource));
+      setResourceModalOpen(false);
+      setResourceDraft(null);
+      attachCatalogResourceToSelectedItem(savedResource);
+    } catch (error) {
+      if (error instanceof RecursoWriteError) {
+        setResourceFormMessage(error.code === "duplicate_code" ? "Codigo de recurso duplicado." : error.message);
+      } else {
+        setResourceFormMessage(error instanceof Error ? error.message : "No se pudo crear el recurso.");
+      }
+    } finally {
+      setSavingResource(false);
+    }
+  }
+
+  async function handleOpenResourceFile(file: ResourceFileMeta) {
+    const url = await createResourceFileSignedUrl(file);
+    if (!url) {
+      throw new Error("El archivo no tiene una URL o ruta de Storage disponible.");
+    }
+    window.open(url, "_blank", "noopener,noreferrer");
+  }
+
+  async function handleUploadResourceFile(
+    resourceId: string,
+    category: ResourceStorageFileCategory,
+    file: File,
+  ): Promise<ResourceFileMeta> {
+    if (!canManageResourceDocuments || !canCreateResource) {
+      throw new Error("No tienes permiso para gestionar archivos de recursos desde PT.");
+    }
+    if (!resourceId.trim()) throw new Error("Completa el codigo del recurso antes de subir archivos.");
+    return uploadResourceFile(resourceId, category, file);
+  }
+
+  async function handleCreateBudgetFromTechnicalProposal() {
+    if (!technicalProposalId) {
+      setStatusMessage("Guarda la propuesta tecnica antes de crear el presupuesto asociado.");
+      return;
+    }
+    if (!canViewPrices || !canEditBudgetPrices) {
+      setStatusMessage("Crear presupuesto desde PT requiere permiso economico.");
+      return;
+    }
+    setBudgetContextLoading(true);
+    try {
+      const budget = await createQuotationBudgetFromTechnicalProposal(technicalProposalId);
+      const detail = await getQuotationBudgetDetail(budget.id);
+      const histories = proposalResourceIds.length > 0 ? await listResourcePriceHistories(proposalResourceIds) : [];
+      setLinkedBudgetDetail(detail);
+      setResourcePriceHistories(histories);
+      setStatusMessage("Presupuesto creado desde la propuesta tecnica.");
+    } catch (error) {
+      setStatusMessage(error instanceof Error ? error.message : "No se pudo crear el presupuesto desde PT.");
+    } finally {
+      setBudgetContextLoading(false);
+    }
+  }
+
+  async function handleApplyUsedResourcePriceAction(
+    recursoId: string,
+    action: ApplyBudgetResourcePriceReviewAction,
+    options?: { precioHistoricoId?: string | null; precioUnitario?: number | null },
+  ) {
+    if (!linkedBudgetDetail) {
+      setStatusMessage("No hay presupuesto asociado a esta propuesta tecnica.");
+      return;
+    }
+    if (!canViewPrices || !canEditBudgetPrices || linkedBudgetDetail.presupuesto.estado !== "BORRADOR") {
+      setStatusMessage("La revision de precios requiere permiso economico y presupuesto BORRADOR.");
+      return;
+    }
+    setBudgetContextLoading(true);
+    try {
+      await applyBudgetResourcePriceReview({
+        presupuestoId: linkedBudgetDetail.presupuesto.id,
+        recursoId,
+        accion: action,
+        precioHistoricoId: options?.precioHistoricoId ?? null,
+        precioUnitario: options?.precioUnitario ?? null,
+        monedaCodigo: action === "NUEVO_PRECIO" ? ((linkedBudgetDetail.presupuesto.monedaCodigo ?? "PEN") as MonedaPresupuestoCotizacion) : null,
+        fechaPrecio: action === "NUEVO_PRECIO" ? todayIsoDate() : null,
+        fuenteTipo: action === "NUEVO_PRECIO" ? ("MANUAL" as ResourcePriceHistorySource) : null,
+        observaciones: action === "NUEVO_PRECIO" ? "Registrado desde recursos usados de PT." : null,
+      });
+      const detail = await getQuotationBudgetDetail(linkedBudgetDetail.presupuesto.id);
+      const histories = proposalResourceIds.length > 0 ? await listResourcePriceHistories(proposalResourceIds) : [];
+      setLinkedBudgetDetail(detail);
+      setResourcePriceHistories(histories);
+      setStatusMessage("Revision de precio aplicada al presupuesto asociado.");
+    } catch (error) {
+      setStatusMessage(error instanceof Error ? error.message : "No se pudo aplicar la revision de precio.");
+    } finally {
+      setBudgetContextLoading(false);
+    }
   }
 
   function safeExportFileName(extension: string): string {
@@ -1743,7 +2147,7 @@ ${clone.outerHTML}
     setSelectedResourceRowId(nextResource.id);
     setActiveResourceTargetRowId(nextResource.id);
     setActiveMasterResource(null);
-    setRightPanelView("selected_resource");
+    setRightPanelView("resources");
     setStatusMessage("Recurso agregado como nuevo por formalizar.");
   }
 
@@ -1768,9 +2172,9 @@ ${clone.outerHTML}
     const snapshot = draft.resources.find((resource) => resource.id === item.rowId) ?? null;
     setSelectedResourceRowId(item.rowId);
     setEditingResourceCellId(null);
-    setActiveMasterResource(item.masterResourceId ? recursos.find((resource) => resource.id === item.masterResourceId) ?? null : null);
+    setActiveMasterResource(item.masterResourceId ? resourceCatalog.find((resource) => resource.id === item.masterResourceId) ?? null : null);
     if (!snapshot?.recurso_id) setActiveMasterResource(null);
-    setRightPanelView("selected_resource");
+    setRightPanelView("resources");
   }
 
   function reuseUsedResource(item: UsedResourceItem) {
@@ -1809,8 +2213,8 @@ ${clone.outerHTML}
     });
     setSelectedResourceRowId(target.id);
     setEditingResourceCellId(null);
-    setActiveMasterResource(source.recurso_id ? recursos.find((resource) => resource.id === source.recurso_id) ?? null : null);
-    setRightPanelView("selected_resource");
+    setActiveMasterResource(source.recurso_id ? resourceCatalog.find((resource) => resource.id === source.recurso_id) ?? null : null);
+    setRightPanelView("resources");
     setStatusMessage("Recurso reutilizado en la fila seleccionada.");
   }
 
@@ -1819,7 +2223,7 @@ ${clone.outerHTML}
       const snapshots = rows
         .filter((row) => row.descripcion.trim() || row.recurso_id)
         .map((row) => {
-          const resource = recursos.find((item) => item.id === row.recurso_id);
+          const resource = resourceCatalog.find((item) => item.id === row.recurso_id);
           const snapshot = resource ? makeSnapshotFromResource(resource, scopeItemId, category) : makeNewFormalizationResource(scopeItemId, category);
           return {
             ...snapshot,
@@ -1926,7 +2330,7 @@ ${clone.outerHTML}
         activityNumber={activity.number}
         categories={RESOURCE_CATEGORIES}
         rows={rows}
-        resources={recursos}
+        resources={resourceCatalog}
         usedResourceLookup={usedResourceLookup}
         selectedResourceRowId={selectedResourceRowId}
         editingResourceCellId={editingResourceCellId}
@@ -1939,8 +2343,8 @@ ${clone.outerHTML}
           setSelectedResourceRowId(resource.id);
           setActiveResourceTargetRowId(resource.id);
           setEditingResourceCellId(null);
-          setActiveMasterResource(resource.recurso_id ? recursos.find((item) => item.id === resource.recurso_id) ?? null : null);
-          setRightPanelView("selected_resource");
+          setActiveMasterResource(resource.recurso_id ? resourceCatalog.find((item) => item.id === resource.recurso_id) ?? null : null);
+          setRightPanelView("resources");
         }}
         onEditResourceDescription={(resourceId) => {
           if (resourceId) setActiveResourceTargetRowId(resourceId);
@@ -1948,14 +2352,14 @@ ${clone.outerHTML}
         }}
         onActiveMasterResource={(resource) => {
           setActiveMasterResource(resource);
-          if (resource) setRightPanelView("selected_resource");
+          if (resource) setRightPanelView("resources");
         }}
         onSelectMasterResource={(resourceId, selectedResource) => {
           setSelectedResourceRowId(resourceId);
           setActiveResourceTargetRowId(resourceId);
           setEditingResourceCellId(null);
           setActiveMasterResource(selectedResource);
-          setRightPanelView("selected_resource");
+          setRightPanelView("resources");
           updateResource(resourceId, {
             recurso_id: selectedResource.id,
             codigo_recurso: selectedResource.codigo_recurso,
@@ -1999,7 +2403,7 @@ ${clone.outerHTML}
                   {scopeKindLabel(item.kind)}
                 </span>
                 <span>{childrenCount} subitem(s)</span>
-                {item.kind === "activity" ? <span>{draft.resources.filter((resource) => resource.scope_item_id === item.id).length} recurso(s)</span> : null}
+                <span>{draft.resources.filter((resource) => resource.scope_item_id === item.id).length} recurso(s)</span>
                 {item.kind === "activity" && item.complete ? <span className="rounded-full border border-emerald-200 bg-emerald-50 px-2 py-0.5 text-emerald-700">Completo</span> : null}
               </span>
             </span>
@@ -2050,9 +2454,9 @@ ${clone.outerHTML}
             <Field label="Descripcion tecnica / alcance">
               <textarea value={item.description} onChange={(event) => updateScopeItem(item.id, { description: event.target.value })} className={textareaClassName()} disabled={!isEditingProposalDocument} />
             </Field>
-            {item.kind === "activity" ? (
-              <>
-                <div className="flex flex-wrap items-center justify-between gap-2">
+            <>
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                {item.kind === "activity" ? (
                   <label className="inline-flex items-center gap-2 text-[11px] font-semibold text-stone-600">
                     <input
                       type="checkbox"
@@ -2063,17 +2467,20 @@ ${clone.outerHTML}
                     />
                     Actividad completa
                   </label>
-                  <div className="flex flex-wrap items-center gap-1.5">
-                    {RESOURCE_CATEGORIES.map((category) => (
-                      <button key={category.key} type="button" onClick={() => addNewResource(item.id, category.key)} className={smallButtonClassName("secondary")} disabled={!isEditingProposalDocument}>
-                        + {category.shortLabel}
-                      </button>
-                    ))}
-                  </div>
+                ) : <span className="text-[11px] font-semibold text-stone-500">Recursos asociados a {scopeKindLabel(item.kind).toLowerCase()}</span>}
+                <div className="flex flex-wrap items-center gap-1.5">
+                  {RESOURCE_CATEGORIES.map((category) => (
+                    <button key={category.key} type="button" onClick={() => addNewResource(item.id, category.key)} className={smallButtonClassName("secondary")} disabled={!isEditingProposalDocument}>
+                      + {category.shortLabel}
+                    </button>
+                  ))}
                 </div>
-                <div className="grid grid-cols-1 gap-2">
-                  {renderResourceGrid(item)}
-                </div>
+              </div>
+              <div className="grid grid-cols-1 gap-2">
+                {renderResourceGrid(item)}
+              </div>
+              {item.kind === "activity" ? (
+                <>
                 <div className="rounded-lg border border-stone-200 bg-stone-50 p-2">
                   <div className="mb-2 flex items-center justify-between gap-2">
                     <FieldLabelIcon icon="image" label="Imagenes de referencia" className="text-[11px] font-bold text-stone-700" />
@@ -2090,8 +2497,9 @@ ${clone.outerHTML}
                     />
                   </Field>
                 ) : null}
-              </>
-            ) : null}
+                </>
+              ) : null}
+            </>
           </div>
         ) : null}
       </div>
@@ -2197,6 +2605,45 @@ ${clone.outerHTML}
           </tbody>
         </table>
       </div>
+    );
+  }
+
+  function renderPreviewScopeNode(node: (typeof previewScopeTree)[number]): ReactNode {
+    const item = draft.scope_items.find((scopeItem) => scopeItem.id === node.id);
+    if (!item) return null;
+    const resourceTables = RESOURCE_CATEGORIES.map((category) => renderPreviewResourceTable(item, category)).filter(Boolean);
+
+    if (item.kind !== "activity") {
+      return (
+        <section key={item.id} className="space-y-3" style={{ marginLeft: `${Math.min(item.level, 4) * 8}px` }}>
+          <div className="border-b border-stone-200 pb-1 text-[10px] font-black uppercase text-stone-900">
+            {item.number}. {item.title}
+          </div>
+          {node.children.length > 0 ? <div className="space-y-4">{node.children.map((child) => renderPreviewScopeNode(child))}</div> : null}
+          {resourceTables.length > 0 ? <div className="border-l border-stone-200 pl-2 text-[9px] leading-4">{resourceTables}</div> : null}
+        </section>
+      );
+    }
+
+    const images = draft.activity_images.filter((image) => image.scope_item_id === item.id);
+    return (
+      <section
+        key={item.id}
+        className="border-l border-stone-200 pl-2 text-[9px] leading-4"
+        style={{ marginLeft: `${Math.min(item.level, 4) * 8}px` }}
+      >
+        <h3 className="border-b border-stone-200 pb-1 text-[10px] font-black text-stone-900">
+          {item.number}. {item.title}
+        </h3>
+        {item.description ? <p className="mt-1 whitespace-pre-line text-stone-700">{item.description}</p> : null}
+        {resourceTables}
+        {renderPreviewImages(images)}
+        {showInternal && item.internal_comments ? (
+          <div className="mt-2 rounded border border-amber-200 bg-amber-50 px-2 py-1 text-[9px] text-amber-800">
+            <strong>Comentario interno:</strong> {item.internal_comments}
+          </div>
+        ) : null}
+      </section>
     );
   }
 
@@ -2650,20 +3097,20 @@ ${clone.outerHTML}
           <aside className="flex min-h-0 flex-col overflow-hidden rounded-xl border border-stone-200 bg-stone-200">
             <div className="border-b border-stone-300 bg-stone-100 px-3 py-2">
               <h2 className="text-[14px] font-black text-stone-800">
-                {rightPanelView === "document" ? "Vista previa A4" : rightPanelView === "selected_resource" ? "Recurso seleccionado" : "Recursos usados"}
+                {rightPanelView === "document" ? "Vista previa A4" : rightPanelView === "resources" ? "Recursos" : "Recursos usados"}
               </h2>
               <p className="text-[11px] text-stone-500">
                 {rightPanelView === "document"
                   ? "Vista preparada para exportacion futura Word/PDF."
-                  : rightPanelView === "selected_resource"
-                    ? "Ficha ejecutiva de solo lectura del recurso maestro."
+                  : rightPanelView === "resources"
+                    ? "Catalogo maestro, seleccion y ficha tecnica del recurso."
                     : "Resumen de recursos usados y posibles repetidos en esta PT."}
               </p>
               <div className="mt-2 flex flex-wrap items-center gap-1.5">
                 {[
-                  { key: "document" as const, label: "Documento A4" },
-                  { key: "selected_resource" as const, label: "Recurso seleccionado" },
+                  { key: "resources" as const, label: "Recursos" },
                   { key: "used_resources" as const, label: "Recursos usados" },
+                  { key: "document" as const, label: "Documento A4" },
                 ].map((tab) => (
                   <button
                     key={tab.key}
@@ -2733,39 +3180,7 @@ ${clone.outerHTML}
 
                 <h2 className="mt-6 border-b border-amber-600 pb-1 text-[12px] font-black uppercase text-stone-900">I. Alcances del servicio</h2>
                 <div className="mt-3 space-y-4">
-                  {draft.scope_items.map((item) => {
-                    if (item.kind !== "activity") {
-                      return (
-                        <div
-                          key={item.id}
-                          className="border-b border-stone-200 pb-1 text-[10px] font-black uppercase text-stone-900"
-                          style={{ marginLeft: `${Math.min(item.level, 4) * 8}px` }}
-                        >
-                          {item.number}. {item.title}
-                        </div>
-                      );
-                    }
-                    const images = draft.activity_images.filter((image) => image.scope_item_id === item.id);
-                    return (
-                      <section
-                        key={item.id}
-                        className="border-l border-stone-200 pl-2 text-[9px] leading-4"
-                        style={{ marginLeft: `${Math.min(item.level, 4) * 8}px` }}
-                      >
-                        <h3 className="border-b border-stone-200 pb-1 text-[10px] font-black text-stone-900">
-                          {item.number}. {item.title}
-                        </h3>
-                        {item.description ? <p className="mt-1 whitespace-pre-line text-stone-700">{item.description}</p> : null}
-                        {RESOURCE_CATEGORIES.map((category) => renderPreviewResourceTable(item, category))}
-                        {renderPreviewImages(images)}
-                        {showInternal && item.internal_comments ? (
-                          <div className="mt-2 rounded border border-amber-200 bg-amber-50 px-2 py-1 text-[9px] text-amber-800">
-                            <strong>Comentario interno:</strong> {item.internal_comments}
-                          </div>
-                        ) : null}
-                      </section>
-                    );
-                  })}
+                  {previewScopeTree.map((node) => renderPreviewScopeNode(node))}
                 </div>
                 <h2 className="mt-6 border-b border-amber-600 pb-1 text-[12px] font-black uppercase text-stone-900">
                   II. Notas complementarias y condiciones comerciales
@@ -2791,20 +3206,35 @@ ${clone.outerHTML}
                 </footer>
               </article>
               </div>
-            ) : rightPanelView === "selected_resource" ? (
-              <div className="min-h-0 overflow-auto p-4">
-                <div className="grid grid-cols-1 gap-3 2xl:grid-cols-[minmax(280px,0.9fr)_minmax(320px,1.1fr)]">
+            ) : rightPanelView === "resources" ? (
+              <div className="min-h-0 overflow-auto p-3">
+                <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+                  <div className="text-[11px] text-stone-600">
+                    Destino: <strong>{selectedResourceTargetItem()?.number ?? "-"} {selectedResourceTargetItem()?.title ?? ""}</strong>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => void openCreateResourceFromTechnicalProposal()}
+                    disabled={!isEditingProposalDocument || !canCreateResource}
+                    className={smallButtonClassName("primary")}
+                    title={!canCreateResource ? "No tienes permiso para crear recursos" : "Crear recurso maestro"}
+                  >
+                    Crear recurso
+                  </button>
+                </div>
+                <div className="grid min-h-0 grid-cols-1 gap-3 2xl:grid-cols-[minmax(300px,0.9fr)_minmax(320px,1.1fr)]">
+                  <ResourceCatalogPanel
+                    resources={resourceCatalog}
+                    onSelectResource={handleAddCatalogResource}
+                    onClose={() => setRightPanelView("document")}
+                    canAddResource={isEditingProposalDocument}
+                    className="max-h-[calc(100dvh-210px)] rounded-lg shadow-none lg:w-full xl:w-full"
+                  />
                   <TechnicalProposalResourceInspector
                     resource={displayedResource}
                     snapshot={displayedResourceSnapshot}
                     usage={displayedResource ? usedResourceLookup.get(displayedResource.id) : undefined}
                     permissions={resourceInspectorPermissions}
-                  />
-                  <TechnicalProposalUsedResourcesPanel
-                    items={usedResourceItems}
-                    selectedRowId={selectedResourceRowId}
-                    onSelectResource={selectUsedResourceForDetail}
-                    onReuseResource={reuseUsedResource}
                   />
                 </div>
               </div>
@@ -2812,7 +3242,14 @@ ${clone.outerHTML}
               <div className="min-h-0 overflow-auto p-4">
                 <TechnicalProposalUsedResourcesPanel
                   items={usedResourceItems}
+                  scopeItems={scopeItemsForResourceTree}
                   selectedRowId={selectedResourceRowId}
+                  canViewPrices={canViewPrices}
+                  economicsByResourceId={usedResourceEconomics}
+                  canCreateBudgetFromTechnicalProposal={Boolean(canViewPrices && canEditBudgetPrices && technicalProposalId && !linkedBudgetDetail && !budgetContextLoading)}
+                  canApplyPriceActions={Boolean(canViewPrices && canEditBudgetPrices && linkedBudgetDetail?.presupuesto.estado === "BORRADOR" && !budgetContextLoading)}
+                  onCreateBudgetFromTechnicalProposal={handleCreateBudgetFromTechnicalProposal}
+                  onApplyPriceAction={handleApplyUsedResourcePriceAction}
                   onSelectResource={selectUsedResourceForDetail}
                   onReuseResource={reuseUsedResource}
                 />
@@ -2824,11 +3261,40 @@ ${clone.outerHTML}
         <TechnicalProposalQuickEntryModal
           open={quickEntryOpen}
           scopeItems={draft.scope_items}
-          recursos={recursos}
+          recursos={resourceCatalog}
           defaultScopeItemId={selectedActivity?.id ?? draft.scope_items.find((item) => item.kind === "activity")?.id ?? ""}
           canViewPrices={resourceInspectorPermissions.canViewPrices}
           onClose={() => setQuickEntryOpen(false)}
           onApply={applyQuickEntry}
+        />
+
+        <ResourceFormModal
+          open={resourceModalOpen}
+          initial={resourceDraft}
+          usedCodes={resourceCatalog.map((item) => item.codigo_recurso)}
+          catalogs={{
+            tipos: resourceCatalogs.tipos,
+            unidades: resourceCatalogs.unidades,
+            marcas: resourceCatalogs.marcas,
+            proveedores: resourceCatalogs.proveedores,
+            monedas: resourceCatalogs.monedas,
+            estados: resourceCatalogs.estados,
+          }}
+          onClose={() => {
+            setResourceModalOpen(false);
+            setResourceDraft(null);
+            setResourceFormMessage(null);
+          }}
+          onSave={saveCreatedResourceFromTechnicalProposal}
+          canViewPrices={canViewPrices}
+          allowFilePicker={canManageResourceDocuments && canCreateResource}
+          filesReadOnly={!canManageResourceDocuments}
+          isSaving={savingResource}
+          message={resourceFormMessage}
+          zIndexClassName="z-[90]"
+          onUploadFile={handleUploadResourceFile}
+          onOpenFile={handleOpenResourceFile}
+          onResolveFileUrl={createResourceFileSignedUrl}
         />
       </div>
       </div>

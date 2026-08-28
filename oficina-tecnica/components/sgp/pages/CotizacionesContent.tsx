@@ -2603,6 +2603,8 @@ export default function CotizacionesPage({ embeddedWorkspace = null }: Cotizacio
         requirementCreationError={requirementCreationError}
         hiddenBusinessFields={hiddenBusinessFields}
         canViewPrices={effectiveCanViewPrices && canViewQuotationEconomicSummary}
+        canCreateResource={canCreateResource}
+        canManageResourceDocuments={canManageResourceDocuments}
         viewGroupPermissions={viewGroupPermissions}
       />
 

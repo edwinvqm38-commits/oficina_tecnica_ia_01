@@ -32,6 +32,7 @@ type ResourceFormModalProps = {
   onClose: () => void;
   onSave: (value: Recurso) => void | Promise<void>;
   detailsReadOnly?: boolean;
+  canViewPrices?: boolean;
   filesReadOnly?: boolean;
   allowFilePicker?: boolean;
   isSaving?: boolean;
@@ -125,6 +126,7 @@ export function ResourceFormModal({
   onClose,
   onSave,
   detailsReadOnly = false,
+  canViewPrices = true,
   filesReadOnly = false,
   allowFilePicker = true,
   isSaving = false,
@@ -176,11 +178,11 @@ export function ResourceFormModal({
     if (!current.tipo_recurso.trim()) next.tipo_recurso = "Campo obligatorio";
     if (!current.descripcion.trim()) next.descripcion = "Campo obligatorio";
     if (!current.unidad.trim()) next.unidad = "Campo obligatorio";
-    if (!Number.isFinite(current.precio_unitario_ref) || current.precio_unitario_ref < 0) {
+    if (canViewPrices && (!Number.isFinite(current.precio_unitario_ref) || current.precio_unitario_ref < 0)) {
       next.precio_unitario_ref = "Debe ser mayor o igual a 0";
     }
-    if (!current.moneda.trim()) next.moneda = "Campo obligatorio";
-    if (!current.proveedor.trim()) next.proveedor = "Campo obligatorio";
+    if (canViewPrices && !current.moneda.trim()) next.moneda = "Campo obligatorio";
+    if (canViewPrices && !current.proveedor.trim()) next.proveedor = "Campo obligatorio";
     if (!current.estado.trim()) next.estado = "Campo obligatorio";
 
     const repeated = usedCodes.some(
@@ -418,71 +420,73 @@ export function ResourceFormModal({
                 </div>
               </SectionCard>
 
-              <SectionCard title="Precio referencial" icon="calculator">
-                <div className="grid grid-cols-1 gap-2 md:grid-cols-6 xl:grid-cols-10">
-                  <div className="md:col-span-1 xl:col-span-1">
-                    <FieldLabel icon="calculator" label="P.U. Ref." required />
-                    <input
-                      type="number"
-                      value={form.precio_unitario_ref}
-                      onChange={(event) => updateField("precio_unitario_ref", Number(event.target.value))}
-                      disabled={detailsReadOnly}
-                      className={fieldClass(detailsReadOnly)}
-                    />
-                    {errors.precio_unitario_ref ? (
-                      <p className="mt-1 text-[11px] text-red-600">{errors.precio_unitario_ref}</p>
-                    ) : null}
+              {canViewPrices ? (
+                <SectionCard title="Precio referencial" icon="calculator">
+                  <div className="grid grid-cols-1 gap-2 md:grid-cols-6 xl:grid-cols-10">
+                    <div className="md:col-span-1 xl:col-span-1">
+                      <FieldLabel icon="calculator" label="P.U. Ref." required />
+                      <input
+                        type="number"
+                        value={form.precio_unitario_ref}
+                        onChange={(event) => updateField("precio_unitario_ref", Number(event.target.value))}
+                        disabled={detailsReadOnly}
+                        className={fieldClass(detailsReadOnly)}
+                      />
+                      {errors.precio_unitario_ref ? (
+                        <p className="mt-1 text-[11px] text-red-600">{errors.precio_unitario_ref}</p>
+                      ) : null}
+                    </div>
+                    <div className="md:col-span-1 xl:col-span-2">
+                      <FieldLabel icon="coins" label="Moneda" required />
+                      <select
+                        value={form.moneda}
+                        onChange={(event) => updateField("moneda", event.target.value as "PEN" | "USD")}
+                        disabled={detailsReadOnly}
+                        className={fieldClass(detailsReadOnly)}
+                      >
+                        {monedaOptions.map((item) => (
+                          <option key={item} value={item}>
+                            {item}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                    <div className="md:col-span-2 xl:col-span-3">
+                      <FieldLabel icon="store" label="Proveedor" required />
+                      <select
+                        value={form.proveedor}
+                        onChange={(event) => updateField("proveedor", event.target.value)}
+                        disabled={detailsReadOnly}
+                        className={fieldClass(detailsReadOnly)}
+                      >
+                        {proveedorOptions.map((item) => (
+                          <option key={item} value={item}>
+                            {item}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                    <div className="md:col-span-1 xl:col-span-2">
+                      <FieldLabel icon="clock" label="Tiempo entrega ref." />
+                      <input
+                        value={form.tiempo_entrega_ref}
+                        onChange={(event) => updateField("tiempo_entrega_ref", event.target.value)}
+                        disabled={detailsReadOnly}
+                        className={fieldClass(detailsReadOnly)}
+                      />
+                    </div>
+                    <div className="md:col-span-1 xl:col-span-2">
+                      <FieldLabel icon="calendar" label="Fecha actualización" />
+                      <DateTextInput
+                        value={form.fecha_actualizacion}
+                        onChange={(value) => updateField("fecha_actualizacion", value)}
+                        disabled={detailsReadOnly}
+                        className={fieldClass(detailsReadOnly)}
+                      />
+                    </div>
                   </div>
-                  <div className="md:col-span-1 xl:col-span-2">
-                    <FieldLabel icon="coins" label="Moneda" required />
-                    <select
-                      value={form.moneda}
-                      onChange={(event) => updateField("moneda", event.target.value as "PEN" | "USD")}
-                      disabled={detailsReadOnly}
-                      className={fieldClass(detailsReadOnly)}
-                    >
-                      {monedaOptions.map((item) => (
-                        <option key={item} value={item}>
-                          {item}
-                        </option>
-                      ))}
-                    </select>
-                  </div>
-                  <div className="md:col-span-2 xl:col-span-3">
-                    <FieldLabel icon="store" label="Proveedor" required />
-                    <select
-                      value={form.proveedor}
-                      onChange={(event) => updateField("proveedor", event.target.value)}
-                      disabled={detailsReadOnly}
-                      className={fieldClass(detailsReadOnly)}
-                    >
-                      {proveedorOptions.map((item) => (
-                        <option key={item} value={item}>
-                          {item}
-                        </option>
-                      ))}
-                    </select>
-                  </div>
-                  <div className="md:col-span-1 xl:col-span-2">
-                    <FieldLabel icon="clock" label="Tiempo entrega ref." />
-                    <input
-                      value={form.tiempo_entrega_ref}
-                      onChange={(event) => updateField("tiempo_entrega_ref", event.target.value)}
-                      disabled={detailsReadOnly}
-                      className={fieldClass(detailsReadOnly)}
-                    />
-                  </div>
-                  <div className="md:col-span-1 xl:col-span-2">
-                    <FieldLabel icon="calendar" label="Fecha actualización" />
-                    <DateTextInput
-                      value={form.fecha_actualizacion}
-                      onChange={(value) => updateField("fecha_actualizacion", value)}
-                      disabled={detailsReadOnly}
-                      className={fieldClass(detailsReadOnly)}
-                    />
-                  </div>
-                </div>
-              </SectionCard>
+                </SectionCard>
+              ) : null}
 
               <SectionCard title="Observaciones" icon="align-left">
                 <textarea

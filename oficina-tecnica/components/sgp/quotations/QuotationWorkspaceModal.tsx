@@ -58,6 +58,8 @@ type QuotationWorkspaceModalProps = {
   requirementCreationError?: string | null;
   hiddenBusinessFields?: string[];
   canViewPrices?: boolean;
+  canCreateResource?: boolean;
+  canManageResourceDocuments?: boolean;
   viewGroupPermissions?: {
     quotation_general_data?: boolean;
     quotation_economic_summary?: boolean;
@@ -361,6 +363,8 @@ export function QuotationWorkspaceModal({
   requirementCreationError,
   hiddenBusinessFields = [],
   canViewPrices = true,
+  canCreateResource = false,
+  canManageResourceDocuments = false,
   viewGroupPermissions,
 }: QuotationWorkspaceModalProps) {
   const [isQuotationEditing, setIsQuotationEditing] = useState(false);
@@ -2839,6 +2843,9 @@ export function QuotationWorkspaceModal({
             recursos={recursos}
             technicalProposalOptions={technicalProposalOptions}
             canViewPrices={canViewPrices}
+            canCreateResource={canCreateResource}
+            canManageResourceDocuments={canManageResourceDocuments}
+            canEditBudgetPrices={canEditQuotation && canViewPrices && canViewQuotationActions}
             onClose={() => setTechnicalProposalOpen(false)}
           />
         ) : null}

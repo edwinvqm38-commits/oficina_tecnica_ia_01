@@ -1,7 +1,7 @@
 import { computeBudgetEconomics, type BudgetEconomicSummary, type BudgetResourceEconomicInput } from "@/lib/sgp/quotationBudgetEconomics";
 
 export type TechnicalProposalImportItemType = "group" | "subgroup" | "activity";
-export type BudgetImportNodeType = "CAPITULO" | "SUBCAPITULO" | "PARTIDA";
+export type BudgetImportNodeType = "CAPITULO" | "SUBCAPITULO" | "PARTIDA" | "GRUPO_RECURSOS";
 
 export type TechnicalProposalImportItem = {
   id: string;
@@ -35,6 +35,7 @@ export type TechnicalProposalImportResource = {
 export type BudgetImportNode = {
   sourceItemId: string;
   parentSourceItemId: string | null;
+  sourceResourceGroupKey?: string;
   tipo: BudgetImportNodeType;
   codigo: string;
   descripcion: string;
@@ -46,6 +47,7 @@ export type BudgetImportNode = {
 export type BudgetImportResource = {
   sourceResourceId: string;
   sourceItemId: string;
+  sourceResourceGroupKey?: string;
   recursoId: string;
   cantidadPresupuestada: number;
   precioBaseUnitario: number;
@@ -110,6 +112,8 @@ export function buildBudgetImportPlanFromTechnicalProposal(params: {
     unidad: item.itemType === "activity" ? item.estimatedTimeUnit ?? null : null,
   }));
 
+  const nodesWithResourceGroups: BudgetImportNode[] = [...nodes];
+  const resourceGroupKeys = new Set<string>();
   const resources: BudgetImportResource[] = [];
   for (const resource of [...params.resources].sort((left, right) => left.sortOrder - right.sortOrder)) {
     const item = itemById.get(resource.technicalProposalItemId);
@@ -117,17 +121,31 @@ export function buildBudgetImportPlanFromTechnicalProposal(params: {
       inconsistencies.push(`El recurso "${resource.descripcion}" referencia una partida PT inexistente.`);
       continue;
     }
-    if (!activityIds.has(resource.technicalProposalItemId)) {
-      inconsistencies.push(`El recurso "${resource.descripcion}" está asociado a ${item.itemNumber} ${item.title}, que no es una PARTIDA/ACTIVIDAD.`);
-      continue;
-    }
     if (!resource.resourceId) {
       inconsistencies.push(`El recurso "${resource.descripcion}" no conserva recurso_id del catálogo maestro.`);
       continue;
     }
+    const sourceResourceGroupKey = activityIds.has(resource.technicalProposalItemId)
+      ? undefined
+      : `${resource.technicalProposalItemId}:${resource.tipoRecurso ?? "Recursos"}`;
+    if (sourceResourceGroupKey && !resourceGroupKeys.has(sourceResourceGroupKey)) {
+      resourceGroupKeys.add(sourceResourceGroupKey);
+      nodesWithResourceGroups.push({
+        sourceItemId: resource.technicalProposalItemId,
+        parentSourceItemId: resource.technicalProposalItemId,
+        sourceResourceGroupKey,
+        tipo: "GRUPO_RECURSOS",
+        codigo: `${item.itemNumber}.R`,
+        descripcion: (resource.tipoRecurso ?? "Recursos").toUpperCase(),
+        orden: item.sortOrder * 1000 + resource.sortOrder,
+        cantidad: null,
+        unidad: null,
+      });
+    }
     resources.push({
       sourceResourceId: resource.id,
       sourceItemId: resource.technicalProposalItemId,
+      sourceResourceGroupKey,
       recursoId: resource.resourceId,
       cantidadPresupuestada: resource.cantidad,
       precioBaseUnitario: 0,
@@ -147,7 +165,7 @@ export function buildBudgetImportPlanFromTechnicalProposal(params: {
     });
   }
 
-  return { nodes, resources, inconsistencies };
+  return { nodes: nodesWithResourceGroups.sort((left, right) => left.orden - right.orden || left.codigo.localeCompare(right.codigo)), resources, inconsistencies };
 }
 
 export function applyMarginByResourceType(
@@ -167,10 +185,10 @@ export function applyMarginByResourceType(
 
 export function computeImportPlanEconomics(plan: Pick<BudgetImportPlan, "resources">): BudgetEconomicSummary {
   return computeBudgetEconomics({
-    partidaIds: Array.from(new Set(plan.resources.map((resource) => resource.sourceItemId))),
+    partidaIds: Array.from(new Set(plan.resources.map((resource) => resource.sourceResourceGroupKey ?? resource.sourceItemId))),
     resources: plan.resources.map((resource) => ({
       id: resource.sourceResourceId,
-      partidaId: resource.sourceItemId,
+      partidaId: resource.sourceResourceGroupKey ?? resource.sourceItemId,
       recursoId: resource.recursoId,
       cantidadPresupuestada: resource.cantidadPresupuestada,
       precioBaseUnitario: resource.precioBaseUnitario,

@@ -14,7 +14,9 @@ type ResourceCategoryKey =
   | "gastos_generales"
   | "mano_obra"
   | "equipos"
-  | "herramientas";
+  | "herramientas"
+  | "vehiculos"
+  | "transporte";
 
 type TechnicalProposalResourceSnapshot = {
   id: string;
@@ -297,7 +299,7 @@ export function TechnicalProposalResourceGrid({
       <div className="flex items-center justify-between gap-2 border-b border-stone-300 bg-stone-100 px-2 py-1">
         <div className="min-w-0">
           <h5 className="truncate text-[11px] font-bold uppercase tracking-wide text-stone-700">
-            Recursos de la actividad {activityNumber}
+            Recursos del item {activityNumber}
           </h5>
           <p className="text-[10px] text-stone-500">{totalRows} registro(s) en {categories.length} tipo(s)</p>
         </div>
@@ -339,6 +341,7 @@ export function TechnicalProposalResourceGrid({
           <tbody>
             {categories.map((category) => {
               const categoryRows = rows.filter((resource) => resource.resource_category === category.key);
+              if (categoryRows.length === 0) return null;
               return (
                 <Fragment key={category.key}>
                   <tr className="bg-teal-50/70">
@@ -362,15 +365,7 @@ export function TechnicalProposalResourceGrid({
                       </div>
                     </td>
                   </tr>
-                  {categoryRows.length > 0 ? (
-                    categoryRows.map((resource, index) => renderResourceRow(resource, index))
-                  ) : (
-                    <tr>
-                      <td colSpan={10} className="border border-stone-200 bg-white px-3 py-2 text-[11px] text-stone-400">
-                        Sin recursos registrados en {category.label.toLowerCase()}.
-                      </td>
-                    </tr>
-                  )}
+                  {categoryRows.map((resource, index) => renderResourceRow(resource, index))}
                 </Fragment>
               );
             })}

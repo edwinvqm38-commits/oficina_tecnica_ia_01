@@ -152,6 +152,9 @@ function resourceSearchText(resource: Recurso): string {
       resource.unidad,
       resource.codigo_recurso,
       resource.codigo_fabricante,
+      resource.proveedor,
+      resource.marca,
+      resource.modelo,
     ].join(" "),
   );
 }
@@ -526,7 +529,7 @@ export const ResourceCatalogPanel = memo(function ResourceCatalogPanel({
 
   const handleAddSelectedResource = useCallback((resourceId?: string) => {
     if (!canAddResource) {
-      setMessage("No tienes permiso para agregar recursos al requerimiento.");
+      setMessage("No tienes permiso para agregar recursos al documento activo.");
       return;
     }
     const resource = resourceId
@@ -629,7 +632,7 @@ export const ResourceCatalogPanel = memo(function ResourceCatalogPanel({
           onChange={(event) => updateQuery(event.target.value)}
           onKeyDown={handleSearchKeyDown}
           className="h-8 rounded border border-stone-300 bg-white px-2 text-[11px] text-stone-700 outline-none placeholder:text-stone-400 focus:border-stone-500"
-          placeholder="Buscar por descripción, tipo, unidad o código..."
+          placeholder="Codigo, descripcion, tipo, marca, proveedor..."
           role="combobox"
           aria-controls="requirement-resource-catalog-list"
           aria-activedescendant={activeResource ? `resource-catalog-option-${activeResource.id}` : undefined}

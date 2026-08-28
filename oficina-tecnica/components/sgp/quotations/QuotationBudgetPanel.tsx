@@ -148,6 +148,7 @@ const NODE_TYPE_LABELS: Record<TipoNodoPresupuestoCotizacion, string> = {
   CAPITULO: "Capitulo",
   SUBCAPITULO: "Subcapitulo",
   PARTIDA: "Partida",
+  GRUPO_RECURSOS: "Grupo recursos",
 };
 
 function todayIsoDate(): string {
@@ -397,7 +398,10 @@ export function QuotationBudgetPanel({
     }
     return [];
   }, [detail, nodeForm.editingId, nodeForm.tipo]);
-  const partidas = useMemo(() => (detail?.partidas ?? []).filter((node) => node.tipo === "PARTIDA"), [detail?.partidas]);
+  const partidas = useMemo(
+    () => (detail?.partidas ?? []).filter((node) => node.tipo === "PARTIDA" || node.tipo === "GRUPO_RECURSOS"),
+    [detail?.partidas],
+  );
   const activeResources = useMemo(
     () =>
       [...recursos]
@@ -561,7 +565,7 @@ export function QuotationBudgetPanel({
     for (const node of treeNodes) {
       const total = totalsByNodeId.get(node.id) ?? { base: 0, ofertado: 0 };
       rows.push({ kind: "node", node, base: total.base, ofertado: total.ofertado });
-      if (node.tipo === "PARTIDA") {
+      if (node.tipo === "PARTIDA" || node.tipo === "GRUPO_RECURSOS") {
         for (const resource of resourcesByPartida.get(node.id) ?? []) {
           const economics = computeBudgetResourceEconomics({
             id: resource.id,

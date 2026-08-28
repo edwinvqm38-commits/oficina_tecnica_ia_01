@@ -66,7 +66,42 @@ describe("technical proposal to quotation budget import", () => {
     });
   });
 
-  it("does not silently import resources attached to group or subgroup", () => {
+  it("keeps material attached to subgroup through an explicit resource group", () => {
+    const plan = buildBudgetImportPlanFromTechnicalProposal({
+      items,
+      resources: [
+        {
+          id: "r1",
+          technicalProposalItemId: "s1",
+          resourceId: "11111111-1111-4111-8111-111111111111",
+          descripcion: "Cable",
+          cantidad: 1,
+          tipoRecurso: "Materiales",
+          sortOrder: 0,
+        },
+      ],
+    });
+
+    assert.equal(plan.inconsistencies.length, 0);
+    assert.equal(plan.resources.length, 1);
+    assert.equal(plan.resources[0].sourceResourceGroupKey, "s1:Materiales");
+    assert.deepEqual(
+      plan.nodes.find((node) => node.sourceResourceGroupKey === "s1:Materiales"),
+      {
+        sourceItemId: "s1",
+        parentSourceItemId: "s1",
+        sourceResourceGroupKey: "s1:Materiales",
+        tipo: "GRUPO_RECURSOS",
+        codigo: "1.1.R",
+        descripcion: "MATERIALES",
+        orden: 1000,
+        cantidad: null,
+        unidad: null,
+      },
+    );
+  });
+
+  it("keeps consumable attached to title through an explicit resource group", () => {
     const plan = buildBudgetImportPlanFromTechnicalProposal({
       items,
       resources: [
@@ -74,15 +109,110 @@ describe("technical proposal to quotation budget import", () => {
           id: "r1",
           technicalProposalItemId: "g1",
           resourceId: "11111111-1111-4111-8111-111111111111",
-          descripcion: "Supervisor",
-          cantidad: 1,
+          descripcion: "Trapo industrial",
+          cantidad: 2,
+          tipoRecurso: "Consumibles",
           sortOrder: 0,
         },
       ],
     });
 
-    assert.equal(plan.resources.length, 0);
-    assert.match(plan.inconsistencies[0], /no es una PARTIDA\/ACTIVIDAD/);
+    assert.equal(plan.inconsistencies.length, 0);
+    assert.equal(plan.resources[0].sourceResourceGroupKey, "g1:Consumibles");
+    assert.equal(plan.nodes.find((node) => node.sourceResourceGroupKey === "g1:Consumibles")?.tipo, "GRUPO_RECURSOS");
+  });
+
+  it("imports activity and sibling material, consumable and equipment groups without double counting", () => {
+    const plan = buildBudgetImportPlanFromTechnicalProposal({
+      items,
+      resources: [
+        {
+          id: "mo1",
+          technicalProposalItemId: "a1",
+          resourceId: "11111111-1111-4111-8111-111111111111",
+          descripcion: "Tecnico electricista",
+          cantidad: 2,
+          tipoRecurso: "Mano de obra",
+          sortOrder: 0,
+        },
+        {
+          id: "mo2",
+          technicalProposalItemId: "a1",
+          resourceId: "22222222-2222-4222-8222-222222222222",
+          descripcion: "Supervisor",
+          cantidad: 1,
+          tipoRecurso: "Mano de obra",
+          sortOrder: 1,
+        },
+        {
+          id: "mat1",
+          technicalProposalItemId: "s1",
+          resourceId: "33333333-3333-4333-8333-333333333333",
+          descripcion: "Cable",
+          cantidad: 10,
+          tipoRecurso: "Materiales",
+          precioUnitarioRef: 5,
+          sortOrder: 2,
+        },
+        {
+          id: "mat2",
+          technicalProposalItemId: "s1",
+          resourceId: "44444444-4444-4444-8444-444444444444",
+          descripcion: "Terminal",
+          cantidad: 4,
+          tipoRecurso: "Materiales",
+          precioUnitarioRef: 3,
+          sortOrder: 3,
+        },
+        {
+          id: "con1",
+          technicalProposalItemId: "s1",
+          resourceId: "55555555-5555-4555-8555-555555555555",
+          descripcion: "Cinta",
+          cantidad: 2,
+          tipoRecurso: "Consumibles",
+          precioUnitarioRef: 9,
+          sortOrder: 4,
+        },
+        {
+          id: "eq1",
+          technicalProposalItemId: "s1",
+          resourceId: "66666666-6666-4666-8666-666666666666",
+          descripcion: "Camion grua",
+          cantidad: 1,
+          tipoRecurso: "Equipos",
+          precioUnitarioRef: 100,
+          sortOrder: 5,
+        },
+      ],
+    });
+
+    const resourceGroups = plan.nodes.filter((node) => node.tipo === "GRUPO_RECURSOS");
+    assert.equal(plan.inconsistencies.length, 0);
+    assert.deepEqual(
+      resourceGroups.map((node) => [node.parentSourceItemId, node.descripcion]),
+      [
+        ["s1", "MATERIALES"],
+        ["s1", "CONSUMIBLES"],
+        ["s1", "EQUIPOS"],
+      ],
+    );
+    assert.equal(plan.resources.find((resource) => resource.sourceResourceId === "mat1")?.sourceResourceGroupKey, "s1:Materiales");
+    assert.equal(plan.resources.find((resource) => resource.sourceResourceId === "con1")?.sourceResourceGroupKey, "s1:Consumibles");
+    assert.equal(plan.resources.find((resource) => resource.sourceResourceId === "eq1")?.sourceResourceGroupKey, "s1:Equipos");
+    assert.equal(plan.resources.find((resource) => resource.sourceResourceId === "mo1")?.sourceResourceGroupKey, undefined);
+
+    const economics = computeImportPlanEconomics({
+      resources: plan.resources.map((resource) => ({
+        ...resource,
+        precioBaseUnitario: resource.sourceResourceId === "mo1" ? 10 : resource.sourceResourceId === "mo2" ? 20 : resource.precioUnitarioRefSnapshot ?? 0,
+        precioOfertadoUnitario: resource.sourceResourceId === "mo1" ? 12 : resource.sourceResourceId === "mo2" ? 24 : (resource.precioUnitarioRefSnapshot ?? 0) * 1.2,
+      })),
+    });
+
+    assert.equal(economics.total.base, 220);
+    assert.equal(economics.partidas.length, 4);
+    assert.equal(economics.partidas.reduce((sum, row) => sum + row.base, 0), economics.total.base);
   });
 
   it("computes imported budget BASE and OFERTADO", () => {

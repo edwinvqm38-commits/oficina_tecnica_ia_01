@@ -10,7 +10,7 @@ import {
 import type { CotizacionEconomicRow } from "@/lib/sgp/demoData";
 
 export type EstadoPresupuestoCotizacion = "BORRADOR" | "LISTO_PARA_ADJUDICAR" | "ADJUDICADO";
-export type TipoNodoPresupuestoCotizacion = "CAPITULO" | "SUBCAPITULO" | "PARTIDA";
+export type TipoNodoPresupuestoCotizacion = "CAPITULO" | "SUBCAPITULO" | "PARTIDA" | "GRUPO_RECURSOS";
 export type MonedaPresupuestoCotizacion = "PEN" | "USD";
 
 export type QuotationBudgetActor = {
@@ -550,7 +550,7 @@ function normalizeBudgetState(value: string): EstadoPresupuestoCotizacion {
 }
 
 function normalizeNodeType(value: string): TipoNodoPresupuestoCotizacion {
-  if (value === "CAPITULO" || value === "SUBCAPITULO" || value === "PARTIDA") return value;
+  if (value === "CAPITULO" || value === "SUBCAPITULO" || value === "PARTIDA" || value === "GRUPO_RECURSOS") return value;
   throw new QuotationBudgetRepositoryError(`Tipo de nodo de presupuesto no reconocido: ${value}.`, "invalid_structure");
 }
 
@@ -891,7 +891,7 @@ export async function getQuotationBudgetDetail(presupuestoId: string): Promise<Q
     partidas,
     recursos,
     economia: computeBudgetEconomics({
-      partidaIds: partidas.filter((partida) => partida.tipo === "PARTIDA").map((partida) => partida.id),
+      partidaIds: partidas.filter((partida) => partida.tipo === "PARTIDA" || partida.tipo === "GRUPO_RECURSOS").map((partida) => partida.id),
       resources: economicInput,
     }),
     resumenEconomicoCompatible: buildBudgetEconomicSummaryRows(economicInput),
@@ -1196,7 +1196,7 @@ export async function returnBudgetToDraft(presupuestoId: string): Promise<Quotat
 
 export function computeQuotationBudgetDetailEconomics(detail: Pick<QuotationBudgetDetail, "partidas" | "recursos">): BudgetEconomicSummary {
   return computeBudgetEconomics({
-    partidaIds: detail.partidas.filter((partida) => partida.tipo === "PARTIDA").map((partida) => partida.id),
+    partidaIds: detail.partidas.filter((partida) => partida.tipo === "PARTIDA" || partida.tipo === "GRUPO_RECURSOS").map((partida) => partida.id),
     resources: budgetResourcesToEconomicInput(detail.recursos),
   });
 }
