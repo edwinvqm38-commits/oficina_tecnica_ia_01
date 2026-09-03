@@ -2,13 +2,11 @@
 
 import { useEffect, useMemo, useRef, useState, type ChangeEvent, type KeyboardEvent, type MouseEvent, type ReactNode } from "react";
 import { flushSync } from "react-dom";
-import { FieldLabelIcon, type IconName } from "@/components/sgp/ui/FieldLabelIcon";
+import { FieldLabelIcon } from "@/components/sgp/ui/FieldLabelIcon";
 import { ResourceAutocompleteInput } from "@/components/sgp/technical-proposal/ResourceAutocompleteInput";
-import { TechnicalProposalResourceGrid } from "@/components/sgp/technical-proposal/TechnicalProposalResourceGrid";
-import { TechnicalProposalResourceInspector } from "@/components/sgp/technical-proposal/TechnicalProposalResourceInspector";
+import { TechnicalProposalResourceCatalogPanel } from "@/components/sgp/technical-proposal/TechnicalProposalResourceCatalogPanel";
 import { TechnicalProposalTopbar } from "@/components/sgp/technical-proposal/TechnicalProposalTopbar";
 import { TechnicalProposalUsedResourcesPanel, type UsedResourceItem } from "@/components/sgp/technical-proposal/TechnicalProposalUsedResourcesPanel";
-import { ResourceCatalogPanel } from "@/components/sgp/resources/ResourceCatalogPanel";
 import { ResourceFormModal } from "@/components/sgp/resources/ResourceFormModal";
 import type {
   CatalogEstadoRecurso,
@@ -25,18 +23,13 @@ import type { AdjudicatedTechnicalProposalOption } from "@/lib/sgp/adjudicatedPr
 import { listCatalogMap } from "@/lib/sgp/catalogsRepository";
 import { findClientLogo, findDefaultCompanyLogo, readProposalLogos, type ProposalLogo } from "@/lib/sgp/proposalLogos";
 import {
-  applyBudgetResourcePriceReview,
   createQuotationBudgetFromTechnicalProposal,
   getQuotationBudgetDetail,
   listQuotationBudgets,
-  listResourcePriceHistories,
-  type ApplyBudgetResourcePriceReviewAction,
-  type MonedaPresupuestoCotizacion,
+  updateBudgetResource,
   type QuotationBudgetDetail,
-  type ResourcePriceHistory,
-  type ResourcePriceHistorySource,
 } from "@/lib/sgp/quotationBudgetsRepository";
-import { buildTechnicalProposalResourceEconomics, buildTechnicalProposalResourceTree, consolidateTechnicalProposalResources } from "@/lib/sgp/technicalProposalResourceUsage";
+import { buildTechnicalProposalResourceTree, displayResourceCategory } from "@/lib/sgp/technicalProposalResourceUsage";
 import { buildTechnicalProposalRpcPayload, validateTechnicalProposalRpcPayload } from "@/lib/sgp/technicalProposalMappers";
 import {
   createRecurso,
@@ -81,7 +74,8 @@ type TechnicalProposalMetadata = {
 type ScopeKind = "group" | "subgroup" | "activity";
 type ProposalMode = "cliente" | "interno";
 type ProposalWorkStatus = "Borrador" | "En proceso" | "Completado";
-type RightPanelView = "resources" | "used_resources" | "document";
+type RightPanelView = "margins" | "resources";
+type ScopeContextMenuState = { x: number; y: number; scopeItemId: string | null };
 type ResourceCategoryKey =
   | "mano_obra_directa"
   | "mano_obra_indirecta"
@@ -486,7 +480,11 @@ function normalizeLegacyDraft(
     : Array.isArray(parsed.recursos)
       ? (parsed.recursos as Array<TechnicalProposalResourceSnapshot & { activity_id?: string }>)
       : [];
-  const firstActivity = migratedItems.find((item) => item.kind === "activity") ?? migratedItems[0];
+  const normalizedScopeItems =
+    typeof parsed.scope_outline === "string" && parsed.scope_outline.trim()
+      ? parsedLinesToScopeItems(parseScopeOutline(parsed.scope_outline), migratedItems)
+      : migratedItems;
+  const firstActivity = normalizedScopeItems.find((item) => item.kind === "activity") ?? normalizedScopeItems[0];
 
   return {
     ...initial,
@@ -501,8 +499,8 @@ function normalizeLegacyDraft(
     header: { ...initial.header, ...(parsed.header as Partial<TechnicalProposalDraft["header"]> | undefined) },
     recipient: { ...initial.recipient, ...(parsed.recipient as Partial<TechnicalProposalDraft["recipient"]> | undefined) },
     presentation: { ...initial.presentation, ...(parsed.presentation as Partial<TechnicalProposalDraft["presentation"]> | undefined) },
-    scope_items: migratedItems,
-    scope_outline: typeof parsed.scope_outline === "string" ? parsed.scope_outline : scopeItemsToOutline(migratedItems),
+    scope_items: normalizedScopeItems,
+    scope_outline: scopeItemsToOutline(normalizedScopeItems),
     resources: oldResources.map((resource) => {
       const legacyResource = resource as TechnicalProposalResourceSnapshot & { activity_id?: string };
       return {
@@ -603,14 +601,14 @@ async function readPersistedDraft(cotizacion: Cotizacion, revision: string): Pro
 }
 
 function scopeLineHasActivity(line: string): boolean {
-  return /\[(A|ACT|ACTIVIDAD)\]|^\s*(?:\d+(?:\.\d+)*\.?\s*)?[✓√]/i.test(line);
+  return /\[(A|ACT|ACTIVIDAD)\]|^\s*(?:\d+(?:\.\d+)*\.?\s*)?[*✓√]/i.test(line);
 }
 
 function cleanScopeTitle(line: string): string {
   return line
     .replace(/^\s*\d+(?:\.\d+)*\.?\s*/, "")
     .replace(/\[(A|ACT|ACTIVIDAD)\]/gi, "")
-    .replace(/^[✓√]\s*/, "")
+    .replace(/^[*✓√]\s*/, "")
     .trim();
 }
 
@@ -657,7 +655,7 @@ function renumberScopeItems(items: ScopeItem[]): ScopeItem[] {
 
 function scopeItemsToOutline(items: ScopeItem[]): string {
   return renumberScopeItems(items)
-    .map((item) => `${item.number}${item.kind === "activity" ? " [A]" : ""} ${item.title}`)
+    .map((item) => `${"\t".repeat(item.level)}${item.kind === "activity" ? "* " : ""}${item.title}`)
     .join("\n");
 }
 
@@ -840,19 +838,6 @@ function inputClassName(): string {
   return "h-7 w-full rounded-md border border-stone-300 bg-white px-2 text-[11px] text-stone-800 outline-none focus:border-teal-500 disabled:cursor-not-allowed disabled:bg-stone-50 disabled:text-stone-400";
 }
 
-function spreadsheetControlClassName(extra = ""): string {
-  return [
-    "h-6 w-full min-w-0 border-0 bg-transparent px-1.5 text-[11px] leading-none text-stone-800 outline-none",
-    "focus:bg-white focus:shadow-[inset_0_0_0_1px_#0f766e]",
-    "disabled:cursor-not-allowed disabled:text-stone-400",
-    extra,
-  ].join(" ");
-}
-
-function textareaClassName(minHeight = "min-h-[72px]"): string {
-  return `${minHeight} w-full resize-y rounded-md border border-stone-300 bg-white px-2 py-1.5 text-[11px] leading-5 text-stone-800 outline-none focus:border-teal-500 disabled:cursor-not-allowed disabled:bg-stone-50 disabled:text-stone-400`;
-}
-
 function smallButtonClassName(variant: "primary" | "secondary" | "soft" | "danger" | "ghost" = "secondary"): string {
   const base = "inline-flex h-7 items-center justify-center gap-1 rounded-md border px-2.5 text-[11px] font-semibold leading-none disabled:cursor-not-allowed disabled:opacity-45";
   if (variant === "primary") return `${base} border-teal-700 bg-teal-700 text-white hover:bg-teal-800`;
@@ -860,41 +845,6 @@ function smallButtonClassName(variant: "primary" | "secondary" | "soft" | "dange
   if (variant === "danger") return `${base} border-red-200 bg-red-50 text-red-700 hover:bg-red-100`;
   if (variant === "ghost") return `${base} border-transparent bg-transparent text-stone-500 hover:bg-stone-100`;
   return `${base} border-stone-200 bg-white text-stone-700 hover:bg-stone-100`;
-}
-
-function sectionCardClassName(fieldMode: boolean, sectionKey: string): string {
-  const hiddenInFieldMode = fieldMode && !["c", "d"].includes(sectionKey);
-  return `${hiddenInFieldMode ? "hidden" : ""} overflow-hidden rounded-lg border border-stone-200 bg-white`;
-}
-
-function SectionHeader({
-  title,
-  icon,
-  collapsed,
-  onToggle,
-  actions,
-}: {
-  title: string;
-  icon: IconName;
-  collapsed?: boolean;
-  onToggle?: () => void;
-  actions?: ReactNode;
-}) {
-  return (
-    <div className="flex min-h-10 items-center justify-between gap-2 border-b border-stone-200 bg-stone-50 px-3 py-2">
-      <button type="button" onClick={onToggle} className="flex min-w-0 items-center gap-2 text-left">
-        <FieldLabelIcon icon={icon} label={title} className="text-[12px] font-bold text-stone-800" />
-      </button>
-      <div className="flex shrink-0 items-center gap-1.5">
-        {actions}
-        {onToggle ? (
-          <button type="button" onClick={onToggle} className={smallButtonClassName("secondary")}>
-            {collapsed ? "Expandir" : "Agrupar"}
-          </button>
-        ) : null}
-      </div>
-    </div>
-  );
 }
 
 function Field({ label, children, className = "" }: { label: string; children: ReactNode; className?: string }) {
@@ -906,31 +856,6 @@ function Field({ label, children, className = "" }: { label: string; children: R
   );
 }
 
-function scopeKindLabel(kind: ScopeKind): string {
-  if (kind === "activity") return "Partida / actividad";
-  if (kind === "subgroup") return "Subtitulo";
-  return "Titulo";
-}
-
-function scopeGridRowClassName(item: ScopeItem, selected: boolean): string {
-  if (selected) return "bg-teal-50/80 ring-1 ring-inset ring-teal-300";
-  if (item.kind === "group") return "bg-sky-50/70 hover:bg-sky-100/70";
-  if (item.kind === "subgroup") return "bg-amber-50/70 hover:bg-amber-100/70";
-  return "bg-white hover:bg-emerald-50/40";
-}
-
-function scopeKindCellClassName(kind: ScopeKind): string {
-  if (kind === "group") return "font-bold text-sky-800";
-  if (kind === "subgroup") return "font-semibold text-amber-800";
-  return "text-stone-700";
-}
-
-function scopeGridActionButtonClassName(variant: "default" | "danger" = "default"): string {
-  const base = "inline-flex h-7 items-center justify-center rounded-md border px-2.5 text-[10px] font-semibold leading-none disabled:cursor-not-allowed disabled:opacity-45";
-  if (variant === "danger") return `${base} border-red-200 bg-red-50 text-red-700 hover:bg-red-100`;
-  return `${base} border-stone-300 bg-white text-stone-700 hover:bg-stone-100`;
-}
-
 function formatDateForDocument(value: string): string {
   if (!value) return "";
   const [year, month, day] = value.split("-");
@@ -940,18 +865,6 @@ function formatDateForDocument(value: string): string {
 
 function resourceRowsFor(scopeItemId: string, resources: TechnicalProposalResourceSnapshot[], category: ResourceCategoryKey) {
   return resources.filter((resource) => resource.scope_item_id === scopeItemId && resource.resource_category === category);
-}
-
-function imageGridSpanClass(size: ProposalImage["size"]): string {
-  if (size === "4") return "md:col-span-2";
-  if (size === "2") return "md:col-span-2";
-  return "";
-}
-
-function docImageClass(size: ProposalImage["size"]): string {
-  if (size === "4") return "md:col-span-2 min-h-[170px]";
-  if (size === "2") return "md:col-span-2 min-h-[120px]";
-  return "min-h-[92px]";
 }
 
 function fileToDataUrl(file: File): Promise<string> {
@@ -1186,16 +1099,17 @@ export function TechnicalProposalWorkspaceModal({
   const [selectedRevision, setSelectedRevision] = useState(REVISION);
   const [draft, setDraft] = useState<TechnicalProposalDraft>(() => buildInitialDraft(cotizacion));
   const [selectedScopeItemId, setSelectedScopeItemId] = useState("scope-2");
-  const [collapsedSections, setCollapsedSections] = useState<Record<string, boolean>>({ a: true, b: true, c: true, e: true });
   const [quickEntryOpen, setQuickEntryOpen] = useState(false);
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
   const [editingLocked, setEditingLocked] = useState(true);
-  const [rightPanelView, setRightPanelView] = useState<RightPanelView>("resources");
+  const [rightPanelView, setRightPanelView] = useState<RightPanelView>(() => (canViewPrices ? "margins" : "resources"));
   const [createdResources, setCreatedResources] = useState<Recurso[]>([]);
   const [activeMasterResource, setActiveMasterResource] = useState<Recurso | null>(null);
   const [selectedResourceRowId, setSelectedResourceRowId] = useState<string | null>(null);
   const [activeResourceTargetRowId, setActiveResourceTargetRowId] = useState<string | null>(null);
-  const [editingResourceCellId, setEditingResourceCellId] = useState<string | null>(null);
+  const [expandedEmptyDescriptionIds, setExpandedEmptyDescriptionIds] = useState<Set<string>>(() => new Set());
+  const [cleanTableView, setCleanTableView] = useState(false);
+  const [scopeContextMenu, setScopeContextMenu] = useState<ScopeContextMenuState | null>(null);
   const [resourceModalOpen, setResourceModalOpen] = useState(false);
   const [resourceDraft, setResourceDraft] = useState<Recurso | null>(null);
   const [savingResource, setSavingResource] = useState(false);
@@ -1206,11 +1120,11 @@ export function TechnicalProposalWorkspaceModal({
   const [savingToSupabase, setSavingToSupabase] = useState(false);
   const [resourceCatalogs, setResourceCatalogs] = useState<ResourceFormCatalogs>(EMPTY_RESOURCE_FORM_CATALOGS);
   const [linkedBudgetDetail, setLinkedBudgetDetail] = useState<QuotationBudgetDetail | null>(null);
-  const [resourcePriceHistories, setResourcePriceHistories] = useState<ResourcePriceHistory[]>([]);
   const [budgetContextLoading, setBudgetContextLoading] = useState(false);
   const printInProgressRef = useRef(false);
-  const previewDocumentRef = useRef<HTMLElement | null>(null);
+  const previewDocumentRef = useRef<HTMLDivElement | null>(null);
   const scopeTextareaRef = useRef<HTMLTextAreaElement | null>(null);
+  const scopeGutterRef = useRef<HTMLDivElement | null>(null);
   const resourceCatalog = useMemo(
     () => createdResources.reduce((rows, resource) => upsertResource(rows, resource), recursos),
     [createdResources, recursos],
@@ -1229,11 +1143,10 @@ export function TechnicalProposalWorkspaceModal({
     setSelectedScopeItemId(next.scope_items.find((item) => item.kind === "activity")?.id ?? next.scope_items[0]?.id ?? "scope-1");
     setStatusMessage(null);
     setEditingLocked(true);
-    setRightPanelView("resources");
+    setRightPanelView(canViewPrices ? "margins" : "resources");
     setActiveMasterResource(null);
     setSelectedResourceRowId(null);
     setActiveResourceTargetRowId(null);
-    setEditingResourceCellId(null);
     setResourceModalOpen(false);
     setResourceDraft(null);
     setSavingResource(false);
@@ -1255,7 +1168,7 @@ export function TechnicalProposalWorkspaceModal({
     return () => {
       cancelled = true;
     };
-  }, [cotizacion, open, selectedRevision]);
+  }, [canViewPrices, cotizacion, open, selectedRevision]);
 
   useEffect(() => {
     if (!open) return;
@@ -1292,6 +1205,17 @@ export function TechnicalProposalWorkspaceModal({
     draft.scope_items,
     draft.scope_outline,
   ]);
+  const scopeGutterRows = useMemo(() => {
+    let itemIndex = 0;
+    return draft.scope_outline.split(/\r?\n/).map((line, lineIndex) => {
+      if (!line.trim()) return { key: `blank-${lineIndex}`, label: "" };
+      const item = parsedScopePreview[itemIndex++];
+      return {
+        key: item?.id ?? `scope-${lineIndex}`,
+        label: item?.kind === "activity" ? "•" : item?.number ?? "",
+      };
+    });
+  }, [draft.scope_outline, parsedScopePreview]);
 
   const selectedActionItem = draft.scope_items.find((item) => item.id === selectedScopeItemId) ?? null;
   const selectedScopeItem = selectedActionItem ?? draft.scope_items.find((item) => item.kind === "activity") ?? draft.scope_items[0];
@@ -1307,8 +1231,8 @@ export function TechnicalProposalWorkspaceModal({
       if (!resource.recurso_id) return;
       const current = lookup.get(resource.recurso_id) ?? { count: 0, activityNumbers: [] };
       current.count += 1;
-      const activityNumber = activityNumberById.get(resource.scope_item_id);
-      if (activityNumber && !current.activityNumbers.includes(activityNumber)) current.activityNumbers.push(activityNumber);
+      const itemNumber = activityNumberById.get(resource.scope_item_id);
+      if (itemNumber && !current.activityNumbers.includes(itemNumber)) current.activityNumbers.push(itemNumber);
       lookup.set(resource.recurso_id, current);
     });
     return lookup;
@@ -1316,7 +1240,6 @@ export function TechnicalProposalWorkspaceModal({
   const selectedResourceSnapshot = draft.resources.find((resource) => resource.id === selectedResourceRowId) ?? null;
   const selectedResourceMaster = selectedResourceSnapshot?.recurso_id ? resourceCatalog.find((resource) => resource.id === selectedResourceSnapshot.recurso_id) ?? null : null;
   const displayedResource = activeMasterResource ?? selectedResourceMaster;
-  const displayedResourceSnapshot = activeMasterResource ? null : selectedResourceSnapshot;
   const usedResourceItems = useMemo<UsedResourceItem[]>(
     () =>
       draft.resources.map((resource) => {
@@ -1347,32 +1270,44 @@ export function TechnicalProposalWorkspaceModal({
     () => buildTechnicalProposalResourceTree(scopeItemsForResourceTree, usedResourceItems),
     [scopeItemsForResourceTree, usedResourceItems],
   );
-  const proposalResourceIds = useMemo(
-    () => Array.from(new Set(draft.resources.map((resource) => resource.recurso_id).filter((id): id is string => Boolean(id)))),
-    [draft.resources],
-  );
-  const proposalResourceIdKey = proposalResourceIds.join("|");
-  const technicalProposalId = draft.metadata.propuesta_tecnica_id ?? null;
-  const usedResourceEconomics = useMemo(() => {
-    if (!canViewPrices) return new Map();
-    return buildTechnicalProposalResourceEconomics(consolidateTechnicalProposalResources(usedResourceItems), {
-      resourceCatalog,
-      histories: resourcePriceHistories,
-      budget: linkedBudgetDetail
-        ? {
-            id: linkedBudgetDetail.presupuesto.id,
-            estado: linkedBudgetDetail.presupuesto.estado,
-            resources: linkedBudgetDetail.recursos,
-          }
-      : null,
+  const scopeNodeById = useMemo(() => {
+    const result = new Map<string, (typeof previewScopeTree)[number]>();
+    function visit(nodes: typeof previewScopeTree) {
+      nodes.forEach((node) => {
+        result.set(node.id, node);
+        visit(node.children);
+      });
+    }
+    visit(previewScopeTree);
+    return result;
+  }, [previewScopeTree]);
+  const documentScopePages = useMemo(() => {
+    const pages: string[][] = [];
+    let current: string[] = [];
+    let usedUnits = 0;
+    const pageCapacity = 34;
+    draft.scope_items.forEach((item) => {
+      const resourceCount = draft.resources.filter((resource) => resource.scope_item_id === item.id).length;
+      const imageCount = draft.activity_images.filter((image) => image.scope_item_id === item.id).length;
+      const descriptionLines = Math.max(1, Math.ceil(item.description.length / 95));
+      const estimatedUnits = (item.kind === "activity" ? 4 : 2) + descriptionLines + resourceCount * 2 + imageCount * 11;
+      if (current.length > 0 && usedUnits + estimatedUnits > pageCapacity) {
+        pages.push(current);
+        current = [];
+        usedUnits = 0;
+      }
+      current.push(item.id);
+      usedUnits += estimatedUnits;
     });
-  }, [canViewPrices, linkedBudgetDetail, resourceCatalog, resourcePriceHistories, usedResourceItems]);
+    if (current.length > 0) pages.push(current);
+    return pages.length > 0 ? pages : [[]];
+  }, [draft.activity_images, draft.resources, draft.scope_items]);
+  const technicalProposalId = draft.metadata.propuesta_tecnica_id ?? null;
 
   useEffect(() => {
     if (!open || !canViewPrices) {
       void Promise.resolve().then(() => {
         setLinkedBudgetDetail(null);
-        setResourcePriceHistories([]);
         setBudgetContextLoading(false);
       });
       return;
@@ -1382,7 +1317,6 @@ export function TechnicalProposalWorkspaceModal({
     async function loadBudgetContext() {
       setBudgetContextLoading(true);
       try {
-        const histories = proposalResourceIds.length > 0 ? await listResourcePriceHistories(proposalResourceIds) : [];
         let detail: QuotationBudgetDetail | null = null;
         if (technicalProposalId) {
           const budgets = await listQuotationBudgets(cotizacion.id);
@@ -1392,12 +1326,10 @@ export function TechnicalProposalWorkspaceModal({
           detail = linkedBudget ? await getQuotationBudgetDetail(linkedBudget.id) : null;
         }
         if (!cancelled) {
-          setResourcePriceHistories(histories);
           setLinkedBudgetDetail(detail);
         }
       } catch (error) {
         if (!cancelled) {
-          setResourcePriceHistories([]);
           setLinkedBudgetDetail(null);
           setStatusMessage(error instanceof Error ? error.message : "No se pudo cargar economia de recursos usados.");
         }
@@ -1410,18 +1342,7 @@ export function TechnicalProposalWorkspaceModal({
     return () => {
       cancelled = true;
     };
-  }, [canViewPrices, cotizacion.id, open, proposalResourceIdKey, proposalResourceIds, technicalProposalId]);
-
-  const resourceInspectorPermissions = useMemo(
-    () => ({
-      canViewPrices,
-      canViewSupplier: true,
-      canViewImages: true,
-      canViewDocuments: true,
-      canViewMetadata: true,
-    }),
-    [canViewPrices],
-  );
+  }, [canViewPrices, cotizacion.id, open, technicalProposalId]);
 
   if (!open) return null;
 
@@ -1453,10 +1374,6 @@ export function TechnicalProposalWorkspaceModal({
 
   function patchNested<K extends keyof TechnicalProposalDraft>(key: K, patch: Partial<TechnicalProposalDraft[K]>) {
     setDraftWithTouch((prev) => ({ ...prev, [key]: { ...(prev[key] as object), ...patch } }));
-  }
-
-  function toggleSection(section: string) {
-    setCollapsedSections((prev) => ({ ...prev, [section]: !prev[section] }));
   }
 
   function saveLocalDraft() {
@@ -1511,7 +1428,6 @@ export function TechnicalProposalWorkspaceModal({
       if (process.env.NODE_ENV === "development") {
         console.debug("[propuesta-tecnica] RPC guardada", { technicalProposalId });
       }
-      setEditingResourceCellId(null);
       setEditingLocked(true);
       setStatusMessage(`Guardado en Supabase. ID: ${technicalProposalId}`);
     } catch (error) {
@@ -1537,8 +1453,7 @@ export function TechnicalProposalWorkspaceModal({
   function refreshPreview() {
     setProposalLogos(readProposalLogos());
     setPreviewRefreshKey((current) => current + 1);
-    setRightPanelView("document");
-    setStatusMessage("Vista previa actualizada desde los datos locales.");
+    setStatusMessage("Documento actualizado desde los datos locales.");
   }
 
   function selectedResourceTargetItem(): ScopeItem | null {
@@ -1559,7 +1474,6 @@ export function TechnicalProposalWorkspaceModal({
     setDraftWithTouch((prev) => ({ ...prev, resources: [...prev.resources, snapshot] }));
     setSelectedResourceRowId(snapshot.id);
     setActiveResourceTargetRowId(snapshot.id);
-    setEditingResourceCellId(null);
     setActiveMasterResource(resource);
     setRightPanelView("resources");
     setStatusMessage(`Recurso ${resource.codigo_recurso || resource.descripcion} agregado a ${target.number}.`);
@@ -1661,9 +1575,7 @@ export function TechnicalProposalWorkspaceModal({
     try {
       const budget = await createQuotationBudgetFromTechnicalProposal(technicalProposalId);
       const detail = await getQuotationBudgetDetail(budget.id);
-      const histories = proposalResourceIds.length > 0 ? await listResourcePriceHistories(proposalResourceIds) : [];
       setLinkedBudgetDetail(detail);
-      setResourcePriceHistories(histories);
       setStatusMessage("Presupuesto creado desde la propuesta tecnica.");
     } catch (error) {
       setStatusMessage(error instanceof Error ? error.message : "No se pudo crear el presupuesto desde PT.");
@@ -1672,11 +1584,7 @@ export function TechnicalProposalWorkspaceModal({
     }
   }
 
-  async function handleApplyUsedResourcePriceAction(
-    recursoId: string,
-    action: ApplyBudgetResourcePriceReviewAction,
-    options?: { precioHistoricoId?: string | null; precioUnitario?: number | null },
-  ) {
+  async function handleApplyMarginByType(resourceType: string, percent: number) {
     if (!linkedBudgetDetail) {
       setStatusMessage("No hay presupuesto asociado a esta propuesta tecnica.");
       return;
@@ -1687,24 +1595,26 @@ export function TechnicalProposalWorkspaceModal({
     }
     setBudgetContextLoading(true);
     try {
-      await applyBudgetResourcePriceReview({
-        presupuestoId: linkedBudgetDetail.presupuesto.id,
-        recursoId,
-        accion: action,
-        precioHistoricoId: options?.precioHistoricoId ?? null,
-        precioUnitario: options?.precioUnitario ?? null,
-        monedaCodigo: action === "NUEVO_PRECIO" ? ((linkedBudgetDetail.presupuesto.monedaCodigo ?? "PEN") as MonedaPresupuestoCotizacion) : null,
-        fechaPrecio: action === "NUEVO_PRECIO" ? todayIsoDate() : null,
-        fuenteTipo: action === "NUEVO_PRECIO" ? ("MANUAL" as ResourcePriceHistorySource) : null,
-        observaciones: action === "NUEVO_PRECIO" ? "Registrado desde recursos usados de PT." : null,
+      const itemByRowId = new Map(draft.resources.map((resource) => [resource.id, resource]));
+      const itemByMasterId = new Map(draft.resources.filter((resource) => resource.recurso_id).map((resource) => [resource.recurso_id as string, resource]));
+      const targetRows = linkedBudgetDetail.recursos.filter((resource) => {
+        const proposalResource = (resource.propuestaTecnicaRecursoId ? itemByRowId.get(resource.propuestaTecnicaRecursoId) : null)
+          ?? itemByMasterId.get(resource.recursoId);
+        if (!proposalResource) return false;
+        const label = displayResourceCategory(
+          resource.tipoRecursoSnapshot ?? resource.recurso?.tipoRecurso ?? proposalResource.tipo_recurso,
+          proposalResource.resource_category,
+        );
+        return normalizeSearch(label) === normalizeSearch(resourceType);
       });
+      await Promise.all(targetRows.map((resource) => updateBudgetResource(resource.id, {
+        precioOfertadoUnitario: resource.precioBaseUnitario * (1 + percent / 100),
+      })));
       const detail = await getQuotationBudgetDetail(linkedBudgetDetail.presupuesto.id);
-      const histories = proposalResourceIds.length > 0 ? await listResourcePriceHistories(proposalResourceIds) : [];
       setLinkedBudgetDetail(detail);
-      setResourcePriceHistories(histories);
-      setStatusMessage("Revision de precio aplicada al presupuesto asociado.");
+      setStatusMessage(`Margen de ${resourceType} actualizado en el presupuesto.`);
     } catch (error) {
-      setStatusMessage(error instanceof Error ? error.message : "No se pudo aplicar la revision de precio.");
+      setStatusMessage(error instanceof Error ? error.message : "No se pudo actualizar el margen del presupuesto.");
     } finally {
       setBudgetContextLoading(false);
     }
@@ -1731,11 +1641,33 @@ export function TechnicalProposalWorkspaceModal({
     const source = previewDocumentRef.current;
     if (!source || typeof window === "undefined") return null;
     const clone = source.cloneNode(true) as HTMLElement;
+    const clonedScopeEditors = Array.from(clone.querySelectorAll<HTMLElement>(".scope-editor-main"));
+    const clonedScopeHelp = Array.from(clone.querySelectorAll<HTMLElement>(".scope-editor-help"));
+    const clonedScopePrintLists = Array.from(clone.querySelectorAll<HTMLElement>(".scope-print-list"));
+    const clonedButtons = Array.from(clone.querySelectorAll<HTMLButtonElement>("button"));
+    const printableButtons = new Set(clone.querySelectorAll<HTMLButtonElement>(".scope-print-list button,.resource-cell-readonly,.sheet-btn"));
+    const clonedTableColumns = Array.from(clone.querySelectorAll<HTMLTableElement>(".doc-table")).map((table) => {
+      const observationColumns = Array.from(table.querySelectorAll<HTMLElement>(".observation-column"));
+      const hasObservationContent = observationColumns.some((column) =>
+        Array.from(column.querySelectorAll<HTMLInputElement | HTMLTextAreaElement>("input,textarea")).some((input) => input.value.trim()),
+      );
+      return {
+        actionColumns: Array.from(table.querySelectorAll<HTMLElement>(".operational-column")),
+        observationColumns,
+        hasObservationContent,
+      };
+    });
     const sourceElements = [source, ...Array.from(source.querySelectorAll<HTMLElement>("*"))];
     const cloneElements = [clone, ...Array.from(clone.querySelectorAll<HTMLElement>("*"))];
     sourceElements.forEach((sourceElement, index) => {
       const cloneElement = cloneElements[index];
       if (!cloneElement) return;
+      if (sourceElement instanceof HTMLInputElement && cloneElement instanceof HTMLInputElement) {
+        cloneElement.setAttribute("value", sourceElement.value);
+      }
+      if (sourceElement instanceof HTMLTextAreaElement && cloneElement instanceof HTMLTextAreaElement) {
+        cloneElement.textContent = sourceElement.value;
+      }
       const styles = window.getComputedStyle(sourceElement);
       cloneElement.removeAttribute("class");
       cloneElement.setAttribute(
@@ -1744,6 +1676,27 @@ export function TechnicalProposalWorkspaceModal({
           .map((property) => `${property}:${styles.getPropertyValue(property)};`)
           .join(""),
       );
+    });
+    clonedButtons.forEach((button) => {
+      if (!printableButtons.has(button)) {
+        button.remove();
+        return;
+      }
+      const text = document.createElement("span");
+      text.textContent = button.textContent;
+      text.setAttribute("style", button.getAttribute("style") ?? "");
+      text.style.border = "0";
+      text.style.background = "transparent";
+      button.replaceWith(text);
+    });
+    clonedTableColumns.forEach(({ actionColumns, observationColumns, hasObservationContent }) => {
+      actionColumns.forEach((column) => column.remove());
+      if (!hasObservationContent) observationColumns.forEach((column) => column.remove());
+    });
+    clonedScopeEditors.forEach((element) => element.remove());
+    clonedScopeHelp.forEach((element) => element.remove());
+    clonedScopePrintLists.forEach((element) => {
+      element.style.display = "block";
     });
     clone.removeAttribute("key");
     clone.classList.add("exported-proposal-document");
@@ -1755,11 +1708,13 @@ export function TechnicalProposalWorkspaceModal({
     @page { size: A4 portrait; margin: 0; }
     html, body { margin: 0; padding: 0; background: #ffffff; }
     body { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
-    .exported-proposal-document { box-sizing: border-box; margin: 0 auto; width: 210mm; min-height: 297mm; box-shadow: none !important; }
+    .exported-proposal-document { box-sizing: border-box; display: block; margin: 0; width: 210mm; background: #fff; }
+    .exported-proposal-document .doc-page { box-sizing: border-box; margin: 0; width: 210mm; height: 296.8mm; min-height: 296.8mm; max-height: 296.8mm; box-shadow: none !important; break-after: page; page-break-after: always; }
+    .exported-proposal-document .doc-page:last-child { break-after: auto; page-break-after: auto; }
     table { border-collapse: collapse; }
     img { max-width: 100%; object-fit: contain; }
     @media print {
-      .exported-proposal-document { margin: 0; width: 210mm; min-height: 297mm; break-after: page; page-break-after: always; }
+      .exported-proposal-document { margin: 0; width: 210mm; }
     }
   `;
   }
@@ -1840,7 +1795,6 @@ ${clone.outerHTML}
       setPrintingReady(true);
       setProposalLogos(readProposalLogos());
       setPreviewRefreshKey((current) => current + 1);
-      setRightPanelView("document");
       setStatusMessage("Preparando impresion / PDF.");
     });
 
@@ -1959,28 +1913,6 @@ ${clone.outerHTML}
       printWindow.close();
       cleanup();
     }
-  }
-
-  function generateStructureFromOutline() {
-    const parsed = parseScopeOutline(draft.scope_outline);
-    const nextItems = parsedLinesToScopeItems(parsed, draft.scope_items);
-    setDraftWithTouch((prev) => ({
-      ...prev,
-      scope_items: nextItems.length ? nextItems : prev.scope_items,
-      scope_outline: scopeItemsToOutline(nextItems.length ? nextItems : prev.scope_items),
-    }));
-    setSelectedScopeItemId(nextItems.find((item) => item.kind === "activity")?.id ?? nextItems[0]?.id ?? selectedScopeItemId);
-    setStatusMessage("Estructura generada desde el listado jerarquico.");
-  }
-
-  function renumberOutline() {
-    const parsed = parseScopeOutline(draft.scope_outline);
-    const items = parsedLinesToScopeItems(parsed, draft.scope_items);
-    patchDraft({ scope_outline: scopeItemsToOutline(items.length ? items : draft.scope_items) });
-  }
-
-  function clearScopeOutline() {
-    patchDraft({ scope_outline: "" });
   }
 
   function updateScopeItem(itemId: string, patch: Partial<ScopeItem>) {
@@ -2103,7 +2035,7 @@ ${clone.outerHTML}
 
   function setScopeTextareaLines(textarea: HTMLTextAreaElement, lines: string[], focusLineIndex: number) {
     const nextValue = lines.join("\n");
-    patchDraft({ scope_outline: nextValue });
+    syncScopeOutline(nextValue);
     window.requestAnimationFrame(() => {
       const lineStart = lines.slice(0, focusLineIndex).join("\n").length + (focusLineIndex > 0 ? 1 : 0);
       const lineEnd = lineStart + (lines[focusLineIndex]?.length ?? 0);
@@ -2117,8 +2049,8 @@ ${clone.outerHTML}
     const parsed = parseScopeOutline(lines[lineIndex] ?? "");
     const current = parsed[0] ?? { level: 0, kind: "group" as ScopeKind, title: cleanScopeTitle(lines[lineIndex] ?? ""), number: "" };
     current.level = Math.max(0, Math.min(4, current.level + delta));
-    const prefix = "  ".repeat(current.level);
-    lines[lineIndex] = `${prefix}${current.kind === "activity" ? "[A] " : ""}${current.title}`;
+    const prefix = "\t".repeat(current.level);
+    lines[lineIndex] = `${prefix}${current.kind === "activity" ? "* " : ""}${current.title}`;
     setScopeTextareaLines(textarea, scopeItemsToOutline(parsedLinesToScopeItems(parseScopeOutline(lines.join("\n")), draft.scope_items)).split("\n"), lineIndex);
   }
 
@@ -2126,7 +2058,7 @@ ${clone.outerHTML}
     const { lines, lineIndex } = currentLineInfo(textarea);
     const parsed = parseScopeOutline(lines[lineIndex] ?? "");
     const level = parsed[0]?.level ?? 0;
-    lines.splice(lineIndex + 1, 0, `${"  ".repeat(level)}`);
+    lines.splice(lineIndex + 1, 0, `${"\t".repeat(level)}`);
     setScopeTextareaLines(textarea, lines, lineIndex + 1);
   }
 
@@ -2137,18 +2069,42 @@ ${clone.outerHTML}
     const title = cleanScopeTitle(line);
     const parsed = parseScopeOutline(line);
     const level = parsed[0]?.level ?? 0;
-    lines[lineIndex] = `${"  ".repeat(level)}${isActivity ? "" : "[A] "}${title}`;
+    lines[lineIndex] = `${"\t".repeat(level)}${isActivity ? "" : "* "}${title}`;
     setScopeTextareaLines(textarea, scopeItemsToOutline(parsedLinesToScopeItems(parseScopeOutline(lines.join("\n")), draft.scope_items)).split("\n"), lineIndex);
   }
 
   function addNewResource(scopeItemId: string, category: ResourceCategoryKey) {
-    const nextResource = makeNewFormalizationResource(scopeItemId, category);
+    const nextResource = { ...makeNewFormalizationResource(scopeItemId, category), descripcion: "" };
     setDraftWithTouch((prev) => ({ ...prev, resources: [...prev.resources, nextResource] }));
     setSelectedResourceRowId(nextResource.id);
     setActiveResourceTargetRowId(nextResource.id);
     setActiveMasterResource(null);
     setRightPanelView("resources");
     setStatusMessage("Recurso agregado como nuevo por formalizar.");
+  }
+
+  function showScopeDescription(itemId: string) {
+    setExpandedEmptyDescriptionIds((current) => new Set(current).add(itemId));
+  }
+
+  function removeScopeDescription(itemId: string) {
+    updateScopeItem(itemId, { description: "" });
+    setExpandedEmptyDescriptionIds((current) => {
+      const next = new Set(current);
+      next.delete(itemId);
+      return next;
+    });
+  }
+
+  function syncScopeOutline(value: string) {
+    setDraftWithTouch((prev) => {
+      const nextItems = parsedLinesToScopeItems(parseScopeOutline(value), prev.scope_items);
+      return {
+        ...prev,
+        scope_outline: value,
+        scope_items: nextItems.length ? nextItems : prev.scope_items,
+      };
+    });
   }
 
   function updateResource(resourceId: string, patch: Partial<TechnicalProposalResourceSnapshot>) {
@@ -2162,60 +2118,52 @@ ${clone.outerHTML}
     setDraftWithTouch((prev) => ({ ...prev, resources: prev.resources.filter((resource) => resource.id !== resourceId) }));
     if (selectedResourceRowId === resourceId) {
       setSelectedResourceRowId(null);
-      setEditingResourceCellId(null);
       setActiveMasterResource(null);
     }
     if (activeResourceTargetRowId === resourceId) setActiveResourceTargetRowId(null);
   }
 
-  function selectUsedResourceForDetail(item: UsedResourceItem) {
-    const snapshot = draft.resources.find((resource) => resource.id === item.rowId) ?? null;
-    setSelectedResourceRowId(item.rowId);
-    setEditingResourceCellId(null);
-    setActiveMasterResource(item.masterResourceId ? resourceCatalog.find((resource) => resource.id === item.masterResourceId) ?? null : null);
-    if (!snapshot?.recurso_id) setActiveMasterResource(null);
-    setRightPanelView("resources");
+  function openScopeContextMenu(event: MouseEvent<HTMLElement>, scopeItemId: string | null) {
+    event.preventDefault();
+    event.stopPropagation();
+    if (scopeItemId) setSelectedScopeItemId(scopeItemId);
+    setScopeContextMenu({ x: event.clientX, y: event.clientY, scopeItemId });
   }
 
-  function reuseUsedResource(item: UsedResourceItem) {
-    if (!isEditingProposalDocument) {
-      setStatusMessage("Activa Editar para reutilizar recursos.");
+  function closeScopeContextMenu() {
+    setScopeContextMenu(null);
+  }
+
+  function contextScopeItem(): ScopeItem | null {
+    const targetId = scopeContextMenu?.scopeItemId ?? selectedScopeItemId;
+    return draft.scope_items.find((item) => item.id === targetId) ?? null;
+  }
+
+  function runScopeContextAction(action: "group" | "subgroup" | "activity" | "outdent" | "indent" | "up" | "down" | "duplicate" | "delete") {
+    const target = contextScopeItem();
+    const targetId = target?.id;
+    if (action === "group" || action === "subgroup" || action === "activity") addScopeItem(action, targetId);
+    if (!targetId) {
+      closeScopeContextMenu();
       return;
     }
-    if (!activeResourceTargetRowId) {
-      setStatusMessage("Selecciona una fila de recurso para reutilizarlo.");
+    if (action === "outdent") outdentScopeItemById(targetId);
+    if (action === "indent") indentScopeItemById(targetId);
+    if (action === "up") moveScopeItemUpById(targetId);
+    if (action === "down") moveScopeItemDownById(targetId);
+    if (action === "duplicate") duplicateScopeItem(targetId);
+    if (action === "delete") deleteScopeItem(targetId);
+    closeScopeContextMenu();
+  }
+
+  function runScopeResourceContextAction(category: ResourceCategoryKey) {
+    const target = contextScopeItem();
+    if (!target) {
+      closeScopeContextMenu();
       return;
     }
-    const target = draft.resources.find((resource) => resource.id === activeResourceTargetRowId);
-    const source = draft.resources.find((resource) => resource.id === item.rowId);
-    if (!target || !source) {
-      setStatusMessage("Selecciona una fila de recurso para reutilizarlo.");
-      return;
-    }
-    if (target.resource_category !== source.resource_category) {
-      setStatusMessage("Este recurso pertenece a otro tipo.");
-      return;
-    }
-    updateResource(target.id, {
-      recurso_id: source.recurso_id,
-      codigo_recurso: source.codigo_recurso,
-      codigo_fabricante: source.codigo_fabricante,
-      tipo_recurso: source.tipo_recurso,
-      resource_category: source.resource_category,
-      descripcion: source.descripcion,
-      unidad: source.unidad,
-      precio_unitario_ref: source.precio_unitario_ref,
-      moneda: source.moneda,
-      proveedor: source.proveedor,
-      marca: source.marca,
-      detalle_adicional: source.detalle_adicional,
-      estado_origen: source.estado_origen,
-    });
-    setSelectedResourceRowId(target.id);
-    setEditingResourceCellId(null);
-    setActiveMasterResource(source.recurso_id ? resourceCatalog.find((resource) => resource.id === source.recurso_id) ?? null : null);
-    setRightPanelView("resources");
-    setStatusMessage("Recurso reutilizado en la fila seleccionada.");
+    addNewResource(target.id, category);
+    closeScopeContextMenu();
   }
 
   function applyQuickEntry(scopeItemId: string, category: ResourceCategoryKey, rows: QuickEntryRow[]) {
@@ -2323,333 +2271,1709 @@ ${clone.outerHTML}
     );
   }
 
-  function renderResourceGrid(activity: ScopeItem) {
-    const rows = draft.resources.filter((resource) => resource.scope_item_id === activity.id);
+  function a4FieldClassName(extra = ""): string {
+    return [
+      "direct-edit w-full min-w-0 border-0 border-b border-transparent bg-transparent px-0.5 py-0.5 text-[9px] leading-4 text-stone-800 outline-none",
+      "hover:border-stone-200 hover:bg-stone-50 focus:border-teal-600 focus:bg-white",
+      "disabled:cursor-not-allowed disabled:text-stone-500",
+      extra,
+    ].join(" ");
+  }
+
+  function a4TextareaClassName(extra = ""): string {
+    return [
+      "direct-edit w-full min-w-0 resize-none border-0 bg-transparent px-0.5 py-0.5 text-[9px] leading-4 text-stone-700 outline-none",
+      "hover:bg-stone-50 focus:bg-white focus:shadow-[inset_0_0_0_1px_#0f766e]",
+      "disabled:cursor-not-allowed disabled:text-stone-500",
+      extra,
+    ].join(" ");
+  }
+
+  function renderA4CoverData(label: string, children: ReactNode) {
     return (
-      <TechnicalProposalResourceGrid
-        activityNumber={activity.number}
-        categories={RESOURCE_CATEGORIES}
-        rows={rows}
-        resources={resourceCatalog}
-        usedResourceLookup={usedResourceLookup}
-        selectedResourceRowId={selectedResourceRowId}
-        editingResourceCellId={editingResourceCellId}
-        editingEnabled={isEditingProposalDocument}
-        canViewPrices={resourceInspectorPermissions.canViewPrices}
-        onAddResource={(categoryKey) => addNewResource(activity.id, categoryKey)}
-        onDeleteResource={deleteResource}
-        onUpdateResource={updateResource}
-        onSelectResourceRow={(resource) => {
-          setSelectedResourceRowId(resource.id);
-          setActiveResourceTargetRowId(resource.id);
-          setEditingResourceCellId(null);
-          setActiveMasterResource(resource.recurso_id ? resourceCatalog.find((item) => item.id === resource.recurso_id) ?? null : null);
-          setRightPanelView("resources");
-        }}
-        onEditResourceDescription={(resourceId) => {
-          if (resourceId) setActiveResourceTargetRowId(resourceId);
-          setEditingResourceCellId(resourceId);
-        }}
-        onActiveMasterResource={(resource) => {
-          setActiveMasterResource(resource);
-          if (resource) setRightPanelView("resources");
-        }}
-        onSelectMasterResource={(resourceId, selectedResource) => {
-          setSelectedResourceRowId(resourceId);
-          setActiveResourceTargetRowId(resourceId);
-          setEditingResourceCellId(null);
-          setActiveMasterResource(selectedResource);
-          setRightPanelView("resources");
-          updateResource(resourceId, {
-            recurso_id: selectedResource.id,
-            codigo_recurso: selectedResource.codigo_recurso,
-            codigo_fabricante: selectedResource.codigo_fabricante,
-            tipo_recurso: selectedResource.tipo_recurso,
-            resource_category: mapResourceCategory(selectedResource.tipo_recurso),
-            descripcion: selectedResource.descripcion,
-            unidad: selectedResource.unidad,
-            precio_unitario_ref: selectedResource.precio_unitario_ref,
-            moneda: selectedResource.moneda,
-            proveedor: selectedResource.proveedor,
-            marca: selectedResource.marca,
-            detalle_adicional: selectedResource.modelo || selectedResource.observaciones,
-            estado_origen: "catalogo_copiado",
-          });
-        }}
-      />
+      <label className="cover-data-v66">
+        <span>{label}</span>
+        <strong>{children}</strong>
+      </label>
     );
   }
 
-  function renderScopeItemEditor(item: ScopeItem) {
-    const activityImages = draft.activity_images.filter((image) => image.scope_item_id === item.id);
-    const childrenCount = draft.scope_items.filter((candidate) => candidate.number.startsWith(`${item.number}.`)).length;
+  function renderA4MetaRow(label: string, children: ReactNode) {
     return (
-      <div
-        key={item.id}
-        className={`rounded-lg border ${
-          item.kind === "activity" ? "border-stone-200 bg-white" : "border-teal-100 bg-teal-50/40"
-        }`}
-        style={{ marginLeft: `${Math.min(item.level, 3) * 18}px` }}
-      >
-        <div className="flex flex-wrap items-start justify-between gap-2 border-b border-stone-200 px-3 py-2">
-          <button type="button" onClick={() => setSelectedScopeItemId(item.id)} className="flex min-w-0 flex-1 items-start gap-2 text-left">
-            <span className="inline-flex h-7 min-w-7 items-center justify-center rounded-md border border-teal-200 bg-white px-1.5 text-[11px] font-bold text-teal-700">
-              {item.number}
-            </span>
-            <span className="min-w-0">
-              <span className="block truncate text-[12px] font-bold text-stone-800">{item.title}</span>
-              <span className="mt-0.5 flex flex-wrap items-center gap-1.5 text-[10px] text-stone-500">
-                <span className={`rounded-full border px-2 py-0.5 ${item.kind === "activity" ? "border-teal-200 bg-teal-50 text-teal-700" : "border-amber-200 bg-amber-50 text-amber-700"}`}>
-                  {scopeKindLabel(item.kind)}
-                </span>
-                <span>{childrenCount} subitem(s)</span>
-                <span>{draft.resources.filter((resource) => resource.scope_item_id === item.id).length} recurso(s)</span>
-                {item.kind === "activity" && item.complete ? <span className="rounded-full border border-emerald-200 bg-emerald-50 px-2 py-0.5 text-emerald-700">Completo</span> : null}
-              </span>
-            </span>
-          </button>
-          <div className="flex items-center gap-1">
-            <button type="button" onClick={() => updateScopeItem(item.id, { collapsed: !item.collapsed })} className={smallButtonClassName("secondary")}>
-              {item.collapsed ? "Expandir" : "Agrupar"}
-            </button>
-            <button type="button" onClick={() => duplicateScopeItem(item.id)} className={smallButtonClassName("secondary")} disabled={!isEditingProposalDocument}>
-              Duplicar
-            </button>
-            <button type="button" onClick={() => deleteScopeItem(item.id)} className={smallButtonClassName("danger")} disabled={!isEditingProposalDocument}>
-              Eliminar
-            </button>
-          </div>
-        </div>
-        {!item.collapsed ? (
-          <div className="space-y-3 p-3">
-            <div className="grid grid-cols-1 gap-2 md:grid-cols-[1fr_130px_130px_110px]">
-              <Field label="Titulo">
-                <input value={item.title} onChange={(event) => updateScopeItem(item.id, { title: event.target.value })} className={inputClassName()} disabled={!isEditingProposalDocument} />
-              </Field>
-              <Field label="Tipo">
-                <select value={item.kind} onChange={(event) => updateScopeItem(item.id, { kind: event.target.value as ScopeKind })} className={inputClassName()} disabled={!isEditingProposalDocument}>
-                  <option value="group">Titulo</option>
-                  <option value="subgroup">Subtitulo</option>
-                  <option value="activity">Partida / actividad</option>
-                </select>
-              </Field>
-              <Field label="Tiempo estimado">
-                <input
-                  type="number"
-                  min={0}
-                  value={item.time_value}
-                  onChange={(event) => updateScopeItem(item.id, { time_value: toFiniteNumber(event.target.value) })}
-                  className={inputClassName()}
+      <label className="grid grid-cols-[96px_1fr] items-start gap-2 text-[9px] leading-4">
+        <span className="font-black text-stone-700">{label}</span>
+        {children}
+      </label>
+    );
+  }
+
+  function applyMasterResourceToSnapshot(resourceId: string, selectedResource: Recurso) {
+    setSelectedResourceRowId(resourceId);
+    setActiveResourceTargetRowId(resourceId);
+    setActiveMasterResource(selectedResource);
+    setRightPanelView("resources");
+    updateResource(resourceId, {
+      recurso_id: selectedResource.id,
+      codigo_recurso: selectedResource.codigo_recurso,
+      codigo_fabricante: selectedResource.codigo_fabricante,
+      tipo_recurso: selectedResource.tipo_recurso,
+      resource_category: mapResourceCategory(selectedResource.tipo_recurso),
+      descripcion: selectedResource.descripcion,
+      unidad: selectedResource.unidad,
+      precio_unitario_ref: selectedResource.precio_unitario_ref,
+      moneda: selectedResource.moneda,
+      proveedor: selectedResource.proveedor,
+      marca: selectedResource.marca,
+      detalle_adicional: selectedResource.modelo || selectedResource.observaciones,
+      estado_origen: "catalogo_copiado",
+    });
+  }
+
+  function focusResourceSnapshot(resource: TechnicalProposalResourceSnapshot, view: RightPanelView = "resources") {
+    setSelectedResourceRowId(resource.id);
+    setActiveResourceTargetRowId(resource.id);
+    setActiveMasterResource(resource.recurso_id ? resourceCatalog.find((item) => item.id === resource.recurso_id) ?? null : null);
+    setRightPanelView(view);
+  }
+
+  function renderA4ResourceRow(
+    resource: TechnicalProposalResourceSnapshot,
+    index: number,
+    category: (typeof RESOURCE_CATEGORIES)[number],
+    item: ScopeItem,
+    rowCount: number,
+    showObservations: boolean,
+    showActions: boolean,
+  ) {
+    const selected = selectedResourceRowId === resource.id;
+    const resourceNumber = `${index + 1}`;
+    const isLabor = category.key.includes("mano_obra");
+    const isFirstLaborRow = isLabor && index === 0;
+    return (
+      <tr key={resource.id} className={`mo-subrow ${selected ? "bg-teal-50/70" : "bg-white"}`}>
+        {isLabor ? (
+          isFirstLaborRow ? (
+            <>
+              <td rowSpan={rowCount} className="mo-group-cell border border-stone-200 px-1.5 py-1 text-center text-[8px] font-bold tabular-nums text-teal-800">
+                {item.number}
+              </td>
+              <td rowSpan={rowCount} className="mo-group-cell mo-activity-cell border border-stone-200 p-0">
+                <textarea
+                  value={item.title}
+                  onChange={(event) => updateScopeItem(item.id, { title: event.target.value })}
+                  className={a4TextareaClassName("min-h-[30px] px-1.5 py-1 text-[8px] font-semibold leading-4")}
+                  placeholder="Actividad / tarea"
                   disabled={!isEditingProposalDocument}
                 />
-              </Field>
-              <Field label="Unidad">
-                <select value={item.time_unit} onChange={(event) => updateScopeItem(item.id, { time_unit: event.target.value })} className={inputClassName()} disabled={!isEditingProposalDocument}>
-                  <option value="dias">dias</option>
-                  <option value="horas">horas</option>
-                  <option value="semanas">semanas</option>
-                </select>
-              </Field>
-            </div>
-            <Field label="Descripcion tecnica / alcance">
-              <textarea value={item.description} onChange={(event) => updateScopeItem(item.id, { description: event.target.value })} className={textareaClassName()} disabled={!isEditingProposalDocument} />
-            </Field>
-            <>
-              <div className="flex flex-wrap items-center justify-between gap-2">
-                {item.kind === "activity" ? (
-                  <label className="inline-flex items-center gap-2 text-[11px] font-semibold text-stone-600">
-                    <input
-                      type="checkbox"
-                      checked={item.complete}
-                      onChange={(event) => updateScopeItem(item.id, { complete: event.target.checked })}
-                      className="h-4 w-4 rounded border-stone-300"
-                      disabled={!isEditingProposalDocument}
-                    />
-                    Actividad completa
-                  </label>
-                ) : <span className="text-[11px] font-semibold text-stone-500">Recursos asociados a {scopeKindLabel(item.kind).toLowerCase()}</span>}
-                <div className="flex flex-wrap items-center gap-1.5">
-                  {RESOURCE_CATEGORIES.map((category) => (
-                    <button key={category.key} type="button" onClick={() => addNewResource(item.id, category.key)} className={smallButtonClassName("secondary")} disabled={!isEditingProposalDocument}>
-                      + {category.shortLabel}
-                    </button>
-                  ))}
-                </div>
-              </div>
-              <div className="grid grid-cols-1 gap-2">
-                {renderResourceGrid(item)}
-              </div>
-              {item.kind === "activity" ? (
-                <>
-                <div className="rounded-lg border border-stone-200 bg-stone-50 p-2">
-                  <div className="mb-2 flex items-center justify-between gap-2">
-                    <FieldLabelIcon icon="image" label="Imagenes de referencia" className="text-[11px] font-bold text-stone-700" />
-                  </div>
-                  {renderImageEditor(activityImages, "activity", item.id)}
-                </div>
-                {showInternal ? (
-                  <Field label="Comentarios internos">
-                    <textarea
-                      value={item.internal_comments}
-                      onChange={(event) => updateScopeItem(item.id, { internal_comments: event.target.value })}
-                      className={textareaClassName("min-h-[56px]")}
-                      disabled={!isEditingProposalDocument}
-                    />
-                  </Field>
-                ) : null}
-                </>
-              ) : null}
+              </td>
             </>
+          ) : null
+        ) : (
+          <td className="border border-stone-200 px-1.5 py-1 text-center text-[8px] font-bold tabular-nums text-teal-800">{resourceNumber}</td>
+        )}
+        <td className="border border-stone-200 p-0">
+          {isEditingProposalDocument ? (
+            <ResourceAutocompleteInput
+              value={resource.descripcion}
+              resources={resourceCatalog}
+              usedResourceLookup={usedResourceLookup}
+              canViewPrices={canViewPrices}
+              autoFocus={false}
+              className={a4FieldClassName("h-7 bg-white")}
+              placeholder={isLabor ? "Buscar tecnico, supervisor..." : "Escriba para buscar..."}
+              onTextChange={(value) =>
+                updateResource(resource.id, {
+                  descripcion: value,
+                  recurso_id: null,
+                  codigo_recurso: "",
+                  codigo_fabricante: "",
+                  estado_origen: "nuevo_por_formalizar",
+                })
+              }
+              onSelect={(selectedResource) => applyMasterResourceToSnapshot(resource.id, selectedResource)}
+              onActiveResource={setActiveMasterResource}
+            />
+          ) : (
+            <button
+              type="button"
+              onClick={() => focusResourceSnapshot(resource, "resources")}
+              className="resource-cell-readonly block h-7 w-full truncate px-1.5 text-left text-[8px] text-stone-800"
+              title={resource.descripcion}
+            >
+              {resource.descripcion || "Buscar o escribir recurso"}
+            </button>
+          )}
+        </td>
+        <td className="border border-stone-200 p-0">
+          <input
+            type="number"
+            min={0}
+            value={resource.cantidad}
+            onChange={(event) => updateResource(resource.id, { cantidad: toFiniteNumber(event.target.value) })}
+            className={a4FieldClassName("h-7 text-right tabular-nums")}
+            disabled={!isEditingProposalDocument}
+          />
+        </td>
+        <td className="border border-stone-200 p-0">
+          <input
+            value={resource.unidad}
+            onChange={(event) => updateResource(resource.id, { unidad: event.target.value })}
+            className={a4FieldClassName("h-7 text-center")}
+            disabled={!isEditingProposalDocument}
+          />
+        </td>
+        {category.hasTime ? (
+          <td className="observation-column border border-stone-200 p-0">
+            <input
+              type="number"
+              min={0}
+              value={resource.tiempo}
+              onChange={(event) => updateResource(resource.id, { tiempo: toFiniteNumber(event.target.value) })}
+              className={a4FieldClassName("h-7 text-right tabular-nums")}
+              disabled={!isEditingProposalDocument}
+            />
+          </td>
+        ) : null}
+        {isLabor ? <td className="border border-stone-200 px-1 py-1 text-center text-[8px] text-stone-400" title="Sin campo persistente en el modelo PT">-</td> : null}
+        {!isLabor ? (
+          <td className="border border-stone-200 px-1 py-1 text-center text-[8px]">
+            {resource.recurso_id ? (
+              <button type="button" onClick={() => focusResourceSnapshot(resource, "resources")} className="sheet-btn">
+                Ver ficha
+              </button>
+            ) : (
+              <span className="text-stone-400">Pendiente</span>
+            )}
+          </td>
+        ) : null}
+        {showObservations ? (
+          <td className="border border-stone-200 p-0">
+            <input
+              value={resource.comentario || resource.detalle_adicional}
+              onChange={(event) => updateResource(resource.id, { comentario: event.target.value, detalle_adicional: "" })}
+              className={a4FieldClassName("h-7")}
+              placeholder="Observacion"
+              disabled={!isEditingProposalDocument}
+            />
+          </td>
+        ) : null}
+        {showActions ? (
+          <td className="operational-column border border-stone-200 px-1 py-1 text-center">
+            <div className="flex items-center justify-center gap-1">
+              <button
+                type="button"
+                onClick={() => addNewResource(item.id, category.key)}
+                className="resource-row-action"
+                title={isLabor ? "Agregar otro recurso a la actividad" : "Agregar otra fila"}
+                disabled={!isEditingProposalDocument}
+              >
+                +
+              </button>
+              <button
+                type="button"
+                onClick={() => deleteResource(resource.id)}
+                className="resource-row-action delete"
+                title="Eliminar fila"
+                disabled={!isEditingProposalDocument}
+              >
+                x
+              </button>
+            </div>
+          </td>
+        ) : null}
+      </tr>
+    );
+  }
+
+  function renderA4ResourceTable(item: ScopeItem, category: (typeof RESOURCE_CATEGORIES)[number], blockIndex: number) {
+    const rows = resourceRowsFor(item.id, draft.resources, category.key);
+    if (!rows.length) return null;
+    const isLabor = category.key.includes("mano_obra");
+    const blockNumber = `${item.number}.${blockIndex + 1}`;
+    const hasObservations = rows.some((resource) => Boolean((resource.comentario || resource.detalle_adicional).trim()));
+    const showObservations = !cleanTableView && ((isEditingProposalDocument && !printingReady) || hasObservations);
+    const showActions = isEditingProposalDocument && !printingReady && !cleanTableView;
+    return (
+      <div key={category.key} className="resource-block mt-2 break-inside-avoid">
+        <div className="resource-title uppercase">
+          {blockNumber} {category.label}
+        </div>
+        <div className="overflow-visible">
+          <table className={`doc-table w-full table-fixed border-collapse text-[8px] ${category.key.includes("mano_obra") ? "mo-table" : ""}`}>
+            <colgroup>
+              <col className="w-[8mm]" />
+              {isLabor ? <col className="w-[34mm]" /> : null}
+              <col />
+              <col className="w-[13mm]" />
+              <col className="w-[13mm]" />
+              {category.hasTime ? <col className="w-[15mm]" /> : null}
+              {isLabor ? <col className="w-[17mm]" /> : null}
+              {!isLabor ? <col className="w-[18mm]" /> : null}
+              {showObservations ? <col className="w-[28mm]" /> : null}
+              {showActions ? <col className="w-[12mm]" /> : null}
+            </colgroup>
+            <thead>
+              <tr>
+                <th className="border border-stone-200 px-1 py-1">Item</th>
+                {isLabor ? <th className="border border-stone-200 px-1 py-1">Actividad</th> : null}
+                <th className="border border-stone-200 px-1 py-1">{isLabor ? "Recurso" : "Descripcion / recurso"}</th>
+                <th className="border border-stone-200 px-1 py-1">Cant.</th>
+                <th className="border border-stone-200 px-1 py-1">UM</th>
+                {category.hasTime ? <th className="border border-stone-200 px-1 py-1">Tiempo</th> : null}
+                {isLabor ? <th className="border border-stone-200 px-1 py-1">Particip.</th> : null}
+                {!isLabor ? <th className="border border-stone-200 px-1 py-1">Ficha</th> : null}
+                {showObservations ? <th className="observation-column border border-stone-200 px-1 py-1">Observ.</th> : null}
+                {showActions ? <th className="operational-column border border-stone-200 px-1 py-1">Acc.</th> : null}
+              </tr>
+            </thead>
+            <tbody>{rows.map((resource, index) => renderA4ResourceRow(resource, index, category, item, rows.length, showObservations, showActions))}</tbody>
+          </table>
+        </div>
+      </div>
+    );
+  }
+
+  function renderA4EditableScopeNode(node: (typeof previewScopeTree)[number], depth = 0, includeChildren = true): ReactNode {
+    const item = draft.scope_items.find((scopeItem) => scopeItem.id === node.id);
+    if (!item) return null;
+
+    const activityImages = draft.activity_images.filter((image) => image.scope_item_id === item.id);
+    const isSelected = selectedScopeItemId === item.id;
+    const visibleResourceCategories = RESOURCE_CATEGORIES.filter((category) => resourceRowsFor(item.id, draft.resources, category.key).length > 0);
+    const resourceTables = visibleResourceCategories.map((category, index) => renderA4ResourceTable(item, category, index));
+    const titleClassName =
+      item.kind === "group"
+        ? "a4-section-title text-[11px] font-black uppercase text-stone-900"
+        : item.kind === "subgroup"
+          ? "a4-subheading text-[10px] font-black uppercase text-stone-800"
+          : "a4-activity-title text-[9.5px] font-black text-stone-900";
+    const descriptionPlaceholder =
+      item.kind === "activity"
+        ? "Descripcion tecnica de la actividad"
+        : item.kind === "subgroup"
+          ? "Descripcion breve del subtitulo"
+          : "Descripcion del alcance general";
+    const descriptionVisible = Boolean(item.description.trim()) || (isEditingProposalDocument && !printingReady && expandedEmptyDescriptionIds.has(item.id));
+    const selectedForEditing = isSelected && isEditingProposalDocument && !printingReady;
+
+    return (
+      <section
+        key={item.id}
+        data-scope-id={item.id}
+        onClick={() => {
+          setSelectedScopeItemId(item.id);
+          closeScopeContextMenu();
+        }}
+        onContextMenu={(event) => openScopeContextMenu(event, item.id)}
+        className={`a4-scope-block group/scope relative break-inside-avoid ${selectedForEditing ? "a4-scope-selected" : ""} ${item.kind === "group" ? "mt-5" : item.kind === "subgroup" ? "mt-3" : "mt-2"}`}
+        style={{ marginLeft: `${Math.min(depth, 4) * 5}mm` }}
+      >
+        <button
+          type="button"
+          onClick={(event) => openScopeContextMenu(event, item.id)}
+          className="a4-block-handle"
+          disabled={!isEditingProposalDocument}
+          title="Acciones del bloque"
+        >
+          ...
+        </button>
+
+        <div className="a4-scope-heading">
+          <span className="a4-scope-number">{item.number}.</span>
+          <div className="a4-scope-content">
+            <input
+              value={item.title}
+              onChange={(event) => updateScopeItem(item.id, { title: event.target.value })}
+              className={a4FieldClassName(titleClassName)}
+              disabled={!isEditingProposalDocument}
+            />
+            {descriptionVisible ? (
+              <div className="a4-description-row group/description">
+                <textarea
+                  value={item.description}
+                  onFocus={() => showScopeDescription(item.id)}
+                  onChange={(event) => updateScopeItem(item.id, { description: event.target.value })}
+                  className={a4TextareaClassName("a4-para min-h-[28px] text-[9px] leading-4")}
+                  placeholder={descriptionPlaceholder}
+                  disabled={!isEditingProposalDocument}
+                />
+                {isEditingProposalDocument ? (
+                  <button
+                    type="button"
+                    onClick={() => removeScopeDescription(item.id)}
+                    className="a4-description-remove"
+                    title="Quitar descripcion"
+                    aria-label="Quitar descripcion"
+                  >
+                    x
+                  </button>
+                ) : null}
+              </div>
+            ) : isEditingProposalDocument ? (
+              <button type="button" onClick={() => showScopeDescription(item.id)} className="a4-description-add">
+                + Agregar descripcion
+              </button>
+            ) : null}
+          </div>
+        </div>
+
+        {!item.collapsed ? (
+          <div className="mt-1 space-y-2">
+            {resourceTables.length > 0 ? <div className="a4-resource-stack space-y-2">{resourceTables}</div> : null}
+
+            {item.kind === "activity" ? (
+              <div className="image-gallery border border-stone-200 bg-stone-50 p-2">
+                <div className="mb-2 flex items-center justify-between gap-2">
+                  <FieldLabelIcon icon="image" label="Imagenes tecnicas" className="text-[9px] font-black uppercase text-stone-700" />
+                </div>
+                {renderImageEditor(activityImages, "activity", item.id)}
+              </div>
+            ) : null}
+
+            {showInternal ? (
+              <label className="a4-internal-note grid gap-1 p-2 text-[8px] font-bold uppercase text-stone-600">
+                Comentarios internos
+                <textarea
+                  value={item.internal_comments}
+                  onChange={(event) => updateScopeItem(item.id, { internal_comments: event.target.value })}
+                  className={a4TextareaClassName("min-h-[42px]")}
+                  disabled={!isEditingProposalDocument}
+                />
+              </label>
+            ) : null}
           </div>
         ) : null}
-      </div>
+
+        {includeChildren && node.children.length > 0 ? <div className="mt-2 space-y-2">{node.children.map((child) => renderA4EditableScopeNode(child, depth + 1, true))}</div> : null}
+      </section>
     );
   }
 
   function renderDocHeader() {
     return (
-      <div className="grid grid-cols-[110px_1fr_110px] items-center gap-4 border-b-2 border-amber-600 pb-4">
-        <div className="text-center">
+      <div className="doc-header">
+        <div className="doc-brand-left">
+          <div>
+            <div className="doc-logo">
           {companyLogo?.logo_url ? (
             // eslint-disable-next-line @next/next/no-img-element
             <img
               key={`${companyLogo.id}-${companyLogo.updated_at}-${previewRefreshKey}`}
               src={companyLogo.logo_url}
               alt={companyLogo.display_name || companyLogo.entity_name || "Logo EKA"}
-              className="mx-auto block max-h-[76px] max-w-[76px] border-0 bg-transparent p-0 object-contain shadow-none outline-none ring-0"
+              className="border-0 bg-transparent p-0 shadow-none outline-none ring-0"
             />
           ) : (
-            <div className="mx-auto flex h-[76px] w-[76px] items-center justify-center rounded-full border border-stone-300 bg-stone-50 text-[22px] font-black text-stone-700">
+            <div className="flex h-full w-full items-center justify-center rounded-full border border-stone-300 bg-stone-50 text-[22px] font-black text-stone-700">
               EKA
             </div>
           )}
-          <div className="mt-2 text-[11px] font-black uppercase text-stone-800">{draft.header.empresa_emisora}</div>
+            </div>
+            <div className="doc-format-line">{draft.header.empresa_emisora}</div>
+          </div>
         </div>
-        <div className="text-center">
-          <div className="text-[12px] font-black uppercase text-stone-900">FORMATO</div>
-          <div className="text-[12px] font-black uppercase text-stone-900">GESTION DE PROYECTOS</div>
-          <div className="text-[15px] font-black uppercase text-stone-900">PROPUESTA TECNICA</div>
+        <div className="doc-format">
+          <div className="doc-format-kicker">FORMATO</div>
+          <div className="doc-format-line">GESTION DE PROYECTOS</div>
+          <div className="doc-format-title">PROPUESTA TECNICA</div>
         </div>
-        <div className="text-center">
+        <div className="doc-client-right">
+          <div>
+            <div className="doc-client-logo">
           {clientLogo?.logo_url ? (
             // eslint-disable-next-line @next/next/no-img-element
             <img
               key={`${clientLogo.id}-${clientLogo.updated_at}-${previewRefreshKey}`}
               src={clientLogo.logo_url}
               alt={clientLogo.display_name || clientLogo.entity_name || "Logo cliente"}
-              className="mx-auto block max-h-[76px] max-w-[96px] border-0 bg-transparent p-0 object-contain shadow-none outline-none ring-0"
+              className="border-0 bg-transparent p-0 shadow-none outline-none ring-0"
             />
           ) : (
-            <div className="mx-auto flex h-[76px] w-[96px] items-center justify-center rounded border border-dashed border-stone-300 bg-stone-50 px-2 text-[16px] font-black uppercase text-stone-700">
-              {draft.header.cliente_logo_label || "Cliente"}
-            </div>
+            draft.header.cliente_logo_label || "Cliente"
           )}
-          <div className="mt-2 text-[11px] font-black uppercase text-stone-800">{draft.recipient.cliente || cotizacion.cliente || "CLIENTE"}</div>
-        </div>
-      </div>
-    );
-  }
-
-  function renderPreviewImages(images: ProposalImage[]) {
-    if (!images.length) return null;
-    return (
-      <div className="mt-3 grid grid-cols-1 gap-2 md:grid-cols-2">
-        {images.map((image) => (
-          <figure key={image.id} className={`${imageGridSpanClass(image.size)} rounded border border-stone-200 p-1.5`}>
-            <div className={`${docImageClass(image.size)} flex items-center justify-center bg-stone-50`}>
-              <img src={image.data_url} alt={image.title} className="max-h-full max-w-full object-contain" />
             </div>
-            <figcaption className="mt-1 text-[8px] text-stone-500">
-              <strong>{image.title}</strong> {image.relation_label ? `- ${image.relation_label}` : ""}
-            </figcaption>
-          </figure>
-        ))}
-      </div>
-    );
-  }
-
-  function renderPreviewResourceTable(activity: ScopeItem, category: (typeof RESOURCE_CATEGORIES)[number]) {
-    const rows = resourceRowsFor(activity.id, draft.resources, category.key);
-    if (!rows.length) return null;
-    const showComments = showInternal && rows.some((row) => row.comentario.trim());
-    return (
-      <div key={category.key} className="mt-2">
-        <div className="border-l-4 border-teal-700 pl-2 text-[9px] font-black uppercase text-teal-800">
-          {activity.number}.{category.shortLabel} {category.label}
+            <div className="doc-format-line">{draft.recipient.cliente || cotizacion.cliente || "CLIENTE"}</div>
+          </div>
         </div>
-        <table className="mt-1 w-full border-collapse text-[8px]">
-          <thead>
-            <tr className="bg-teal-50 text-teal-800">
-              <th className="border border-stone-200 px-1.5 py-1">Item</th>
-              <th className="border border-stone-200 px-1.5 py-1">Descripcion</th>
-              <th className="border border-stone-200 px-1.5 py-1">Cant.</th>
-              <th className="border border-stone-200 px-1.5 py-1">Unidad</th>
-              {category.hasTime ? <th className="border border-stone-200 px-1.5 py-1">Dia / Tiempo</th> : null}
-              {showComments ? <th className="border border-stone-200 px-1.5 py-1">Comentario interno</th> : null}
-            </tr>
-          </thead>
-          <tbody>
-            {rows.map((row, index) => (
-              <tr key={row.id}>
-                <td className="border border-stone-200 px-1.5 py-1 text-center">{index + 1}</td>
-                <td className="border border-stone-200 px-1.5 py-1">
-                  {row.descripcion}
-                  {showInternal && row.estado_origen === "nuevo_por_formalizar" ? <strong className="text-amber-700"> (nuevo por formalizar)</strong> : null}
-                </td>
-                <td className="border border-stone-200 px-1.5 py-1 text-center">{row.cantidad}</td>
-                <td className="border border-stone-200 px-1.5 py-1 text-center">{row.unidad}</td>
-                {category.hasTime ? <td className="border border-stone-200 px-1.5 py-1 text-center">{row.tiempo || "-"}</td> : null}
-                {showComments ? <td className="border border-stone-200 px-1.5 py-1">{row.comentario || "-"}</td> : null}
-              </tr>
-            ))}
-          </tbody>
-        </table>
       </div>
-    );
-  }
-
-  function renderPreviewScopeNode(node: (typeof previewScopeTree)[number]): ReactNode {
-    const item = draft.scope_items.find((scopeItem) => scopeItem.id === node.id);
-    if (!item) return null;
-    const resourceTables = RESOURCE_CATEGORIES.map((category) => renderPreviewResourceTable(item, category)).filter(Boolean);
-
-    if (item.kind !== "activity") {
-      return (
-        <section key={item.id} className="space-y-3" style={{ marginLeft: `${Math.min(item.level, 4) * 8}px` }}>
-          <div className="border-b border-stone-200 pb-1 text-[10px] font-black uppercase text-stone-900">
-            {item.number}. {item.title}
-          </div>
-          {node.children.length > 0 ? <div className="space-y-4">{node.children.map((child) => renderPreviewScopeNode(child))}</div> : null}
-          {resourceTables.length > 0 ? <div className="border-l border-stone-200 pl-2 text-[9px] leading-4">{resourceTables}</div> : null}
-        </section>
-      );
-    }
-
-    const images = draft.activity_images.filter((image) => image.scope_item_id === item.id);
-    return (
-      <section
-        key={item.id}
-        className="border-l border-stone-200 pl-2 text-[9px] leading-4"
-        style={{ marginLeft: `${Math.min(item.level, 4) * 8}px` }}
-      >
-        <h3 className="border-b border-stone-200 pb-1 text-[10px] font-black text-stone-900">
-          {item.number}. {item.title}
-        </h3>
-        {item.description ? <p className="mt-1 whitespace-pre-line text-stone-700">{item.description}</p> : null}
-        {resourceTables}
-        {renderPreviewImages(images)}
-        {showInternal && item.internal_comments ? (
-          <div className="mt-2 rounded border border-amber-200 bg-amber-50 px-2 py-1 text-[9px] text-amber-800">
-            <strong>Comentario interno:</strong> {item.internal_comments}
-          </div>
-        ) : null}
-      </section>
     );
   }
 
   return (
     <>
       <style jsx global>{`
+        .pt-promanager {
+          --navy: #17243a;
+          --navy2: #2e405d;
+          --gold: #4b5567;
+          --teal: #0f766e;
+          --bg: #e4e7eb;
+          --paper: #ffffff;
+          --line: #d7e0ea;
+          --line2: #edf1f5;
+          --text: #202a36;
+          --muted: #69778a;
+          --danger: #b42318;
+          --success: #166534;
+          --font: Arial, sans-serif;
+        }
+
+        .technical-proposal-a4-editor.doc-page {
+          box-sizing: border-box;
+          width: 210mm;
+          min-width: 210mm;
+          max-width: 210mm;
+          height: 296.8mm;
+          min-height: 296.8mm;
+          max-height: 296.8mm;
+          background: var(--paper);
+          box-shadow: 0 10px 28px rgba(0, 0, 0, 0.14);
+          position: relative;
+          padding: 10mm 12mm 8mm;
+          overflow: hidden;
+          display: flex;
+          flex-direction: column;
+          font-family: var(--font);
+          color: var(--text);
+        }
+
+        .technical-proposal-a4-editor.cover-page-v66 {
+          position: relative;
+          display: flex;
+          flex-direction: column;
+          justify-content: flex-start;
+          height: 296.8mm;
+          min-height: 296.8mm;
+          max-height: 296.8mm;
+          padding: 14mm 17mm 12mm;
+          background: #ffffff;
+          overflow: hidden;
+        }
+
+        .technical-proposal-a4-editor .cover-main-v66 {
+          width: 100%;
+          display: flex;
+          flex-direction: column;
+          align-items: center;
+        }
+
+        .technical-proposal-a4-editor .cover-client-mark-v66 {
+          position: absolute;
+          top: 14mm;
+          right: 17mm;
+          width: 34mm;
+          height: 18mm;
+          display: grid;
+          place-items: center;
+        }
+
+        .technical-proposal-a4-editor .cover-client-mark-v66 img {
+          max-width: 31mm;
+          max-height: 15mm;
+          object-fit: contain;
+          object-position: center;
+        }
+
+        .technical-proposal-a4-editor .cover-eka-logo-v66 {
+          width: 41mm;
+          height: 41mm;
+          margin-top: 14mm;
+          display: grid;
+          place-items: center;
+        }
+
+        .technical-proposal-a4-editor .cover-eka-logo-v66 img {
+          display: block;
+          width: 38mm;
+          height: 38mm;
+          object-fit: contain;
+        }
+
+        .technical-proposal-a4-editor .cover-company-v66 {
+          width: 90mm;
+          margin-top: 3mm;
+          color: #314258;
+          font-size: 8.2pt;
+          font-weight: 700;
+          letter-spacing: 0.085em;
+          text-align: center;
+          text-transform: uppercase;
+        }
+
+        .technical-proposal-a4-editor .cover-rule-v66 {
+          width: 38mm;
+          height: 1.2px;
+          margin: 6mm 0 7mm;
+          background: #46556a;
+        }
+
+        .technical-proposal-a4-editor .cover-doc-type-v66 {
+          color: #17243a;
+          font-size: 18pt;
+          line-height: 1.08;
+          font-weight: 700;
+          letter-spacing: 0.025em;
+          text-align: center;
+        }
+
+        .technical-proposal-a4-editor .cover-service-v66 {
+          width: 148mm;
+          max-width: 148mm;
+          margin-top: 4.5mm;
+          min-height: 9mm;
+          color: #17243a;
+          font-size: 12.5pt;
+          line-height: 1.28;
+          font-weight: 700;
+          letter-spacing: 0.005em;
+          text-transform: uppercase;
+          text-align: center;
+        }
+
+        .technical-proposal-a4-editor .cover-service-detail-v66 {
+          width: 148mm;
+          max-width: 148mm;
+          min-height: 8mm;
+          margin-top: 1mm;
+          color: #46556a;
+          font-size: 9pt;
+          line-height: 1.3;
+          font-weight: 600;
+          text-align: center;
+          text-transform: uppercase;
+        }
+
+        .technical-proposal-a4-editor .cover-data-grid-v66 {
+          width: 145mm;
+          margin-top: 15mm;
+          display: grid;
+          grid-template-columns: 1fr 1fr;
+          column-gap: 15mm;
+          row-gap: 6mm;
+        }
+
+        .technical-proposal-a4-editor .cover-data-v66 {
+          min-width: 0;
+          display: grid;
+          gap: 1.1mm;
+          padding-bottom: 1.8mm;
+          border-bottom: 1px solid #d8e0e9;
+        }
+
+        .technical-proposal-a4-editor .cover-data-v66 > span {
+          color: #6a7789;
+          font-size: 7pt;
+          font-weight: 700;
+          text-transform: uppercase;
+        }
+
+        .technical-proposal-a4-editor .cover-data-v66 > strong {
+          min-width: 0;
+          color: #24364d;
+          font-size: 9.1pt;
+          line-height: 1.3;
+          font-weight: 700;
+        }
+
+        .technical-proposal-a4-editor .cover-scope-v66 {
+          width: 145mm;
+          margin-top: 14mm;
+          border: 1px solid #dce3eb;
+          border-left: 3px solid #46556a;
+          background: #fbfcfd;
+          padding: 4.2mm 5mm 4.6mm;
+        }
+
+        .technical-proposal-a4-editor .cover-scope-title-v66 {
+          margin-bottom: 2mm;
+          color: #435269;
+          font-size: 7.4pt;
+          font-weight: 700;
+          letter-spacing: 0.04em;
+        }
+
+        .technical-proposal-a4-editor .cover-scope-text-v66 {
+          min-height: 23mm;
+          max-height: 52mm;
+          color: #25364a;
+          font-size: 8.9pt;
+          line-height: 1.52;
+          text-align: justify;
+          white-space: pre-wrap;
+        }
+
+        .technical-proposal-a4-editor .cover-bottom-v66 {
+          margin-top: auto;
+          width: 100%;
+          padding-top: 4mm;
+          border-top: 1.2px solid #46556a;
+          display: flex;
+          justify-content: space-between;
+          gap: 12mm;
+          color: #69778a;
+          font-size: 7.2pt;
+        }
+
+        .technical-proposal-a4-editor .doc-header {
+          display: grid;
+          grid-template-columns: 38mm 1fr 38mm;
+          gap: 6mm;
+          align-items: center;
+          padding-bottom: 4.3mm;
+          border-bottom: 1.7px solid var(--gold);
+          margin-bottom: 4.8mm;
+          min-height: 28mm;
+        }
+
+        .technical-proposal-a4-editor .doc-brand-left,
+        .technical-proposal-a4-editor .doc-client-right {
+          height: 24mm;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          overflow: hidden;
+          text-align: center;
+        }
+
+        .technical-proposal-a4-editor .doc-logo {
+          width: 34mm;
+          height: 23mm;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          margin: 0 auto;
+          padding: 0;
+        }
+
+        .technical-proposal-a4-editor .doc-logo img,
+        .technical-proposal-a4-editor .doc-client-logo img {
+          display: block;
+          max-width: 100%;
+          max-height: 100%;
+          width: auto;
+          height: auto;
+          object-fit: contain;
+          object-position: center center;
+          margin: auto;
+        }
+
+        .technical-proposal-a4-editor .doc-client-logo {
+          width: 32mm;
+          height: 22mm;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          margin: auto;
+          color: #9aa7b7;
+          border: 1px dashed #d5dde8;
+          border-radius: 2mm;
+          font-size: 7pt;
+          font-weight: 750;
+          text-transform: uppercase;
+          line-height: 1.2;
+          padding: 2mm;
+        }
+
+        .technical-proposal-a4-editor .doc-format {
+          text-align: center;
+          align-self: center;
+        }
+
+        .technical-proposal-a4-editor .doc-format-kicker {
+          font-size: 7.2pt;
+          text-transform: uppercase;
+          color: #64748b;
+          font-weight: 850;
+          letter-spacing: 0.055em;
+        }
+
+        .technical-proposal-a4-editor .doc-format-line {
+          font-size: 8.4pt;
+          color: var(--navy);
+          font-weight: 800;
+          margin-top: 0.8mm;
+        }
+
+        .technical-proposal-a4-editor .doc-format-title {
+          font-size: 11.2pt;
+          color: #0f172a;
+          font-weight: 900;
+          margin-top: 1mm;
+          text-transform: uppercase;
+          letter-spacing: 0.015em;
+        }
+
+        .technical-proposal-a4-editor .doc-body {
+          flex: 1 1 auto;
+          min-height: 0;
+          overflow: hidden;
+          font-size: 9pt;
+          line-height: 1.47;
+        }
+
+        .technical-proposal-a4-editor .doc-footer {
+          flex: 0 0 auto;
+          margin-top: 2.5mm;
+          padding-top: 1.8mm;
+          border-top: 1.4px solid var(--gold);
+          display: flex;
+          justify-content: space-between;
+          gap: 10px;
+          align-items: center;
+          color: #617087;
+          font-size: 7.2pt;
+        }
+
+        .technical-proposal-a4-editor .first-meta {
+          display: flex;
+          justify-content: space-between;
+          gap: 8mm;
+          margin-bottom: 4.5mm;
+          font-size: 8.7pt;
+        }
+
+        .technical-proposal-a4-editor .first-meta .budget {
+          text-align: right;
+          min-width: 75mm;
+        }
+
+        .technical-proposal-a4-editor .meta-label {
+          color: #607087;
+          text-transform: uppercase;
+          font-size: 7pt;
+          font-weight: 850;
+          letter-spacing: 0.035em;
+          margin-right: 1.5mm;
+        }
+
+        .technical-proposal-a4-editor .recipient {
+          margin: 0 0 5mm;
+          font-size: 8.8pt;
+          line-height: 1.45;
+        }
+
+        .technical-proposal-a4-editor .title-box {
+          text-align: center;
+          margin: 4.5mm 0 5mm;
+        }
+
+        .technical-proposal-a4-editor .title-box h1 {
+          font-size: 13.1pt;
+          margin: 0;
+          color: #0f172a;
+          font-weight: 900;
+          letter-spacing: 0.025em;
+          text-transform: uppercase;
+        }
+
+        .technical-proposal-a4-editor .title-box .service {
+          font-size: 9.1pt;
+          margin-top: 2.6mm;
+          color: #1e293b;
+          font-weight: 800;
+          text-transform: uppercase;
+          text-decoration: underline;
+          text-decoration-color: var(--gold);
+          text-underline-offset: 3px;
+        }
+
+        .technical-proposal-a4-editor .reference-box {
+          margin: 0 0 5mm;
+          padding: 3mm 3.6mm;
+          border: 1px solid #e1e7f0;
+          border-left: 3.5px solid var(--gold);
+          background: #fbfcfe;
+          font-size: 8.5pt;
+        }
+
+        .technical-proposal-a4-editor .direct-edit,
+        .technical-proposal-a4-editor input,
+        .technical-proposal-a4-editor textarea {
+          border-radius: 0;
+        }
+
+        .technical-proposal-a4-editor .a4-section-title {
+          margin: 3.6mm 0 1.8mm;
+          color: var(--navy);
+          font-size: 10pt;
+          font-weight: 800;
+          border-bottom: 1px solid #b9975b;
+          padding-bottom: 1.1mm;
+          text-transform: uppercase;
+          line-height: 1.25;
+          letter-spacing: 0;
+        }
+
+        .technical-proposal-a4-editor .a4-subheading {
+          margin: 2.5mm 0 1.2mm;
+          color: #274f4b;
+          font-size: 8.9pt;
+          font-weight: 750;
+          line-height: 1.35;
+          border-bottom: 0;
+          letter-spacing: 0;
+        }
+
+        .technical-proposal-a4-editor .a4-activity-title {
+          color: #273444;
+          font-weight: 700;
+          border-bottom: 0;
+          letter-spacing: 0;
+        }
+
+        .technical-proposal-a4-editor .a4-para {
+          margin: 0.8mm 0 1.8mm;
+          width: 100%;
+          color: #44403c;
+          font-size: 8.7pt;
+          line-height: 1.46;
+          text-align: justify;
+          white-space: pre-wrap;
+          resize: vertical;
+        }
+
+        .technical-proposal-a4-editor .a4-description-row {
+          display: grid;
+          grid-template-columns: minmax(0, 1fr) 18px;
+          gap: 1mm;
+          align-items: start;
+        }
+
+        .technical-proposal-a4-editor .a4-description-add {
+          margin-top: 0.6mm;
+          border: 0;
+          background: transparent;
+          padding: 0;
+          color: #687386;
+          font-size: 7pt;
+          font-weight: 600;
+          line-height: 1.3;
+        }
+
+        .technical-proposal-a4-editor .a4-description-add:hover {
+          color: #285f58;
+          text-decoration: underline;
+        }
+
+        .technical-proposal-a4-editor .a4-description-remove {
+          width: 16px;
+          height: 16px;
+          margin-top: 1mm;
+          border: 1px solid transparent;
+          background: transparent;
+          color: #8a94a3;
+          font-size: 9px;
+          line-height: 14px;
+        }
+
+        .technical-proposal-a4-editor .a4-description-remove:hover {
+          border-color: #d8dde3;
+          color: #9f2d25;
+        }
+
+        .technical-proposal-a4-editor .section-title {
+          margin: 4mm 0 2.2mm;
+          color: var(--navy);
+          font-size: 10.2pt;
+          font-weight: 900;
+          border-bottom: 1.35px solid var(--gold);
+          padding-bottom: 1.5mm;
+          text-transform: uppercase;
+          line-height: 1.25;
+        }
+
+        .technical-proposal-a4-editor .scope-editor-wrap {
+          margin: 0 0 4.5mm;
+          border: 1px solid #d7e0ea;
+          border-left: 3.5px solid var(--teal);
+          background: #fffdf8;
+          position: relative;
+          overflow: hidden;
+        }
+
+        .technical-proposal-a4-editor .scope-editor-help {
+          padding: 1.7mm 3mm;
+          background: #fbfcfe;
+          border-bottom: 1px solid #e7ecf2;
+          color: #66758a;
+          font-size: 7.2pt;
+        }
+
+        .technical-proposal-a4-editor .scope-editor-help b {
+          color: var(--teal);
+        }
+
+        .technical-proposal-a4-editor .scope-editor-main {
+          display: grid;
+          grid-template-columns: 18mm 1fr;
+          min-height: 20mm;
+          max-height: 91mm;
+          overflow: hidden;
+        }
+
+        .technical-proposal-a4-editor .scope-gutter {
+          background: #f7fafc;
+          border-right: 1px solid #e4e9f0;
+          padding: 2.2mm 1.5mm 2.2mm 2mm;
+          color: #42526a;
+          font-weight: 850;
+          font-size: 8.4pt;
+          line-height: 24px;
+          white-space: pre;
+          overflow: hidden;
+        }
+
+        .technical-proposal-a4-editor .scope-gutter-row {
+          height: 24px;
+          line-height: 24px;
+        }
+
+        .technical-proposal-a4-editor .scope-textarea {
+          display: block;
+          width: 100%;
+          border: 0;
+          outline: 0;
+          resize: none;
+          padding: 2.2mm 3mm;
+          min-height: 20mm;
+          max-height: 91mm;
+          overflow: auto;
+          background: transparent;
+          color: #182536;
+          font-family: var(--font);
+          font-size: 8.8pt;
+          font-weight: 650;
+          line-height: 24px;
+          white-space: pre;
+          tab-size: 4;
+        }
+
+        .technical-proposal-a4-editor .scope-print-list {
+          display: none;
+          margin: 0 0 4mm;
+          padding: 2.4mm 3.3mm;
+          border: 1px solid #e1e7f0;
+          border-left: 3.5px solid var(--teal);
+          background: #fffdf8;
+        }
+
+        .technical-proposal-a4-editor .scope-editor-wrap.is-print-view .scope-editor-help,
+        .technical-proposal-a4-editor .scope-editor-wrap.is-print-view .scope-editor-main {
+          display: none;
+        }
+
+        .technical-proposal-a4-editor .scope-editor-wrap.is-print-view .scope-print-list {
+          display: block;
+          margin: 0;
+          border: 0;
+          border-left: 0;
+        }
+
+        .technical-proposal-a4-editor .scope-print-row {
+          display: grid;
+          grid-template-columns: 17mm 1fr;
+          gap: 2mm;
+          padding: 0.8mm 0;
+          font-size: 8.6pt;
+        }
+
+        .technical-proposal-a4-editor .scope-print-row.depth-1 {
+          margin-left: 5mm;
+        }
+
+        .technical-proposal-a4-editor .scope-print-row.depth-2 {
+          margin-left: 10mm;
+        }
+
+        .technical-proposal-a4-editor .scope-print-row.depth-3 {
+          margin-left: 15mm;
+        }
+
+        .technical-proposal-a4-editor .scope-print-num {
+          font-weight: 900;
+          color: var(--navy);
+        }
+
+        .technical-proposal-a4-editor .scope-print-title {
+          font-weight: 670;
+        }
+
+        .technical-proposal-a4-editor .a4-scope-block {
+          padding: 1.2mm 0;
+          border: 0;
+        }
+
+        .technical-proposal-a4-editor .a4-scope-heading {
+          display: flex;
+          gap: 1mm;
+          align-items: baseline;
+        }
+
+        .technical-proposal-a4-editor .a4-scope-number {
+          flex: 0 0 10mm;
+          min-height: 20px;
+          padding: 2px 0;
+          color: var(--navy);
+          font-size: 8.8pt;
+          font-weight: 800;
+          line-height: 16px;
+          text-align: left;
+          font-variant-numeric: tabular-nums;
+        }
+
+        .technical-proposal-a4-editor .a4-scope-content {
+          flex: 1 1 auto;
+          min-width: 0;
+        }
+
+        .technical-proposal-a4-editor .a4-scope-content > input {
+          display: block;
+          min-height: 20px;
+          padding-top: 2px;
+          padding-bottom: 2px;
+          line-height: 16px;
+        }
+
+        .technical-proposal-a4-editor .a4-scope-selected {
+          background: rgba(247, 249, 249, 0.9);
+          box-shadow: inset 0 0 0 1px #d9e2e1;
+        }
+
+        .technical-proposal-a4-editor .a4-block-handle {
+          position: absolute;
+          left: -6mm;
+          top: 0;
+          border: 0;
+          background: transparent;
+          color: #7b8491;
+          font-size: 7pt;
+          line-height: 1;
+          opacity: 0;
+          transition: 0.15s;
+          user-select: none;
+        }
+
+        .technical-proposal-a4-editor .a4-scope-block:hover > .a4-block-handle {
+          opacity: 1;
+        }
+
+        .technical-proposal-a4-editor .resource-block {
+          width: calc(100% - 4mm);
+          margin: 0 0 1mm 4mm;
+        }
+
+        .technical-proposal-a4-editor .resource-title {
+          margin: 1.2mm 0 0.8mm;
+          width: 100%;
+          border-bottom: 1px solid #bfc9ce;
+          padding: 0 0 0.7mm;
+          font-size: 8.4pt;
+          font-weight: 750;
+          color: #2f4858;
+          letter-spacing: 0;
+          line-height: 1.18;
+        }
+
+        .technical-proposal-a4-editor .doc-table {
+          width: 100%;
+          margin: 0 0 1.5mm;
+          border-collapse: collapse;
+          table-layout: fixed;
+          font-size: 7.75pt;
+        }
+
+        .technical-proposal-a4-editor .doc-table th {
+          background: #f3f5f6;
+          color: #3f4c59;
+          font-weight: 750;
+          text-transform: uppercase;
+          padding: 0.85mm 0.68mm;
+          line-height: 1.12;
+        }
+
+        .technical-proposal-a4-editor .doc-table td,
+        .technical-proposal-a4-editor .doc-table th {
+          border: 1px solid #cfd6dc;
+          vertical-align: middle;
+          overflow-wrap: break-word;
+        }
+
+        .technical-proposal-a4-editor .doc-table td {
+          padding: 0.42mm 0.68mm;
+          line-height: 1.14;
+          min-height: 0;
+          height: auto;
+        }
+
+        .technical-proposal-a4-editor .a4-internal-note {
+          width: calc(100% - 4mm);
+          margin-left: 4mm;
+          border: 1px solid #cfd6dc;
+          background: #f7f8f9;
+          letter-spacing: 0;
+        }
+
+        .technical-proposal-a4-editor .doc-table input,
+        .technical-proposal-a4-editor .doc-table textarea {
+          width: 100%;
+          border: 0;
+          background: transparent;
+          padding: 0;
+          font: inherit;
+          color: inherit;
+          outline: 0;
+          min-height: 17px;
+        }
+
+        .technical-proposal-a4-editor .doc-table.mo-table {
+          font-size: 7.75pt;
+        }
+
+        .technical-proposal-a4-editor .doc-table.mo-table .mo-group-cell {
+          vertical-align: top;
+          background: #fffdf9;
+        }
+
+        .technical-proposal-a4-editor .doc-table.mo-table .mo-subrow td {
+          border-top-color: #e8edf3;
+        }
+
+        .technical-proposal-a4-editor .resource-row-action {
+          width: 16px;
+          height: 16px;
+          border: 1px solid #d8e1eb;
+          border-radius: 4px;
+          background: #fff;
+          color: #526274;
+          font-size: 10px;
+          font-weight: 900;
+          line-height: 14px;
+        }
+
+        .technical-proposal-a4-editor .resource-row-action:hover {
+          border-color: #99d5c9;
+          background: #f0fdfa;
+          color: var(--teal);
+        }
+
+        .technical-proposal-a4-editor .resource-row-action.delete:hover {
+          border-color: #efc7c3;
+          background: #fff4f3;
+          color: #b42318;
+        }
+
+        .technical-proposal-a4-editor .image-gallery {
+          margin: 2mm 0 4mm 3mm;
+          width: calc(100% - 3mm);
+        }
+
+        .technical-proposal-a4-editor .image-gallery-block {
+          page-break-inside: avoid;
+        }
+
+        .technical-proposal-a4-editor .image-gallery {
+          display: grid;
+          grid-template-columns: 1fr 1fr;
+          gap: 2.4mm;
+        }
+
+        .technical-proposal-a4-editor .image-gallery.count-1 {
+          grid-template-columns: 1fr;
+        }
+
+        .technical-proposal-a4-editor .image-card-v64 {
+          border: 1px solid #d6dee8;
+          background: #ffffff;
+          padding: 1.5mm;
+          page-break-inside: avoid;
+        }
+
+        .technical-proposal-a4-editor .image-media-v64 {
+          height: 42mm;
+          border: 1px solid #d9e1ec;
+          background: #f8fafc;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          overflow: hidden;
+        }
+
+        .technical-proposal-a4-editor .image-gallery.count-1 .image-media-v64 {
+          height: 66mm;
+        }
+
+        .technical-proposal-a4-editor .image-media-v64 img {
+          display: block;
+          max-width: 100%;
+          max-height: 100%;
+          width: auto;
+          height: auto;
+          object-fit: contain;
+        }
+
+        .technical-proposal-a4-editor .image-caption {
+          text-align: center;
+          font-size: 8pt;
+          color: #43526a;
+          font-weight: 650;
+          margin-top: 1.5mm;
+        }
+
+        .pt-promanager .editor-right {
+          min-width: 0;
+          min-height: 0;
+          display: grid;
+          grid-template-rows: 34px minmax(0, 1fr);
+          overflow: hidden;
+          border: 1px solid #cfd5dc;
+          border-radius: 6px;
+          background: #ffffff;
+          font-family: "Segoe UI", Arial, sans-serif;
+          color: #2f343b;
+          font-size: 11px;
+        }
+
+        .pt-promanager .right-tabs {
+          display: grid;
+          grid-template-columns: 1fr 1fr;
+          height: 34px;
+          border-bottom: 1px solid #d8dde3;
+          background: #f8f9fa;
+        }
+
+        .pt-promanager .right-tabs.only-resources {
+          grid-template-columns: 1fr;
+        }
+
+        .pt-promanager .right-tab {
+          border: 0;
+          border-right: 1px solid #d8dde3;
+          background: #f8f9fa;
+          color: #59616c;
+          font-size: 9px;
+          font-weight: 700;
+          text-transform: uppercase;
+        }
+
+        .pt-promanager .right-tab:last-child {
+          border-right: 0;
+        }
+
+        .pt-promanager .right-tab.active {
+          background: #eef8f4;
+          color: #195f50;
+          box-shadow: inset 0 -2px 0 #58bfa9;
+        }
+
+        .pt-promanager .right-body {
+          min-height: 0;
+          position: relative;
+          overflow: hidden;
+        }
+
+        .pt-promanager .right-body > .panel {
+          position: absolute;
+          inset: 0;
+        }
+
+        .pt-promanager .panel-margins {
+          display: grid;
+          grid-template-rows: auto minmax(0, 1fr) auto;
+          overflow: hidden;
+          background: #ffffff;
+        }
+
+        .pt-promanager .margin-status {
+          min-height: 48px;
+          display: flex;
+          align-items: center;
+          justify-content: space-between;
+          gap: 8px;
+          padding: 7px 8px;
+          border-bottom: 1px solid #d8dde3;
+          background: #fafafa;
+        }
+
+        .pt-promanager .margin-status strong,
+        .pt-promanager .margin-status span {
+          display: block;
+        }
+
+        .pt-promanager .margin-status strong {
+          font-size: 9px;
+          text-transform: uppercase;
+        }
+
+        .pt-promanager .margin-status span {
+          margin-top: 2px;
+          color: #737b86;
+          font-size: 8px;
+        }
+
+        .pt-promanager .margin-create,
+        .pt-promanager .resource-card-actions button,
+        .pt-promanager .resource-search-head button {
+          height: 25px;
+          padding: 0 8px;
+          border: 1px solid #7bcfbd;
+          border-radius: 4px;
+          background: #eaf8f4;
+          color: #165b4e;
+          font-size: 9px;
+          font-weight: 600;
+        }
+
+        .pt-promanager .margin-table-wrap {
+          min-height: 0;
+          overflow: auto;
+        }
+
+        .pt-promanager .margin-table {
+          width: 100%;
+          border-collapse: separate;
+          border-spacing: 0;
+        }
+
+        .pt-promanager .margin-table th {
+          height: 25px;
+          padding: 4px 5px;
+          border-right: 1px solid #e9edf1;
+          border-bottom: 1px solid #d8dde3;
+          background: #f8f9fa;
+          color: #5b636d;
+          font-size: 8px;
+          text-align: right;
+          text-transform: uppercase;
+        }
+
+        .pt-promanager .margin-table th:first-child {
+          text-align: left;
+        }
+
+        .pt-promanager .margin-table td {
+          height: 22px;
+          padding: 3px 5px;
+          border-right: 1px solid #e9edf1;
+          border-bottom: 1px solid #e9edf1;
+          font-size: 9px;
+        }
+
+        .pt-promanager .margin-table td:first-child {
+          font-weight: 500;
+        }
+
+        .pt-promanager .margin-table .money,
+        .pt-promanager .margin-table .num {
+          text-align: right;
+          font-variant-numeric: tabular-nums;
+          white-space: nowrap;
+        }
+
+        .pt-promanager .margin-table input,
+        .pt-promanager .margin-percent {
+          width: 58px;
+          height: 18px;
+          border: 1px solid transparent;
+          background: transparent;
+          text-align: right;
+          color: #2563eb;
+          font-size: 9px;
+          font-weight: 600;
+          padding: 0 2px;
+        }
+
+        .pt-promanager .margin-table input:focus {
+          outline: 1px solid #8bb8ff;
+          background: #f6f9ff;
+        }
+
+        .pt-promanager .margin-percent:disabled {
+          color: #737b86;
+          cursor: default;
+        }
+
+        .pt-promanager .margin-table tr.total2 td {
+          font-weight: 700;
+          color: #d04444;
+          border-top: 1px solid #efb4b4;
+        }
+
+        .pt-promanager .margin-empty,
+        .pt-promanager .resource-empty,
+        .pt-promanager .related-empty {
+          padding: 16px;
+          color: #737b86;
+          font-size: 8px;
+          text-align: center;
+        }
+
+        .pt-promanager .margin-note {
+          margin: 0;
+          padding: 7px 8px;
+          border-top: 1px solid #d8dde3;
+          background: #fafafa;
+          color: #737b86;
+          font-size: 8px;
+          line-height: 1.35;
+        }
+
+        .pt-promanager .resource-panel {
+          height: 100%;
+          display: grid;
+          grid-template-rows: 86px 210px minmax(210px, 1fr) 108px;
+          background: #ffffff;
+        }
+
+        .pt-promanager .resource-search {
+          padding: 7px 8px;
+          border-bottom: 1px solid #d8dde3;
+          background: #fafafa;
+        }
+
+        .pt-promanager .resource-search-head {
+          display: flex;
+          align-items: center;
+          justify-content: space-between;
+          gap: 8px;
+        }
+
+        .pt-promanager .resource-search label {
+          display: block;
+          color: #5d6570;
+          font-size: 8px;
+          font-weight: 700;
+          text-transform: uppercase;
+        }
+
+        .pt-promanager .resource-search input {
+          width: 100%;
+          height: 27px;
+          margin-top: 4px;
+          border: 1px solid #bcc4cd;
+          border-radius: 4px;
+          padding: 0 7px;
+          outline: 0;
+          background: #ffffff;
+          font-size: 9px;
+        }
+
+        .pt-promanager .resource-search input:focus {
+          border-color: #6bbca8;
+          box-shadow: 0 0 0 2px #dff5ef;
+        }
+
+        .pt-promanager .resource-target {
+          margin-top: 3px;
+          overflow: hidden;
+          color: #737b86;
+          font-size: 8px;
+          text-overflow: ellipsis;
+          white-space: nowrap;
+        }
+
+        .pt-promanager .resource-list {
+          overflow: auto;
+          border-bottom: 1px solid #d8dde3;
+          background: #ffffff;
+        }
+
+        .pt-promanager .resource-row {
+          width: 100%;
+          display: grid;
+          grid-template-columns: 92px minmax(0, 1fr) 44px;
+          gap: 6px;
+          align-items: center;
+          min-height: 29px;
+          padding: 5px 7px;
+          border: 0;
+          border-bottom: 1px solid #e9edf1;
+          background: #ffffff;
+          color: #2f343b;
+          font-size: 8.5px;
+          text-align: left;
+        }
+
+        .pt-promanager .resource-row:hover {
+          background: #f7f9fa;
+        }
+
+        .pt-promanager .resource-row.active {
+          background: #eaf8f3;
+          box-shadow: inset 3px 0 0 #46a98f;
+        }
+
+        .pt-promanager .resource-row b {
+          font-size: 8px;
+        }
+
+        .pt-promanager .resource-row .desc {
+          overflow: hidden;
+          text-overflow: ellipsis;
+          white-space: nowrap;
+        }
+
+        .pt-promanager .resource-row .unit {
+          color: #737b86;
+          text-align: right;
+        }
+
+        .pt-promanager .resource-detail {
+          overflow: auto;
+          padding: 9px;
+          border-bottom: 1px solid #d8dde3;
+          background: #fbfbfc;
+        }
+
+        .pt-promanager .resource-card {
+          overflow: hidden;
+          border: 1px solid #d9dee4;
+          border-radius: 5px;
+          background: #ffffff;
+        }
+
+        .pt-promanager .resource-card-head {
+          display: flex;
+          align-items: flex-start;
+          justify-content: space-between;
+          gap: 8px;
+          padding: 8px;
+          border-bottom: 1px solid #e9edf1;
+          background: #fafafa;
+        }
+
+        .pt-promanager .resource-card-head .title {
+          font-size: 9px;
+          font-weight: 700;
+          line-height: 1.25;
+        }
+
+        .pt-promanager .resource-card-head .code {
+          white-space: nowrap;
+          border: 1px solid #cfd5dc;
+          border-radius: 999px;
+          padding: 2px 6px;
+          background: #ffffff;
+          color: #5a626c;
+          font-size: 7.5px;
+        }
+
+        .pt-promanager .resource-card-body {
+          display: grid;
+          grid-template-columns: 92px minmax(0, 1fr);
+          gap: 9px;
+          padding: 9px;
+        }
+
+        .pt-promanager .photo {
+          height: 92px;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          overflow: hidden;
+          border: 1px solid #d8dde3;
+          border-radius: 4px;
+          background: #f7f8f9;
+          color: #737b86;
+          font-size: 8px;
+        }
+
+        .pt-promanager .photo img {
+          display: block;
+          width: 100%;
+          height: 100%;
+          object-fit: contain;
+        }
+
+        .pt-promanager .resource-meta {
+          display: grid;
+          grid-template-columns: 74px minmax(0, 1fr);
+          gap: 3px 6px;
+          font-size: 8px;
+        }
+
+        .pt-promanager .resource-meta label {
+          color: #7a828d;
+        }
+
+        .pt-promanager .resource-meta .link a {
+          color: #2563eb;
+          text-decoration: none;
+        }
+
+        .pt-promanager .resource-card-actions {
+          display: flex;
+          justify-content: flex-end;
+          padding: 0 9px 9px;
+        }
+
+        .pt-promanager .related {
+          overflow: auto;
+          padding: 8px;
+          background: #ffffff;
+        }
+
+        .pt-promanager .related-title {
+          display: flex;
+          align-items: center;
+          justify-content: space-between;
+          margin-bottom: 6px;
+          color: #59616c;
+          font-size: 8px;
+          font-weight: 700;
+          text-transform: uppercase;
+        }
+
+        .context-menu.open {
+          display: block;
+        }
+
+        .context-menu {
+          position: fixed;
+          z-index: 300;
+          min-width: 235px;
+          background: #ffffff;
+          border: 1px solid #d6dee8;
+          border-radius: 10px;
+          box-shadow: 0 12px 30px rgba(15, 23, 42, 0.18);
+          padding: 5px;
+          max-height: calc(100dvh - 24px);
+          overflow: auto;
+        }
+
+        .context-menu .ctx-label {
+          padding: 6px 9px 5px;
+          color: #7a8797;
+          font-size: 10px;
+          font-weight: 850;
+          text-transform: uppercase;
+          letter-spacing: 0.04em;
+        }
+
+        .context-menu button {
+          width: 100%;
+          border: 0;
+          background: #ffffff;
+          text-align: left;
+          padding: 8px 9px;
+          border-radius: 6px;
+          color: #263446;
+          font-size: 12px;
+        }
+
+        .context-menu button:hover {
+          background: #f3f6fa;
+        }
+
+        .context-menu button.danger {
+          color: var(--danger);
+        }
+
+        .context-sep {
+          height: 1px;
+          background: #edf0f4;
+          margin: 4px;
+        }
+
         @media print {
           @page {
             size: A4 portrait;
@@ -2669,24 +3993,40 @@ ${clone.outerHTML}
             visibility: hidden !important;
           }
 
-          body.printing-ready .technical-proposal-a4-doc,
-          body.printing-ready .technical-proposal-a4-doc * {
+          body.printing-ready .technical-proposal-document,
+          body.printing-ready .technical-proposal-document * {
             visibility: visible !important;
           }
 
-          body.printing-ready .technical-proposal-a4-doc {
+          body.printing-ready .technical-proposal-document {
             position: fixed !important;
             inset: 0 auto auto 0 !important;
             width: 210mm !important;
-            min-height: 297mm !important;
             margin: 0 !important;
             box-shadow: none !important;
-            break-after: page;
-            page-break-after: always;
+          }
+
+          body.printing-ready .technical-proposal-document .doc-page {
+            width: 210mm !important;
+            height: 296.8mm !important;
+            min-height: 296.8mm !important;
+            max-height: 296.8mm !important;
+            margin: 0 !important;
+            box-shadow: none !important;
+            break-after: page !important;
+            page-break-after: always !important;
+          }
+
+          .a4-block-handle,
+          .a4-description-add,
+          .a4-description-remove,
+          .resource-row-action,
+          .operational-column {
+            display: none !important;
           }
         }
       `}</style>
-      <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/30 p-2">
+      <div className="pt-promanager fixed inset-0 z-[60] flex items-center justify-center bg-black/30 p-2">
       <div className="flex h-[calc(100dvh-18px)] w-[98vw] max-w-[1920px] flex-col overflow-hidden rounded-xl border border-stone-300 bg-stone-100 shadow-2xl">
         <TechnicalProposalTopbar
           documentCode={draft.metadata.documento_codigo}
@@ -2698,572 +4038,440 @@ ${clone.outerHTML}
           onClose={onClose}
         />
 
-        <div className="grid min-h-0 flex-1 grid-cols-1 gap-2 overflow-hidden p-2 xl:grid-cols-[minmax(700px,0.98fr)_minmax(520px,1.02fr)]">
-          <main className="flex min-h-0 flex-col overflow-hidden rounded-xl border border-stone-200 bg-white">
-            <div className="min-h-0 space-y-2 overflow-y-auto p-3">
-              <section className="overflow-hidden rounded-lg border border-stone-200 bg-white">
-                <div className="flex items-center justify-between border-b border-stone-200 bg-stone-50 px-3 py-2">
-                  <FieldLabelIcon icon="table" label="Datos generales compactos" className="text-[12px] font-bold text-stone-800" />
-                  <div className="flex items-center gap-2">
-                    <label className="flex items-center gap-1 text-[10px] font-bold uppercase tracking-wide text-stone-500">
-                      Revision
-                      <select
-                        value={draft.metadata.revision}
-                        onChange={(event) => handleRevisionChange(event.target.value)}
-                        className="h-6 border border-stone-300 bg-white px-2 text-[11px] font-semibold normal-case text-stone-700 outline-none focus:border-teal-500"
-                      >
-                        {revisionOptions.map((revision) => (
-                          <option key={revision} value={revision}>
-                            {revision}
-                          </option>
-                        ))}
-                      </select>
-                    </label>
-                    <button
-                      type="button"
-                      onClick={handleCreateNextRevision}
-                      className={smallButtonClassName("secondary")}
+        <div className="grid min-h-0 flex-1 grid-cols-1 gap-2 overflow-hidden p-2 xl:grid-cols-[minmax(820px,3fr)_minmax(360px,2fr)]">
+          <main className="flex min-h-0 flex-col overflow-hidden rounded-xl border border-stone-200 bg-stone-200">
+            <div className="sticky top-0 z-20 border-b border-stone-300 bg-white px-3 py-2 shadow-sm">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <FieldLabelIcon icon="file-text" label="Editor documental A4" className="text-[12px] font-black text-stone-800" />
+                <div className="flex flex-wrap items-center gap-1.5">
+                  <label className="flex items-center gap-1 text-[10px] font-bold uppercase tracking-wide text-stone-500">
+                    Revision
+                    <select
+                      value={draft.metadata.revision}
+                      onChange={(event) => handleRevisionChange(event.target.value)}
+                      className="h-7 border border-stone-300 bg-white px-2 text-[11px] font-semibold normal-case text-stone-700 outline-none focus:border-teal-500"
+                    >
+                      {revisionOptions.map((revision) => (
+                        <option key={revision} value={revision}>
+                          {revision}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                  <button type="button" onClick={handleCreateNextRevision} className={smallButtonClassName("secondary")} disabled={!isEditingProposalDocument}>
+                    Nueva REV
+                  </button>
+                  <label className="flex items-center gap-1 text-[10px] font-bold uppercase tracking-wide text-stone-500">
+                    Estado PT
+                    <select
+                      value={draft.work_status}
+                      onChange={(event) => patchDraft({ work_status: event.target.value as ProposalWorkStatus })}
+                      className="h-7 border border-stone-300 bg-white px-2 text-[11px] font-semibold normal-case text-stone-700 outline-none focus:border-teal-500"
                       disabled={!isEditingProposalDocument}
                     >
-                      Nueva REV
-                    </button>
-                    <label className="flex items-center gap-1 text-[10px] font-bold uppercase tracking-wide text-stone-500">
-                      Estado PT
-                      <select
-                        value={draft.work_status}
-                        onChange={(event) => patchDraft({ work_status: event.target.value as ProposalWorkStatus })}
-                        className="h-6 border border-stone-300 bg-white px-2 text-[11px] font-semibold normal-case text-stone-700 outline-none focus:border-teal-500"
+                      <option value="Borrador">Borrador</option>
+                      <option value="En proceso">En proceso</option>
+                      <option value="Completado">Completado</option>
+                    </select>
+                  </label>
+                  <label className="flex h-7 items-center gap-1.5 border border-stone-300 bg-stone-50 px-2 text-[10px] font-semibold text-stone-600" title="Oculta observaciones y acciones en las tablas">
+                    <input
+                      type="checkbox"
+                      checked={cleanTableView}
+                      onChange={(event) => setCleanTableView(event.target.checked)}
+                      className="h-3.5 w-3.5 accent-teal-700"
+                    />
+                    Vista limpia
+                  </label>
+                  <span className="mx-1 h-5 w-px bg-stone-200" />
+                  <button type="button" onClick={exportWordFromPreview} className={smallButtonClassName("secondary")}>Word</button>
+                  <button type="button" onClick={exportHtmlFromPreview} className={smallButtonClassName("secondary")}>HTML</button>
+                  <button type="button" onClick={exportJsonFromDraft} className={smallButtonClassName("secondary")}>JSON</button>
+                  <button type="button" onClick={handlePrintPdf} disabled={printingReady} className={smallButtonClassName("primary")}>Imprimir / PDF</button>
+                </div>
+              </div>
+              <div className="mt-1 flex flex-wrap gap-x-4 gap-y-1 text-[10px] text-stone-500">
+                <span><strong className="text-stone-700">Documento:</strong> {draft.metadata.documento_codigo}</span>
+                <span><strong className="text-stone-700">Cotizacion:</strong> {draft.metadata.cotizacion_codigo}</span>
+                <span><strong className="text-stone-700">Destino recursos:</strong> {selectedResourceTargetItem()?.number ?? "-"} {selectedResourceTargetItem()?.title ?? ""}</span>
+              </div>
+              {statusMessage ? <div className="mt-2 border border-teal-100 bg-teal-50 px-2 py-1 text-[11px] text-teal-700">{statusMessage}</div> : null}
+            </div>
+
+            <div className="min-h-0 overflow-auto p-4">
+              <div ref={previewDocumentRef} className="technical-proposal-document mx-auto flex w-max flex-col gap-4">
+                <article className="technical-proposal-a4-editor doc-page cover-page-v66">
+                  <div className="cover-client-mark-v66">
+                    {clientLogo?.logo_url ? (
+                      // eslint-disable-next-line @next/next/no-img-element
+                      <img
+                        key={`${clientLogo.id}-${clientLogo.updated_at}-${previewRefreshKey}`}
+                        src={clientLogo.logo_url}
+                        alt={clientLogo.display_name || clientLogo.entity_name || "Logo cliente"}
+                      />
+                    ) : (
+                      <input
+                        value={draft.header.cliente_logo_label}
+                        onChange={(event) => patchNested("header", { cliente_logo_label: event.target.value })}
+                        className={a4FieldClassName("text-center text-[10px] font-black uppercase text-stone-500")}
                         disabled={!isEditingProposalDocument}
-                      >
-                        <option value="Borrador">Borrador</option>
-                        <option value="En proceso">En proceso</option>
-                        <option value="Completado">Completado</option>
-                      </select>
+                      />
+                    )}
+                  </div>
+
+                  <div className="cover-main-v66">
+                    <div className="cover-eka-logo-v66">
+                      {companyLogo?.logo_url ? (
+                        // eslint-disable-next-line @next/next/no-img-element
+                        <img
+                          key={`${companyLogo.id}-${companyLogo.updated_at}-${previewRefreshKey}`}
+                          src={companyLogo.logo_url}
+                          alt={companyLogo.display_name || companyLogo.entity_name || "Logo EKA"}
+                        />
+                      ) : (
+                        <div className="flex h-[38mm] w-[38mm] items-center justify-center rounded-full border border-stone-300 text-[20px] font-black">EKA</div>
+                      )}
+                    </div>
+                    <input
+                      value={draft.header.empresa_emisora}
+                      onChange={(event) => patchNested("header", { empresa_emisora: event.target.value })}
+                      className={a4FieldClassName("cover-company-v66")}
+                      disabled={!isEditingProposalDocument}
+                    />
+                    <div className="cover-rule-v66" />
+                    <div className="cover-doc-type-v66">PROPUESTA TECNICA</div>
+                    <input
+                      value={draft.header.titulo}
+                      onChange={(event) => patchNested("header", { titulo: event.target.value })}
+                      className={a4FieldClassName("cover-service-v66")}
+                      disabled={!isEditingProposalDocument}
+                    />
+                    <textarea
+                      value={draft.header.subtitulo}
+                      onChange={(event) => patchNested("header", { subtitulo: event.target.value })}
+                      className={a4TextareaClassName("cover-service-detail-v66")}
+                      rows={2}
+                      disabled={!isEditingProposalDocument}
+                    />
+
+                    <div className="cover-data-grid-v66">
+                      {renderA4CoverData(
+                        "Cliente",
+                        <input value={draft.recipient.cliente} onChange={(event) => patchNested("recipient", { cliente: event.target.value })} className={a4FieldClassName("font-bold uppercase")} disabled={!isEditingProposalDocument} />,
+                      )}
+                      {renderA4CoverData(
+                        "Documento",
+                        <input value={draft.metadata.documento_codigo} readOnly className={a4FieldClassName("font-bold text-stone-600")} />,
+                      )}
+                      {renderA4CoverData(
+                        "Unidad / sede",
+                        <input value={draft.recipient.unidad_trabajo} onChange={(event) => patchNested("recipient", { unidad_trabajo: event.target.value })} className={a4FieldClassName()} disabled={!isEditingProposalDocument} />,
+                      )}
+                      {renderA4CoverData(
+                        "Fecha",
+                        <input type="date" value={draft.header.fecha} onChange={(event) => patchNested("header", { fecha: event.target.value })} className={a4FieldClassName()} disabled={!isEditingProposalDocument} />,
+                      )}
+                      {renderA4CoverData(
+                        "Area",
+                        <input value={draft.recipient.area_solicitante} onChange={(event) => patchNested("recipient", { area_solicitante: event.target.value })} className={a4FieldClassName()} disabled={!isEditingProposalDocument} />,
+                      )}
+                      {renderA4CoverData(
+                        "Revision",
+                        <input value={draft.metadata.revision} readOnly className={a4FieldClassName("font-bold text-stone-600")} />,
+                      )}
+                    </div>
+
+                    <div className="cover-scope-v66">
+                      <div className="cover-scope-title-v66">ALCANCE TECNICO</div>
+                      <textarea
+                        value={draft.presentation.texto}
+                        onChange={(event) => patchNested("presentation", { texto: event.target.value })}
+                        className={a4TextareaClassName("cover-scope-text-v66")}
+                        disabled={!isEditingProposalDocument}
+                      />
+                    </div>
+                  </div>
+
+                  <footer className="cover-bottom-v66">
+                    <span>{draft.header.empresa_emisora}</span>
+                    <span>Ingenieria | Mantenimiento | Proyectos electromecanicos</span>
+                  </footer>
+                </article>
+
+                <article
+                  className="technical-proposal-a4-editor doc-page technical-page-v66"
+                  onClick={closeScopeContextMenu}
+                  onContextMenu={(event) => openScopeContextMenu(event, null)}
+                >
+                  {renderDocHeader()}
+
+                  <div className="doc-body">
+                  <div className="first-meta">
+                    <label className="font-black">
+                      <input
+                        value={draft.header.ciudad}
+                        onChange={(event) => patchNested("header", { ciudad: event.target.value })}
+                        className={a4FieldClassName("inline-block max-w-[90px] font-black")}
+                        disabled={!isEditingProposalDocument}
+                      />
+                      , {formatDateForDocument(draft.header.fecha)}
                     </label>
-                    <span className="rounded-full border border-teal-100 bg-teal-50 px-2 py-0.5 text-[10px] font-semibold text-teal-700">
-                      {draft.metadata.revision}
-                    </span>
+                    <div className="budget">
+                      <span className="meta-label">Presupuesto</span> <strong>{draft.metadata.documento_codigo}</strong>
+                    </div>
                   </div>
-                </div>
-                <div className="overflow-x-auto">
-                  <table className="w-full min-w-[620px] border-collapse text-[11px]">
-                    <tbody>
-                      {[
-                        ["Documento", draft.metadata.documento_codigo],
-                        ["Cotizacion", draft.metadata.cotizacion_codigo],
-                        ["Cliente", draft.recipient.cliente || cotizacion.cliente],
-                        ["Unidad", draft.recipient.unidad_trabajo || cotizacion.unidad_trabajo],
-                        ["Proyecto", cotizacion.proyecto],
-                        ["Fecha", draft.header.fecha],
-                        ["Referencia", draft.presentation.referencia],
-                      ].map(([label, value], index) => (
-                        <tr key={label} className={index % 2 === 0 ? "bg-white" : "bg-stone-50/60"}>
-                          <td className="w-[130px] border-b border-stone-100 px-2 py-1 font-bold text-stone-500">{label}</td>
-                          <td className="border-b border-stone-100 px-2 py-1 text-stone-800">{value || "-"}</td>
-                        </tr>
+
+                  <section className="recipient">
+                    {renderA4MetaRow(
+                      "Senores:",
+                      <input value={draft.recipient.cliente} onChange={(event) => patchNested("recipient", { cliente: event.target.value })} className={a4FieldClassName("font-black uppercase")} disabled={!isEditingProposalDocument} />,
+                    )}
+                    {renderA4MetaRow(
+                      "Unidad:",
+                      <input value={draft.recipient.unidad_trabajo} onChange={(event) => patchNested("recipient", { unidad_trabajo: event.target.value })} className={a4FieldClassName()} disabled={!isEditingProposalDocument} />,
+                    )}
+                    {renderA4MetaRow(
+                      "Area:",
+                      <input value={draft.recipient.area_solicitante} onChange={(event) => patchNested("recipient", { area_solicitante: event.target.value })} className={a4FieldClassName()} disabled={!isEditingProposalDocument} />,
+                    )}
+                    {renderA4MetaRow(
+                      "Atencion:",
+                      <input value={draft.recipient.atencion} onChange={(event) => patchNested("recipient", { atencion: event.target.value })} className={a4FieldClassName()} disabled={!isEditingProposalDocument} />,
+                    )}
+                    {renderA4MetaRow(
+                      "Contacto:",
+                      <input value={draft.recipient.contacto} onChange={(event) => patchNested("recipient", { contacto: event.target.value })} className={a4FieldClassName()} disabled={!isEditingProposalDocument} />,
+                    )}
+                  </section>
+
+                  <div className="title-box">
+                    <input
+                      value={draft.header.titulo}
+                      onChange={(event) => patchNested("header", { titulo: event.target.value })}
+                      className={a4FieldClassName("text-center text-[17px] font-black uppercase text-stone-900")}
+                      disabled={!isEditingProposalDocument}
+                    />
+                    <textarea
+                      value={draft.header.subtitulo}
+                      onChange={(event) => patchNested("header", { subtitulo: event.target.value })}
+                      className={a4TextareaClassName("text-center text-[10px] font-black uppercase text-stone-800")}
+                      rows={2}
+                      disabled={!isEditingProposalDocument}
+                    />
+                  </div>
+
+                  <label className="reference-box grid">
+                    <span className="font-black uppercase text-stone-700">Referencia</span>
+                    <input value={draft.presentation.referencia} onChange={(event) => patchNested("presentation", { referencia: event.target.value })} className={a4FieldClassName()} disabled={!isEditingProposalDocument} />
+                  </label>
+
+                  <h2 className="section-title scope-title">Resumen de los alcances del servicio</h2>
+                  <section className={`scope-editor-wrap ${isEditingProposalDocument && !printingReady ? "is-editing" : "is-print-view"}`}>
+                    <div className="scope-editor-help"><b>Enter</b> nueva linea · <b>Tab</b> aumenta nivel · <b>Shift + Tab</b> reduce nivel · <b>Ctrl + Espacio</b> actividad</div>
+                    <div className="scope-editor-main">
+                      <div ref={scopeGutterRef} className="scope-gutter" aria-hidden="true">
+                        {scopeGutterRows.length
+                          ? scopeGutterRows.map((row) => <div key={`${row.key}-gutter`} className="scope-gutter-row">{row.label}</div>)
+                          : <div>-</div>}
+                      </div>
+                      <textarea
+                        ref={scopeTextareaRef}
+                        value={draft.scope_outline}
+                        onChange={(event) => syncScopeOutline(event.target.value)}
+                        onKeyDown={handleScopeOutlineKeyDown}
+                        onScroll={(event) => {
+                          if (scopeGutterRef.current) scopeGutterRef.current.scrollTop = event.currentTarget.scrollTop;
+                        }}
+                        className="scope-textarea"
+                        placeholder={"Titulo principal\n\tSubtitulo\n\t* Actividad"}
+                        disabled={!isEditingProposalDocument}
+                      />
+                    </div>
+                    <div className="scope-print-list">
+                      {draft.scope_items.map((item) => (
+                        <button
+                          key={item.id}
+                          type="button"
+                          onClick={() => setSelectedScopeItemId(item.id)}
+                          className={`scope-print-row depth-${Math.min(item.level, 3)} w-full border-0 bg-transparent text-left ${selectedScopeItemId === item.id ? "text-teal-800" : "text-stone-700"}`}
+                          style={{ paddingLeft: `${Math.min(item.level, 3) * 12}px` }}
+                        >
+                          <span className="scope-print-num">{item.number}.</span>
+                          <span className={`scope-print-title ${item.kind === "activity" ? "" : "font-bold uppercase"}`}>{item.title}</span>
+                        </button>
                       ))}
-                    </tbody>
-                  </table>
-                </div>
-              </section>
+                    </div>
+                  </section>
 
-              <section className={sectionCardClassName(draft.field_mode, "a")}>
-                <SectionHeader title="A. Encabezado y documento" icon="file-text" collapsed={collapsedSections.a} onToggle={() => toggleSection("a")} />
-                {!collapsedSections.a ? (
-                  <div className="grid grid-cols-1 gap-2 p-3 md:grid-cols-3">
-                    <Field label="Ciudad">
-                      <input value={draft.header.ciudad} onChange={(event) => patchNested("header", { ciudad: event.target.value })} className={inputClassName()} disabled={!isEditingProposalDocument} />
-                    </Field>
-                    <Field label="Fecha">
-                      <input type="date" value={draft.header.fecha} onChange={(event) => patchNested("header", { fecha: event.target.value })} className={inputClassName()} disabled={!isEditingProposalDocument} />
-                    </Field>
-                    <Field label="Presupuesto / documento">
-                      <input value={draft.metadata.documento_codigo} readOnly className={`${inputClassName()} bg-stone-50 text-stone-500`} />
-                    </Field>
-                    <Field label="Titulo">
-                      <input value={draft.header.titulo} onChange={(event) => patchNested("header", { titulo: event.target.value })} className={inputClassName()} disabled={!isEditingProposalDocument} />
-                    </Field>
-                    <Field label="Subtitulo">
-                      <input value={draft.header.subtitulo} onChange={(event) => patchNested("header", { subtitulo: event.target.value })} className={inputClassName()} disabled={!isEditingProposalDocument} />
-                    </Field>
-                    <Field label="Logo cliente / placeholder">
-                      <input value={draft.header.cliente_logo_label} onChange={(event) => patchNested("header", { cliente_logo_label: event.target.value })} className={inputClassName()} disabled={!isEditingProposalDocument} />
-                    </Field>
+                  <section className="mt-4 border border-stone-200 p-2">
+                    <div className="mb-2 flex items-center justify-between gap-2">
+                      <FieldLabelIcon icon="image" label="Imagenes tecnicas generales" className="text-[9px] font-black uppercase text-stone-700" />
+                      <span className="text-[8px] text-stone-400">{draft.general_images.length} imagen(es)</span>
+                    </div>
+                    {renderImageEditor(draft.general_images, "general", null)}
+                  </section>
+
                   </div>
-                ) : null}
-              </section>
+                  <footer className="doc-footer">
+                    <span>{draft.header.empresa_emisora} | Propuesta tecnica</span>
+                    <span>Presentacion y resumen</span>
+                  </footer>
+                </article>
 
-              <section className={sectionCardClassName(draft.field_mode, "b")}>
-                <SectionHeader title="B. Destinatario" icon="building" collapsed={collapsedSections.b} onToggle={() => toggleSection("b")} />
-                {!collapsedSections.b ? (
-                  <div className="grid grid-cols-1 gap-2 p-3 md:grid-cols-2">
-                    <Field label="Cliente">
-                      <input value={draft.recipient.cliente} onChange={(event) => patchNested("recipient", { cliente: event.target.value })} className={inputClassName()} disabled={!isEditingProposalDocument} />
-                    </Field>
-                    <Field label="Unidad de trabajo">
-                      <input value={draft.recipient.unidad_trabajo} onChange={(event) => patchNested("recipient", { unidad_trabajo: event.target.value })} className={inputClassName()} disabled={!isEditingProposalDocument} />
-                    </Field>
-                    <Field label="Area solicitante">
-                      <input value={draft.recipient.area_solicitante} onChange={(event) => patchNested("recipient", { area_solicitante: event.target.value })} className={inputClassName()} disabled={!isEditingProposalDocument} />
-                    </Field>
-                    <Field label="Atencion">
-                      <input value={draft.recipient.atencion} onChange={(event) => patchNested("recipient", { atencion: event.target.value })} className={inputClassName()} disabled={!isEditingProposalDocument} />
-                    </Field>
-                    <Field label="Contacto" className="md:col-span-2">
-                      <input value={draft.recipient.contacto} onChange={(event) => patchNested("recipient", { contacto: event.target.value })} className={inputClassName()} disabled={!isEditingProposalDocument} />
-                    </Field>
-                  </div>
-                ) : null}
-              </section>
-
-              <section className={sectionCardClassName(draft.field_mode, "c")}>
-                <SectionHeader
-                  title="C. Referencia y presentacion"
-                  icon="align-left"
-                  collapsed={collapsedSections.c}
-                  onToggle={() => toggleSection("c")}
-                  actions={
-                    <button type="button" onClick={generateStructureFromOutline} className={smallButtonClassName("primary")} disabled={!isEditingProposalDocument}>
-                      Generar estructura
-                    </button>
-                  }
-                />
-                {!collapsedSections.c ? (
-                  <div className="space-y-3 p-3">
-                    <Field label="Referencia">
-                      <input value={draft.presentation.referencia} onChange={(event) => patchNested("presentation", { referencia: event.target.value })} className={inputClassName()} disabled={!isEditingProposalDocument} />
-                    </Field>
-                    <Field label="Texto de presentacion">
-                      <textarea value={draft.presentation.texto} onChange={(event) => patchNested("presentation", { texto: event.target.value })} className={textareaClassName()} disabled={!isEditingProposalDocument} />
-                    </Field>
-                    <div className="rounded-lg border border-teal-100 bg-teal-50/40 p-2">
-                      <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
-                        <FieldLabelIcon icon="list-checks" label="Resumen de los alcances del servicio" className="text-[11px] font-black uppercase text-teal-800" />
-                        <div className="flex items-center gap-1.5">
-                          <button type="button" onClick={clearScopeOutline} className={smallButtonClassName("secondary")} disabled={!isEditingProposalDocument}>
-                            Limpiar resumen
-                          </button>
-                          <button type="button" onClick={renumberOutline} className={smallButtonClassName("secondary")} disabled={!isEditingProposalDocument}>
-                            Renumerar
-                          </button>
-                        </div>
-                      </div>
-                      <div className="grid grid-cols-1 gap-3 lg:grid-cols-[1fr_250px]">
-                        <div>
-                          <div className="mb-2 flex flex-wrap items-center gap-3 rounded-lg border border-stone-200 bg-white px-2 py-1.5 text-[11px] text-stone-500">
-                            <label className="inline-flex items-center gap-1 rounded-full border border-stone-200 px-2 py-1 font-bold text-stone-700">
-                              <input type="checkbox" onChange={() => scopeTextareaRef.current && toggleCurrentScopeLineActivity(scopeTextareaRef.current)} disabled={!isEditingProposalDocument} />
-                              Actividad actual
-                            </label>
-                            <span>Enter: nuevo item · Tab: subitem · Shift+Tab: subir nivel · Ctrl+Espacio: actividad</span>
+                {documentScopePages.map((scopeItemIds, pageIndex) => (
+                  <article
+                    key={`scope-page-${pageIndex}`}
+                    className="technical-proposal-a4-editor doc-page technical-page-v66"
+                    onClick={closeScopeContextMenu}
+                    onContextMenu={(event) => openScopeContextMenu(event, null)}
+                  >
+                    {renderDocHeader()}
+                    <div className="doc-body">
+                      <h2 className="section-title">I. Alcances del servicio</h2>
+                      <div className="mt-3 space-y-3">
+                        {scopeItemIds.length ? scopeItemIds.map((itemId) => {
+                          const node = scopeNodeById.get(itemId);
+                          const item = draft.scope_items.find((scopeItem) => scopeItem.id === itemId);
+                          return node && item ? renderA4EditableScopeNode(node, item.level, false) : null;
+                        }) : (
+                          <div className="border border-dashed border-stone-300 px-3 py-5 text-center text-[10px] text-stone-500">
+                            Genera o agrega items para desarrollar el alcance.
                           </div>
-                          <textarea
-                            ref={scopeTextareaRef}
-                            value={draft.scope_outline}
-                            onChange={(event) => patchDraft({ scope_outline: event.target.value })}
-                            onKeyDown={handleScopeOutlineKeyDown}
-                            className={`${textareaClassName("min-h-[158px]")} font-mono`}
-                            disabled={!isEditingProposalDocument}
-                          />
-                        </div>
-                        <aside className="rounded-lg border border-dashed border-stone-300 bg-white p-3 text-[11px] text-stone-600">
-                          <div className="mb-1 font-bold text-stone-800">Modo de uso rapido</div>
-                          <p>Escribe el alcance sin numerarlo; la app arma la numeracion automaticamente.</p>
-                          <code className="mt-2 block rounded bg-stone-100 px-2 py-1">1 Titulo o grupo</code>
-                          <code className="mt-1 block rounded bg-stone-100 px-2 py-1">1.1 Subtitulo o subgrupo</code>
-                          <code className="mt-1 block rounded bg-stone-100 px-2 py-1">1.1.1 [A] Actividad</code>
-                        </aside>
-                      </div>
-                      <div className="mt-3 max-h-[220px] overflow-y-auto rounded-lg border border-stone-200 bg-white p-2">
-                        <div className="mb-2 text-[10px] font-black uppercase text-teal-800">Vista previa del arbol</div>
-                        {parsedScopePreview.length ? (
-                          parsedScopePreview.map((item) => (
-                            <div key={`${item.number}-${item.title}`} className="flex items-center gap-2 py-1 text-[11px]" style={{ paddingLeft: `${item.level * 18}px` }}>
-                              <span className="w-12 font-mono font-bold text-teal-700">{item.number}</span>
-                              <span className={`rounded-full border px-2 py-0.5 text-[10px] font-bold ${item.kind === "activity" ? "border-teal-200 bg-teal-50 text-teal-700" : "border-stone-200 bg-stone-50 text-stone-600"}`}>
-                                {scopeKindLabel(item.kind)}
-                              </span>
-                              <span className="min-w-0 truncate text-stone-700">{item.title}</span>
-                            </div>
-                          ))
-                        ) : (
-                          <div className="rounded border border-dashed border-stone-300 px-3 py-4 text-center text-stone-400">Empieza escribiendo el primer alcance.</div>
                         )}
                       </div>
                     </div>
-                    <div className="rounded-lg border border-stone-200 p-2">
-                      <div className="mb-2 flex items-center justify-between gap-2">
-                        <FieldLabelIcon icon="image" label="Imagenes generales de referencia" className="text-[11px] font-bold text-stone-700" />
-                        <span className="text-[11px] text-stone-400">{draft.general_images.length} imagen(es)</span>
-                      </div>
-                      {renderImageEditor(draft.general_images, "general", null)}
-                    </div>
-                  </div>
-                ) : null}
-              </section>
+                    <footer className="doc-footer">
+                      <span>{draft.header.empresa_emisora} | Propuesta tecnica</span>
+                      <span>Alcances | pagina {pageIndex + 1} de {documentScopePages.length}</span>
+                    </footer>
+                  </article>
+                ))}
 
-              <section className={sectionCardClassName(draft.field_mode, "d")}>
-                <SectionHeader
-                  title={`D. Alcances del servicio ${draft.scope_items.length} item(s)`}
-                  icon="clipboard-list"
-                  collapsed={false}
-                  actions={
-                    <>
-                      <button type="button" onClick={() => generateStructureFromOutline()} className={smallButtonClassName("secondary")} disabled={!isEditingProposalDocument}>
-                        Actualizar resumen
-                      </button>
-                      <button type="button" disabled={!isEditingProposalDocument || !selectedActionItem} onClick={() => selectedActionItem && outdentScopeItemById(selectedActionItem.id)} className={scopeGridActionButtonClassName()}>
-                        ← Nivel -
-                      </button>
-                      <button type="button" disabled={!isEditingProposalDocument || !selectedActionItem} onClick={() => selectedActionItem && indentScopeItemById(selectedActionItem.id)} className={scopeGridActionButtonClassName()}>
-                        → Nivel +
-                      </button>
-                      <button type="button" disabled={!isEditingProposalDocument || !selectedActionItem} onClick={() => selectedActionItem && moveScopeItemUpById(selectedActionItem.id)} className={scopeGridActionButtonClassName()}>
-                        ↑
-                      </button>
-                      <button type="button" disabled={!isEditingProposalDocument || !selectedActionItem} onClick={() => selectedActionItem && moveScopeItemDownById(selectedActionItem.id)} className={scopeGridActionButtonClassName()}>
-                        ↓
-                      </button>
-                      <button type="button" disabled={!isEditingProposalDocument || !selectedActionItem} onClick={() => selectedActionItem && duplicateScopeItem(selectedActionItem.id)} className={scopeGridActionButtonClassName()}>
-                        ⧉
-                      </button>
-                      <button type="button" disabled={!isEditingProposalDocument || !selectedActionItem} onClick={() => selectedActionItem && deleteScopeItem(selectedActionItem.id)} className={scopeGridActionButtonClassName("danger")}>
-                        🗑
-                      </button>
-                      <button type="button" onClick={() => addScopeItem("group", selectedActionItem?.id)} className={smallButtonClassName("secondary")} disabled={!isEditingProposalDocument}>
-                        + Titulo
-                      </button>
-                      <button type="button" onClick={() => addScopeItem("subgroup", selectedActionItem?.id)} className={smallButtonClassName("secondary")} disabled={!isEditingProposalDocument}>
-                        + Subtitulo
-                      </button>
-                      <button type="button" onClick={() => addScopeItem("activity", selectedActionItem?.id)} className={smallButtonClassName("primary")} disabled={!isEditingProposalDocument}>
-                        + Partida
-                      </button>
-                    </>
-                  }
-                />
-                <div className="space-y-2 p-3">
-                  <div className="overflow-hidden border border-stone-300 bg-white">
-                    <div className="overflow-x-auto">
-                      <table className="w-full min-w-[980px] border-collapse text-[11px]">
-                        <thead className="sticky top-0 z-10 bg-stone-200 text-left text-[10px] uppercase tracking-wide text-stone-600">
-                          <tr>
-                            <th className="w-[72px] border border-stone-300 px-1.5 py-1 font-bold">N°</th>
-                            <th className="w-[118px] border border-stone-300 px-1.5 py-1 font-bold">Tipo</th>
-                            <th className="border border-stone-300 px-1.5 py-1 font-bold">Titulo / alcance</th>
-                            <th className="w-[86px] border border-stone-300 px-1.5 py-1 text-right font-bold">Tiempo</th>
-                            <th className="w-[110px] border border-stone-300 px-1.5 py-1 font-bold">Unidad</th>
-                            <th className="w-[80px] border border-stone-300 px-1.5 py-1 text-right font-bold">Rec.</th>
-                            <th className="w-[80px] border border-stone-300 px-1.5 py-1 text-right font-bold">Img.</th>
-                            <th className="w-[118px] border border-stone-300 px-1.5 py-1 font-bold">Estado</th>
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {draft.scope_items.map((item) => {
-                            const isSelected = item.id === selectedScopeItem?.id;
-                            const rowResources = draft.resources.filter((resource) => resource.scope_item_id === item.id).length;
-                            const rowImages = draft.activity_images.filter((image) => image.scope_item_id === item.id).length;
-                            return (
-                              <tr
-                                key={item.id}
-                                onClick={() => setSelectedScopeItemId(item.id)}
-                                className={scopeGridRowClassName(item, isSelected)}
-                              >
-                                <td className="border border-stone-200 bg-stone-50 px-1.5 py-0.5 align-middle">
-                                  <span className="font-mono font-bold text-teal-700">{item.number}</span>
-                                </td>
-                                <td className="border border-stone-200 p-0 align-middle">
-                                  <select
-                                    value={item.kind}
-                                    onChange={(event) => updateScopeItem(item.id, { kind: event.target.value as ScopeKind })}
-                                    className={spreadsheetControlClassName(scopeKindCellClassName(item.kind))}
-                                    disabled={!isEditingProposalDocument}
-                                  >
-                                    <option value="group">Titulo</option>
-                                    <option value="subgroup">Subtitulo</option>
-                                    <option value="activity">Partida / actividad</option>
-                                  </select>
-                                </td>
-                                <td className="border border-stone-200 p-0 align-middle">
-                                  <input
-                                    value={item.title}
-                                    onChange={(event) => updateScopeItem(item.id, { title: event.target.value })}
-                                    onKeyDown={(event) => {
-                                      if (event.key !== "Enter") return;
-                                      event.preventDefault();
-                                      const index = draft.scope_items.findIndex((candidate) => candidate.id === item.id);
-                                      const next = draft.scope_items[index + 1];
-                                      if (next) setSelectedScopeItemId(next.id);
-                                    }}
-                                    className={spreadsheetControlClassName(item.kind === "activity" ? "" : "font-bold uppercase")}
-                                    disabled={!isEditingProposalDocument}
-                                  />
-                                </td>
-                                <td className="border border-stone-200 p-0 align-middle">
-                                  <input
-                                    type="number"
-                                    min={0}
-                                    value={item.time_value}
-                                    onChange={(event) => updateScopeItem(item.id, { time_value: toFiniteNumber(event.target.value) })}
-                                    className={spreadsheetControlClassName("text-right tabular-nums")}
-                                    disabled={!isEditingProposalDocument}
-                                  />
-                                </td>
-                                <td className="border border-stone-200 p-0 align-middle">
-                                  <select value={item.time_unit} onChange={(event) => updateScopeItem(item.id, { time_unit: event.target.value })} className={spreadsheetControlClassName()} disabled={!isEditingProposalDocument}>
-                                    <option value="dias">dias</option>
-                                    <option value="horas">horas</option>
-                                    <option value="semanas">semanas</option>
-                                  </select>
-                                </td>
-                                <td className="border border-stone-200 px-1.5 py-0.5 text-right align-middle tabular-nums">{item.kind === "activity" ? rowResources : "-"}</td>
-                                <td className="border border-stone-200 px-1.5 py-0.5 text-right align-middle tabular-nums">{item.kind === "activity" ? rowImages : "-"}</td>
-                                <td className="border border-stone-200 p-0 align-middle">
-                                  {item.kind === "activity" ? (
-                                    <select
-                                      value={item.complete ? "complete" : "draft"}
-                                      onChange={(event) => updateScopeItem(item.id, { complete: event.target.value === "complete" })}
-                                      className={spreadsheetControlClassName(item.complete ? "font-semibold text-emerald-700" : "text-stone-700")}
-                                      disabled={!isEditingProposalDocument}
-                                    >
-                                      <option value="draft">Borrador</option>
-                                      <option value="complete">Completo</option>
-                                    </select>
-                                  ) : (
-                                    <span className="px-1.5 text-stone-400">-</span>
-                                  )}
-                                </td>
-                              </tr>
-                            );
-                          })}
-                        </tbody>
-                      </table>
-                    </div>
-                  </div>
-
-                  {selectedScopeItem ? (
-                    <div className="rounded-lg border border-stone-200 bg-stone-50 p-2">
-                      <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
-                        <FieldLabelIcon
-                          icon={selectedScopeItem.kind === "activity" ? "clipboard-list" : "layout-grid"}
-                          label={`Detalle seleccionado: ${selectedScopeItem.number} ${selectedScopeItem.title}`}
-                          className="text-[11px] font-bold text-stone-700"
-                        />
-                        <span className="rounded-full border border-stone-200 bg-white px-2 py-0.5 text-[10px] font-semibold text-stone-500">
-                          {scopeKindLabel(selectedScopeItem.kind)}
-                        </span>
-                      </div>
-                      {renderScopeItemEditor(selectedScopeItem)}
-                    </div>
-                  ) : null}
-                </div>
-              </section>
-
-              <section className={sectionCardClassName(draft.field_mode, "e")}>
-                <SectionHeader title="E. Notas complementarias y condiciones comerciales" icon="receipt" collapsed={collapsedSections.e} onToggle={() => toggleSection("e")} />
-                {!collapsedSections.e ? (
-                  <div className="grid grid-cols-1 gap-2 p-3 md:grid-cols-2">
+                <article className="technical-proposal-a4-editor doc-page technical-page-v66">
+                  {renderDocHeader()}
+                  <div className="doc-body">
+                    <h2 className="section-title">II. Notas complementarias y condiciones comerciales</h2>
+                  <div className="mt-3 grid grid-cols-1 gap-2 text-[9px] leading-4 md:grid-cols-2">
                     {Object.entries(draft.conditions).map(([key, value]) => (
-                      <Field key={key} label={key.replace(/_/g, " ")} className={key.includes("notas") || key.includes("incluye") || key.includes("cierre") ? "md:col-span-2" : ""}>
+                      <label key={key} className={`grid gap-1 font-black uppercase tracking-wide text-stone-600 ${key.includes("notas") || key.includes("incluye") || key.includes("cierre") ? "md:col-span-2" : ""}`}>
+                        {key.replace(/_/g, " ")}
                         <textarea
                           value={String(value)}
                           onChange={(event) => patchNested("conditions", { [key]: event.target.value } as Partial<TechnicalProposalDraft["conditions"]>)}
-                          className={textareaClassName("min-h-[52px]")}
+                          className={a4TextareaClassName("min-h-[42px] font-normal normal-case tracking-normal")}
                           disabled={!isEditingProposalDocument}
                         />
-                      </Field>
+                      </label>
                     ))}
                   </div>
-                ) : null}
-              </section>
 
-              <section className="rounded-lg border border-stone-200 bg-stone-50 p-2">
-                <div className="grid grid-cols-1 gap-2 text-[11px] md:grid-cols-3">
-                  <div>
-                    <span className="font-bold text-stone-600">Carpeta madre:</span> {draft.metadata.carpeta_madre}
                   </div>
-                  <div>
-                    <span className="font-bold text-stone-600">Subcarpeta:</span> {draft.metadata.subcarpeta_revision}
-                  </div>
-                  <div>
-                    <span className="font-bold text-stone-600">Archivos:</span> {draft.metadata.archivo_docx} / {draft.metadata.archivo_pdf}
-                  </div>
-                </div>
-                {statusMessage ? <div className="mt-2 rounded border border-teal-100 bg-teal-50 px-2 py-1 text-[11px] text-teal-700">{statusMessage}</div> : null}
-              </section>
+                  <footer className="doc-footer">
+                    <span>{draft.header.empresa_emisora} | Propuesta tecnica</span>
+                    <span>{draft.metadata.subcarpeta_revision} | {draft.metadata.archivo_pdf}</span>
+                  </footer>
+                </article>
+              </div>
             </div>
           </main>
 
-          <aside className="flex min-h-0 flex-col overflow-hidden rounded-xl border border-stone-200 bg-stone-200">
-            <div className="border-b border-stone-300 bg-stone-100 px-3 py-2">
-              <h2 className="text-[14px] font-black text-stone-800">
-                {rightPanelView === "document" ? "Vista previa A4" : rightPanelView === "resources" ? "Recursos" : "Recursos usados"}
-              </h2>
-              <p className="text-[11px] text-stone-500">
-                {rightPanelView === "document"
-                  ? "Vista preparada para exportacion futura Word/PDF."
-                  : rightPanelView === "resources"
-                    ? "Catalogo maestro, seleccion y ficha tecnica del recurso."
-                    : "Resumen de recursos usados y posibles repetidos en esta PT."}
-              </p>
-              <div className="mt-2 flex flex-wrap items-center gap-1.5">
-                {[
-                  { key: "resources" as const, label: "Recursos" },
-                  { key: "used_resources" as const, label: "Recursos usados" },
-                  { key: "document" as const, label: "Documento A4" },
-                ].map((tab) => (
-                  <button
-                    key={tab.key}
-                    type="button"
-                    onClick={() => setRightPanelView(tab.key)}
-                    className={rightPanelView === tab.key ? smallButtonClassName("primary") : smallButtonClassName("secondary")}
-                  >
-                    {tab.label}
-                  </button>
-                ))}
-                <button type="button" onClick={refreshPreview} className={smallButtonClassName("soft")}>
-                  Actualizar vista previa
+          <aside className="editor-right">
+            <div className={`right-tabs ${canViewPrices ? "" : "only-resources"}`}>
+              {canViewPrices ? (
+                <button type="button" className={`right-tab ${rightPanelView === "margins" ? "active" : ""}`} onClick={() => setRightPanelView("margins")}>
+                  Margenes
                 </button>
-                <button type="button" onClick={exportWordFromPreview} className={smallButtonClassName("secondary")}>
-                  Exportar Word
-                </button>
-                <button type="button" onClick={exportHtmlFromPreview} className={smallButtonClassName("secondary")}>
-                  Exportar HTML
-                </button>
-                <button type="button" onClick={exportJsonFromDraft} className={smallButtonClassName("secondary")}>
-                  Exportar JSON
-                </button>
-                <button type="button" onClick={handlePrintPdf} disabled={printingReady} className={smallButtonClassName("primary")}>
-                  Imprimir / PDF
-                </button>
-              </div>
+              ) : null}
+              <button type="button" className={`right-tab ${rightPanelView === "resources" ? "active" : ""}`} onClick={() => setRightPanelView("resources")}>
+                Recursos
+              </button>
             </div>
-            {rightPanelView === "document" ? (
-              <div className="min-h-0 overflow-auto p-4">
-              <article
-                key={previewRefreshKey}
-                ref={previewDocumentRef}
-                className="technical-proposal-a4-doc mx-auto min-h-[297mm] w-[210mm] bg-white px-[12mm] py-[10mm] text-stone-800 shadow-xl"
-              >
-                {renderDocHeader()}
-                <div className="mt-6 grid grid-cols-[1fr_auto] gap-3 text-[10px]">
-                  <div className="font-black">{draft.header.ciudad}, {formatDateForDocument(draft.header.fecha)}</div>
-                  <div><span className="font-bold uppercase text-stone-500">Presupuesto</span> <strong>{draft.metadata.documento_codigo}</strong></div>
-                </div>
-                <div className="mt-5 text-[10px] leading-5">
-                  <p className="font-black">Senores:</p>
-                  <p className="font-black uppercase">{draft.recipient.cliente || cotizacion.cliente || "-"}</p>
-                  <p><strong>Unidad de trabajo:</strong> {draft.recipient.unidad_trabajo || "-"}</p>
-                  <p><strong>Area solicitante:</strong> {draft.recipient.area_solicitante || "-"}</p>
-                  <p><strong>Atencion:</strong> {draft.recipient.atencion || "-"}</p>
-                  <p className="mt-2">Presente.-</p>
-                  <p className="mt-4">Estimados senores:</p>
-                  <p className="whitespace-pre-line">{draft.presentation.texto}</p>
-                </div>
-                <h1 className="mt-6 text-center text-[17px] font-black uppercase text-stone-900">{draft.header.titulo}</h1>
-                <div className="mt-2 text-center text-[10px] font-black uppercase text-stone-800">{draft.header.subtitulo}</div>
-                <div className="mt-4 border-l-4 border-amber-600 bg-stone-50 px-3 py-2 text-[10px]">
-                  <strong>REFERENCIA:</strong> {draft.presentation.referencia || "-"}
-                </div>
-                <div className="mt-4 border-l-4 border-teal-700 bg-teal-50/30 px-3 py-2">
-                  <div className="text-[10px] font-black uppercase text-stone-800">Resumen de los alcances del servicio</div>
-                  <div className="mt-2 space-y-1 text-[9px] leading-4">
-                    {draft.scope_items.map((item) => (
-                        <div key={item.id} className="grid grid-cols-[54px_1fr] gap-2" style={{ marginLeft: `${Math.min(item.level, 3) * 12}px` }}>
-                          <span className="font-black tabular-nums">{item.number}.</span>
-                          <span className={item.kind === "activity" ? "" : "font-bold uppercase"}>{item.title}</span>
-                        </div>
-                    ))}
-                  </div>
-                </div>
-                {renderPreviewImages(draft.general_images)}
-
-                <h2 className="mt-6 border-b border-amber-600 pb-1 text-[12px] font-black uppercase text-stone-900">I. Alcances del servicio</h2>
-                <div className="mt-3 space-y-4">
-                  {previewScopeTree.map((node) => renderPreviewScopeNode(node))}
-                </div>
-                <h2 className="mt-6 border-b border-amber-600 pb-1 text-[12px] font-black uppercase text-stone-900">
-                  II. Notas complementarias y condiciones comerciales
-                </h2>
-                <div className="mt-3 text-[9px] leading-5">
-                  <p className="whitespace-pre-line"><strong className="text-teal-800">Notas complementarias:</strong> {draft.conditions.notas_complementarias}</p>
-                  <p className="whitespace-pre-line"><strong>Nuestro presupuesto no incluye:</strong> {draft.conditions.presupuesto_no_incluye}</p>
-                  <p className="whitespace-pre-line"><strong>Nuestra propuesta sera reajustada si:</strong> {draft.conditions.propuesta_reajustada_si}</p>
-                  <div className="mt-3 grid grid-cols-[130px_1fr] gap-y-1">
-                    <strong>Plazo de entrega</strong><span className="whitespace-pre-line">{draft.conditions.plazo_entrega}</span>
-                    <strong>Forma de pago</strong><span className="whitespace-pre-line">{draft.conditions.forma_pago}</span>
-                    <strong>Validez de oferta</strong><span className="whitespace-pre-line">{draft.conditions.validez_oferta}</span>
-                    <strong>Garantia</strong><span className="whitespace-pre-line">{draft.conditions.garantia}</span>
-                    <strong>Lugar de entrega</strong><span className="whitespace-pre-line">{draft.conditions.lugar_entrega}</span>
-                    <strong>Nota</strong><span className="whitespace-pre-line">{draft.conditions.nota_comercial}</span>
-                  </div>
-                  <p className="mt-5 whitespace-pre-line">{draft.conditions.cierre}</p>
-                  <p className="mt-3 whitespace-pre-line"><strong>Atentamente,</strong><br />{draft.conditions.firma_area}<br />{draft.conditions.empresa_firma}</p>
-                </div>
-                <footer className="mt-8 flex items-center justify-between border-t border-amber-600 pt-2 text-[8px] text-stone-500">
-                  <span>{draft.header.empresa_emisora} | Propuesta tecnica</span>
-                  <span>Pagina 1 / preparado</span>
-                </footer>
-              </article>
-              </div>
-            ) : rightPanelView === "resources" ? (
-              <div className="min-h-0 overflow-auto p-3">
-                <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
-                  <div className="text-[11px] text-stone-600">
-                    Destino: <strong>{selectedResourceTargetItem()?.number ?? "-"} {selectedResourceTargetItem()?.title ?? ""}</strong>
-                  </div>
-                  <button
-                    type="button"
-                    onClick={() => void openCreateResourceFromTechnicalProposal()}
-                    disabled={!isEditingProposalDocument || !canCreateResource}
-                    className={smallButtonClassName("primary")}
-                    title={!canCreateResource ? "No tienes permiso para crear recursos" : "Crear recurso maestro"}
-                  >
-                    Crear recurso
-                  </button>
-                </div>
-                <div className="grid min-h-0 grid-cols-1 gap-3 2xl:grid-cols-[minmax(300px,0.9fr)_minmax(320px,1.1fr)]">
-                  <ResourceCatalogPanel
-                    resources={resourceCatalog}
-                    onSelectResource={handleAddCatalogResource}
-                    onClose={() => setRightPanelView("document")}
-                    canAddResource={isEditingProposalDocument}
-                    className="max-h-[calc(100dvh-210px)] rounded-lg shadow-none lg:w-full xl:w-full"
-                  />
-                  <TechnicalProposalResourceInspector
-                    resource={displayedResource}
-                    snapshot={displayedResourceSnapshot}
-                    usage={displayedResource ? usedResourceLookup.get(displayedResource.id) : undefined}
-                    permissions={resourceInspectorPermissions}
-                  />
-                </div>
-              </div>
-            ) : (
-              <div className="min-h-0 overflow-auto p-4">
+            <div className="right-body">
+              {rightPanelView === "margins" && canViewPrices ? (
                 <TechnicalProposalUsedResourcesPanel
                   items={usedResourceItems}
-                  scopeItems={scopeItemsForResourceTree}
-                  selectedRowId={selectedResourceRowId}
                   canViewPrices={canViewPrices}
-                  economicsByResourceId={usedResourceEconomics}
-                  canCreateBudgetFromTechnicalProposal={Boolean(canViewPrices && canEditBudgetPrices && technicalProposalId && !linkedBudgetDetail && !budgetContextLoading)}
-                  canApplyPriceActions={Boolean(canViewPrices && canEditBudgetPrices && linkedBudgetDetail?.presupuesto.estado === "BORRADOR" && !budgetContextLoading)}
+                  budgetDetail={linkedBudgetDetail}
+                  busy={budgetContextLoading}
+                  canCreateBudgetFromTechnicalProposal={Boolean(canEditBudgetPrices && technicalProposalId && !linkedBudgetDetail && !budgetContextLoading)}
+                  canApplyMargins={Boolean(canEditBudgetPrices && linkedBudgetDetail?.presupuesto.estado === "BORRADOR" && !budgetContextLoading)}
                   onCreateBudgetFromTechnicalProposal={handleCreateBudgetFromTechnicalProposal}
-                  onApplyPriceAction={handleApplyUsedResourcePriceAction}
-                  onSelectResource={selectUsedResourceForDetail}
-                  onReuseResource={reuseUsedResource}
+                  onApplyMarginByType={handleApplyMarginByType}
                 />
-              </div>
-            )}
+              ) : (
+                <TechnicalProposalResourceCatalogPanel
+                  resources={resourceCatalog}
+                  selectedResourceId={displayedResource?.id ?? null}
+                  canAddResource={isEditingProposalDocument}
+                  canCreateResource={canCreateResource}
+                  canViewPrices={canViewPrices}
+                  targetLabel={`${selectedResourceTargetItem()?.number ?? "-"} ${selectedResourceTargetItem()?.title ?? ""}`.trim()}
+                  onInspectResource={(resource) => setActiveMasterResource(resource)}
+                  onAddResource={handleAddCatalogResource}
+                  onCreateResource={openCreateResourceFromTechnicalProposal}
+                />
+              )}
+            </div>
           </aside>
         </div>
+
+        {scopeContextMenu
+          ? (() => {
+              const target = contextScopeItem();
+              return (
+                <div
+                  className="context-menu open"
+                  style={{ left: scopeContextMenu.x, top: scopeContextMenu.y }}
+                  onClick={(event) => event.stopPropagation()}
+                  onContextMenu={(event) => event.preventDefault()}
+                >
+                  <div>
+                    <div className="ctx-label truncate">Bloque documental</div>
+                    <div className="truncate font-semibold text-stone-800">{target ? `${target.number}. ${target.title}` : "Documento"}</div>
+                  </div>
+                  <div className="context-sep" />
+                  <div>
+                    <button type="button" onClick={() => runScopeContextAction("group")} disabled={!isEditingProposalDocument}>Insertar titulo</button>
+                    <button type="button" onClick={() => runScopeContextAction("subgroup")} disabled={!isEditingProposalDocument}>Insertar subtitulo</button>
+                    <button type="button" onClick={() => runScopeContextAction("activity")} disabled={!isEditingProposalDocument}>Agregar actividad</button>
+                  </div>
+                  <div className="context-sep" />
+                  <div>
+                    <button type="button" onClick={() => runScopeContextAction("outdent")} disabled={!isEditingProposalDocument || !target}>Reducir nivel</button>
+                    <button type="button" onClick={() => runScopeContextAction("indent")} disabled={!isEditingProposalDocument || !target}>Aumentar nivel</button>
+                    <button type="button" onClick={() => runScopeContextAction("up")} disabled={!isEditingProposalDocument || !target}>Mover arriba</button>
+                    <button type="button" onClick={() => runScopeContextAction("down")} disabled={!isEditingProposalDocument || !target}>Mover abajo</button>
+                    <button type="button" onClick={() => runScopeContextAction("duplicate")} disabled={!isEditingProposalDocument || !target}>Duplicar bloque</button>
+                    <button type="button" onClick={() => runScopeContextAction("delete")} className="danger" disabled={!isEditingProposalDocument || !target}>Eliminar bloque</button>
+                  </div>
+                  <div className="context-sep" />
+                  <div>
+                    <div className="ctx-label">Agregar recurso</div>
+                    <div>
+                      {RESOURCE_CATEGORIES.map((category) => (
+                        <button
+                          key={category.key}
+                          type="button"
+                          onClick={() => runScopeResourceContextAction(category.key)}
+                          disabled={!isEditingProposalDocument || !target}
+                          title={category.label}
+                        >
+                          {category.label}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+              );
+            })()
+          : null}
 
         <TechnicalProposalQuickEntryModal
           open={quickEntryOpen}
           scopeItems={draft.scope_items}
           recursos={resourceCatalog}
           defaultScopeItemId={selectedActivity?.id ?? draft.scope_items.find((item) => item.kind === "activity")?.id ?? ""}
-          canViewPrices={resourceInspectorPermissions.canViewPrices}
+          canViewPrices={canViewPrices}
           onClose={() => setQuickEntryOpen(false)}
           onApply={applyQuickEntry}
         />

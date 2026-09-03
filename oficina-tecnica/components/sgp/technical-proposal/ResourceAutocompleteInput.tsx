@@ -10,6 +10,7 @@ type ResourceAutocompleteInputProps = {
   resources: Recurso[];
   placeholder?: string;
   className?: string;
+  autoFocus?: boolean;
   usedResourceLookup?: Map<string, { count: number; activityNumbers: string[] }>;
   canViewPrices?: boolean;
   onTextChange: (value: string) => void;
@@ -46,6 +47,7 @@ export function ResourceAutocompleteInput({
   resources,
   placeholder = "Buscar o escribir recurso",
   className,
+  autoFocus = true,
   usedResourceLookup,
   canViewPrices = true,
   onTextChange,
@@ -70,6 +72,7 @@ export function ResourceAutocompleteInput({
   }, [query, resources]);
 
   useEffect(() => {
+    if (!autoFocus) return;
     window.requestAnimationFrame(() => {
       const input = inputRef.current;
       if (!input) return;
@@ -79,7 +82,7 @@ export function ResourceAutocompleteInput({
       setDropdownRect({ left: rect.left, top: rect.bottom + 4, width: rect.width });
       setOpen(true);
     });
-  }, []);
+  }, [autoFocus]);
 
   useEffect(() => {
     if (!open) return;
@@ -207,7 +210,11 @@ export function ResourceAutocompleteInput({
             cancelClose();
           }}
           className="fixed z-[9999] max-h-64 overflow-y-auto rounded-lg border border-stone-200 bg-white p-1 shadow-xl"
-          style={{ left: dropdownRect.left, top: dropdownRect.top, width: dropdownRect.width }}
+          style={{
+            left: Math.max(8, Math.min(dropdownRect.left, window.innerWidth - Math.min(360, window.innerWidth - 16) - 8)),
+            top: dropdownRect.top,
+            width: Math.min(Math.max(dropdownRect.width, 300), window.innerWidth - 16),
+          }}
         >
           {suggestions.length === 0 ? (
             <div className="px-2 py-2 text-[11px] font-semibold text-stone-400">Sin recursos encontrados</div>
