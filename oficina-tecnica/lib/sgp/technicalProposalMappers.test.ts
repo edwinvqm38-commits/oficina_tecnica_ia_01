@@ -72,6 +72,9 @@ function buildDraft(propuestaTecnicaId?: string | null): TechnicalProposalDraftL
     ],
     general_images: [],
     activity_images: [],
+    enabled_resource_tables: {
+      "11111111-1111-4111-8111-111111111111": ["materiales"],
+    },
     updated_at: "2026-08-27T00:00:00.000Z",
   };
 }
@@ -92,7 +95,13 @@ describe("technical proposal RPC payload", () => {
     assert.equal(Object.hasOwn(payload.items[0], "id"), false);
     assert.equal(Object.hasOwn(payload.resources[0], "id"), false);
     assert.equal(payload.items[0].client_key, "11111111-1111-4111-8111-111111111111");
+    assert.equal(payload.items[0].source_key, "11111111-1111-4111-8111-111111111111");
     assert.equal(payload.resources[0].client_item_key, "11111111-1111-4111-8111-111111111111");
+    assert.equal(payload.resources[0].source_key, "22222222-2222-4222-8222-222222222222");
+    assert.equal((payload.proposal.metadata as Record<string, unknown>).save_strategy, "rpc_identity_upsert");
+    assert.deepEqual((payload.proposal.metadata as Record<string, unknown>).enabled_resource_tables, {
+      "11111111-1111-4111-8111-111111111111": ["materiales"],
+    });
   });
 
   it("preserves complex structural order in sort_order and parent keys", () => {
@@ -149,5 +158,32 @@ describe("technical proposal RPC payload", () => {
         ["activity-b", "activity", "subgroup-b", 2, 4],
       ],
     );
+  });
+
+  it("persists image references without embedding binary data in metadata", () => {
+    const draft = buildDraft(null);
+    draft.general_images = [{
+      id: "image-local-1",
+      scope_item_id: null,
+      resource_id: null,
+      title: "Vista general",
+      relation_label: "Referencia general",
+      size: "2",
+      public_url: "https://drive.google.com/file/d/drive-file-123/view",
+      mime_type: "image/png",
+      file_size: 2048,
+      drive_file_id: "drive-file-123",
+      drive_folder_id: "drive-folder-123",
+      file_name: "vista.png",
+    }];
+
+    const payload = buildTechnicalProposalRpcPayload(draft, cotizacion);
+    const file = payload.files?.[0];
+
+    assert.equal(file?.public_url, "https://drive.google.com/file/d/drive-file-123/view");
+    assert.equal(file?.mime_type, "image/png");
+    assert.equal(file?.file_size, 2048);
+    assert.equal((file?.metadata as Record<string, unknown>).drive_file_id, "drive-file-123");
+    assert.equal(Object.hasOwn(file?.metadata as object, "data_url"), false);
   });
 });

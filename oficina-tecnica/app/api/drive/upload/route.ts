@@ -53,10 +53,32 @@ async function ensureEntityFolder(accessToken: string, entityType: DriveEntityTy
   return categoryFolder.id;
 }
 
+async function canUploadEntity(
+  authContext: Awaited<ReturnType<typeof requireApprovedUser>>,
+  entityType: DriveEntityType,
+): Promise<boolean> {
+  if (authContext.isAdmin) return true;
+  const moduleKeys = entityType === "technical_proposal"
+    ? ["technical_proposals", "cotizaciones"]
+    : entityType === "quotation"
+      ? ["cotizaciones"]
+      : entityType === "requirement"
+        ? ["requerimientos"]
+        : ["recursos"];
+  for (const moduleKey of moduleKeys) {
+    const { data, error } = await authContext.supabase.rpc("can_use_module", {
+      p_module: moduleKey,
+      p_action: "upload",
+    });
+    if (error) throw error;
+    if (data === true) return true;
+  }
+  return false;
+}
+
 export async function POST(request: NextRequest) {
   try {
-    const authContext = await requireApprovedUser(request, { moduleKey: "recursos", action: "upload" });
-    assertRateLimit(`drive-upload:${authContext.userId}`, { limit: 30, windowMs: 10 * 60_000, label: "subida de archivos" });
+    const authContext = await requireApprovedUser(request);
     const form = await request.formData();
     const file = form.get("file");
     const entityTypeRaw = String(form.get("entityType") ?? "resource");
@@ -75,6 +97,11 @@ export async function POST(request: NextRequest) {
     if (!isDriveFileCategory(categoryRaw)) {
       return NextResponse.json({ error: "Categoría de archivo Drive no soportada." }, { status: 400 });
     }
+
+    if (!(await canUploadEntity(authContext, entityTypeRaw))) {
+      return NextResponse.json({ error: "No tienes permiso para subir archivos en este módulo." }, { status: 403 });
+    }
+    assertRateLimit(`drive-upload:${authContext.userId}`, { limit: 30, windowMs: 10 * 60_000, label: "subida de archivos" });
 
     const accessToken = await getGoogleDriveAccessToken();
     const entityCode = safeDriveName(entityCodeRaw);

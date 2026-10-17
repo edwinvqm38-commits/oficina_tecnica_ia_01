@@ -1,3 +1,5 @@
+import { buildTechnicalProposalHierarchy } from "@/lib/sgp/technicalProposalHierarchy";
+
 export type TechnicalProposalUsedResourceLike = {
   rowId: string;
   scopeItemId: string;
@@ -87,6 +89,26 @@ export type TechnicalProposalResourceEconomicsInput = {
     | null;
 };
 
+export type TechnicalProposalEconomicVisibility = {
+  showEconomicPanel: boolean;
+  showPrices: boolean;
+  showMargins: boolean;
+  showEconomicSupport: boolean;
+};
+
+export function resolveTechnicalProposalEconomicVisibility(input: {
+  canViewPrices: boolean;
+  canViewMargin: boolean;
+  canViewEconomicSupport: boolean;
+}): TechnicalProposalEconomicVisibility {
+  return {
+    showEconomicPanel: input.canViewPrices,
+    showPrices: input.canViewPrices,
+    showMargins: input.canViewPrices && input.canViewMargin,
+    showEconomicSupport: input.canViewPrices && input.canViewEconomicSupport,
+  };
+}
+
 export function economicFieldsVisible(canViewPrices: boolean): boolean {
   return canViewPrices;
 }
@@ -150,17 +172,17 @@ export function buildTechnicalProposalResourceTree<TResource extends { scopeItem
     resourcesByScopeId.set(resource.scopeItemId, [...(resourcesByScopeId.get(resource.scopeItemId) ?? []), resource]);
   }
 
+  const hierarchy = buildTechnicalProposalHierarchy(scopeItems);
   const roots: Array<TechnicalProposalResourceTreeNode<TResource>> = [];
-  const stack: Array<TechnicalProposalResourceTreeNode<TResource>> = [];
+  const nodeById = new Map<string, TechnicalProposalResourceTreeNode<TResource>>();
 
-  for (const item of scopeItems) {
-    while (stack.length > 0 && stack[stack.length - 1].level >= item.level) {
-      stack.pop();
-    }
-
-    const parent = stack[stack.length - 1] ?? null;
+  scopeItems.forEach((item, index) => {
+    const hierarchyItem = hierarchy[index];
+    const parent = hierarchyItem.parentId ? nodeById.get(hierarchyItem.parentId) ?? null : null;
     const node: TechnicalProposalResourceTreeNode<TResource> = {
       ...item,
+      level: hierarchyItem.level,
+      number: hierarchyItem.number,
       parentId: parent?.id ?? null,
       resources: resourcesByScopeId.get(item.id) ?? [],
       children: [],
@@ -171,8 +193,8 @@ export function buildTechnicalProposalResourceTree<TResource extends { scopeItem
     } else {
       roots.push(node);
     }
-    stack.push(node);
-  }
+    nodeById.set(node.id, node);
+  });
 
   return roots;
 }

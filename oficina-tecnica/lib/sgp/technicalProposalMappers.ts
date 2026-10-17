@@ -1,4 +1,5 @@
 import type { Cotizacion } from "@/lib/sgp/demoData";
+import { buildTechnicalProposalHierarchy } from "@/lib/sgp/technicalProposalHierarchy";
 import type { SaveFullTechnicalProposalPayload } from "@/lib/sgp/technicalProposalsRepository";
 
 type TechnicalProposalScopeItemLike = {
@@ -42,6 +43,13 @@ type TechnicalProposalImageLike = {
   title: string;
   relation_label: string;
   size: "1" | "2" | "4";
+  storage_path?: string | null;
+  public_url?: string | null;
+  mime_type?: string | null;
+  file_size?: number | null;
+  drive_file_id?: string | null;
+  drive_folder_id?: string | null;
+  file_name?: string | null;
 };
 
 export type TechnicalProposalDraftLike = {
@@ -66,6 +74,12 @@ export type TechnicalProposalDraftLike = {
   resources: TechnicalProposalResourceLike[];
   general_images: TechnicalProposalImageLike[];
   activity_images: TechnicalProposalImageLike[];
+  enabled_resource_tables?: Record<string, string[]>;
+  economics?: {
+    margin_percent_by_type: Record<string, number>;
+    base_prices_locked: boolean;
+    subtotal_visibility: Record<string, boolean>;
+  };
   updated_at: string;
 };
 
@@ -98,32 +112,20 @@ export function normalizeTechnicalProposalItemClientKey(item: Pick<TechnicalProp
 }
 
 export function sortTechnicalProposalItemsForRpc(items: TechnicalProposalScopeItemLike[]): ScopeItemWithOrder[] {
-  const stackByLevel = new Map<number, ScopeItemWithOrder>();
+  const hierarchy = buildTechnicalProposalHierarchy(items);
+  const clientKeyById = new Map(items.map((item) => [item.id, normalizeTechnicalProposalItemClientKey(item)]));
 
   const prepared = items.map((item, originalIndex) => {
-    const normalizedLevel = Math.max(0, Math.floor(toFiniteNumber(item.level, 0)));
-    let parentClientKey: string | null = null;
-
-    for (let level = normalizedLevel - 1; level >= 0; level -= 1) {
-      const parent = stackByLevel.get(level);
-      if (parent) {
-        parentClientKey = parent.clientKey;
-        break;
-      }
-    }
+    const hierarchyItem = hierarchy[originalIndex];
 
     const preparedItem: ScopeItemWithOrder = {
       ...item,
-      level: normalizedLevel,
+      level: hierarchyItem.level,
+      number: hierarchyItem.number,
       originalIndex,
-      clientKey: normalizeTechnicalProposalItemClientKey(item),
-      parentClientKey,
+      clientKey: clientKeyById.get(item.id) ?? normalizeTechnicalProposalItemClientKey(item),
+      parentClientKey: hierarchyItem.parentId ? clientKeyById.get(hierarchyItem.parentId) ?? null : null,
     };
-
-    stackByLevel.set(normalizedLevel, preparedItem);
-    Array.from(stackByLevel.keys()).forEach((level) => {
-      if (level > normalizedLevel) stackByLevel.delete(level);
-    });
 
     return preparedItem;
   });
@@ -161,7 +163,7 @@ export function buildTechnicalProposalRpcPayload(
     metadata: {
       ...draft.metadata,
       app_source: "sgp-lite",
-      save_strategy: "rpc_full_replace",
+      save_strategy: "rpc_identity_upsert",
       local_updated_at: draft.updated_at,
       cotizacion_snapshot: {
         codigo: cotizacion.codigo,
@@ -173,11 +175,14 @@ export function buildTechnicalProposalRpcPayload(
         general_images_count: draft.general_images.length,
         activity_images_count: draft.activity_images.length,
       },
+      economics: draft.economics ?? {},
+      enabled_resource_tables: draft.enabled_resource_tables ?? {},
     },
   };
 
   const items = orderedItems.map((item, index) => ({
     client_key: item.clientKey,
+    source_key: item.clientKey,
     parent_client_key: item.parentClientKey,
     item_type: item.kind,
     item_number: item.number,
@@ -199,6 +204,7 @@ export function buildTechnicalProposalRpcPayload(
     .filter((resource) => itemKeys.has(resource.scope_item_id))
     .map((resource, index) => ({
       client_item_key: resource.scope_item_id,
+      source_key: resource.id,
       resource_id: toNullableUuid(resource.recurso_id),
       resource_category: resource.resource_category,
       codigo_recurso: resource.codigo_recurso || null,
@@ -227,11 +233,17 @@ export function buildTechnicalProposalRpcPayload(
     client_item_key: image.scope_item_id ?? undefined,
     title: image.title || null,
     relation_label: image.relation_label || null,
+    storage_path: image.storage_path || null,
+    public_url: image.public_url || null,
+    mime_type: image.mime_type || null,
+    file_size: image.file_size ?? null,
     metadata: {
       local_id: image.id,
       resource_id: image.resource_id,
       size: image.size,
-      omitted_data_url: true,
+      drive_file_id: image.drive_file_id || null,
+      drive_folder_id: image.drive_folder_id || null,
+      file_name: image.file_name || null,
     },
   }));
 

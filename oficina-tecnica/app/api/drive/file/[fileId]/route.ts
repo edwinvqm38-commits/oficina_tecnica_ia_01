@@ -16,7 +16,8 @@ function isSafeDriveFileId(value: string): boolean {
 
 type InternalDriveFileMatch =
   | { source: "quotation_documents"; moduleKeys: Array<"cotizaciones" | "requerimientos"> }
-  | { source: "recursos"; moduleKeys: ["recursos"] };
+  | { source: "recursos"; moduleKeys: ["recursos"] }
+  | { source: "technical_proposal_files"; moduleKeys: Array<"technical_proposals" | "cotizaciones"> };
 
 type QuotationDocumentRecord = {
   id: string;
@@ -36,7 +37,7 @@ function authErrorResponse(error: unknown): NextResponse {
   return NextResponse.json({ error: message }, { status });
 }
 
-async function canViewModule(authContext: ApiUserContext, moduleKey: "cotizaciones" | "requerimientos" | "recursos"): Promise<boolean> {
+async function canViewModule(authContext: ApiUserContext, moduleKey: "cotizaciones" | "requerimientos" | "recursos" | "technical_proposals"): Promise<boolean> {
   if (authContext.isAdmin) return true;
   const { data, error } = await authContext.supabase.rpc("can_use_module", {
     p_module: moduleKey,
@@ -44,6 +45,22 @@ async function canViewModule(authContext: ApiUserContext, moduleKey: "cotizacion
   });
   if (error) throw error;
   return data === true;
+}
+
+async function findTechnicalProposalFile(authContext: ApiUserContext, fileId: string): Promise<InternalDriveFileMatch | null> {
+  const canViewTechnicalProposals = await canViewModule(authContext, "technical_proposals");
+  const canViewCotizaciones = await canViewModule(authContext, "cotizaciones");
+  if (!canViewTechnicalProposals && !canViewCotizaciones) return null;
+
+  const { data, error } = await authContext.supabase
+    .from("technical_proposal_files")
+    .select("id")
+    .contains("metadata", { drive_file_id: fileId })
+    .limit(1)
+    .maybeSingle();
+  if (error) throw error;
+  if (!data) return null;
+  return { source: "technical_proposal_files", moduleKeys: ["technical_proposals", "cotizaciones"] };
 }
 
 function driveFileIdFromUrl(value: string): string {
@@ -120,7 +137,9 @@ async function findResourceFile(authContext: ApiUserContext, fileId: string): Pr
 }
 
 async function findAuthorizedInternalFile(authContext: ApiUserContext, fileId: string): Promise<InternalDriveFileMatch | null> {
-  return (await findQuotationDocument(authContext, fileId)) ?? (await findResourceFile(authContext, fileId));
+  return (await findQuotationDocument(authContext, fileId))
+    ?? (await findTechnicalProposalFile(authContext, fileId))
+    ?? (await findResourceFile(authContext, fileId));
 }
 
 export async function GET(request: NextRequest, context: RouteContext) {

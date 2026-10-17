@@ -7,13 +7,14 @@ import { DataTable, type DataTableViewState } from "@/components/sgp/DataTable";
 import { QuotationWorkspaceModal } from "@/components/sgp/quotations/QuotationWorkspaceModal";
 import { ResourceFormModal } from "@/components/sgp/resources/ResourceFormModal";
 import { PageHeader } from "@/components/shell/PageHeader";
-import { Badge, Button } from "@/components/ui";
+import { Button, Input, Select } from "@/components/ui";
 import type { EditableRequirementItem } from "@/components/sgp/RequirementItemsGrid";
 import type { ObservationUser } from "@/components/sgp/RequirementObservationPanel";
 import { StatusBadge } from "@/components/sgp/StatusBadge";
 import { useApprovedUsersState } from "@/lib/presence/useApprovedUsers";
 import { getModulePermissions, type ModulePermissions } from "@/lib/sgp/modulePermissionsRepository";
 import { resolveSensitivePermission, resolveViewGroupPermission } from "@/lib/sgp/modulePermissionGuards";
+import { MODULE_PERMISSION_CATALOG_BY_KEY } from "@/lib/sgp/modulePermissionsCatalog";
 import {
   demoData,
   type CatalogCodigoCliente,
@@ -80,6 +81,17 @@ const DEFAULT_PAGE_SIZE = 12;
 const COTIZACIONES_UI_STATE_KEY = "opsia:cotizaciones:ui-state";
 const COTIZACION_CODE_PREFIX = "COT-EKA";
 const ROWS_PER_PAGE_OPTIONS = [12, 20, 40, 60, 80, 100] as const;
+const RECOMMENDED_QUOTATION_COLUMNS = [
+  "codigo",
+  "cliente",
+  "unidad_trabajo",
+  "proyecto",
+  "tipo_servicio",
+  "estado",
+  "responsable_tecnico",
+  "fecha_entrega",
+  "monto",
+] as const;
 const RequirementWorkspaceModal = dynamic(
   () => import("@/components/sgp/RequirementWorkspaceModal").then((mod) => mod.RequirementWorkspaceModal),
   { ssr: false },
@@ -94,21 +106,30 @@ type CotizacionesPageProps = {
   embeddedWorkspace?: CotizacionesEmbeddedWorkspace | null;
 };
 
-const categoricalBadgePalette = [
-  "bg-sky-100 text-sky-700",
-  "bg-emerald-100 text-emerald-700",
-  "bg-amber-100 text-amber-700",
-  "bg-violet-100 text-violet-700",
-  "bg-rose-100 text-rose-700",
-  "bg-cyan-100 text-cyan-700",
-  "bg-orange-100 text-orange-700",
-  "bg-teal-100 text-teal-700",
-];
-
 function uniqueSortedOptions(values: Array<string | null | undefined>): string[] {
   return Array.from(new Set(values.map((value) => String(value ?? "").trim()).filter(Boolean))).sort((a, b) =>
     a.localeCompare(b, "es"),
   );
+}
+
+function normalizeQuotationSearch(value: string): string {
+  return value
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function isQuotationDueWithin(fechaEntrega: string, days: number): boolean {
+  if (!fechaEntrega) return false;
+  const due = new Date(`${fechaEntrega}T00:00:00`);
+  if (Number.isNaN(due.getTime())) return false;
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  const limit = new Date(today);
+  limit.setDate(limit.getDate() + days);
+  return due >= today && due <= limit;
 }
 
 function rowsFromCatalog<T extends CatalogRecord>(
@@ -155,47 +176,8 @@ const CONSERVATIVE_COTIZACION_VIEW_GROUPS: CotizacionViewGroupPermissions = {
   quotation_actions: false,
 };
 
-const COTIZACION_BUSINESS_FIELD_ALIAS_MAP: Record<string, string[]> = {
-  codigo: ["codigo"],
-  proyecto: ["proyecto"],
-  cliente: ["cliente"],
-  unidad_trabajo: ["unidad_trabajo", "unidad_trabajo_nombre", "unidadTrabajo"],
-  oc: ["oc", "oc_os_recurso", "cotizacionOc"],
-  monto: ["monto", "total_rq", "costo", "precio_unitario", "costo_total_presupuestado"],
-  moneda_cotizacion: ["moneda_cotizacion", "moneda"],
-};
-
-function normalizeBusinessFieldKey(value: string): string {
-  return value.trim().toLowerCase();
-}
-
 function normalizeTipoRecurso(value: string): string {
   return value.trim().toLowerCase();
-}
-
-function buildHiddenBusinessFields(options: {
-  visibleColumns: Array<{ key: string }>;
-  canViewPrices: boolean;
-}): string[] {
-  const visibleColumnKeys = new Set(options.visibleColumns.map((column) => normalizeBusinessFieldKey(String(column.key))));
-  const hidden = new Set<string>();
-
-  Object.keys(COTIZACION_BUSINESS_FIELD_ALIAS_MAP).forEach((businessFieldKey) => {
-    const normalized = normalizeBusinessFieldKey(businessFieldKey);
-    if (!visibleColumnKeys.has(normalized)) {
-      hidden.add(normalized);
-      COTIZACION_BUSINESS_FIELD_ALIAS_MAP[businessFieldKey].forEach((alias) => hidden.add(normalizeBusinessFieldKey(alias)));
-    }
-  });
-
-  if (!options.canViewPrices) {
-    hidden.add("monto");
-    hidden.add("moneda_cotizacion");
-    COTIZACION_BUSINESS_FIELD_ALIAS_MAP.monto.forEach((alias) => hidden.add(normalizeBusinessFieldKey(alias)));
-    COTIZACION_BUSINESS_FIELD_ALIAS_MAP.moneda_cotizacion.forEach((alias) => hidden.add(normalizeBusinessFieldKey(alias)));
-  }
-
-  return Array.from(hidden);
 }
 
 function readCotizacionSensitivePermissions(metadata: Record<string, unknown> | undefined): CotizacionSensitivePermissionFlags {
@@ -264,20 +246,6 @@ function safeUuid(): string {
     // Fallback for insecure contexts (HTTP over LAN) where randomUUID may throw.
   }
   return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
-}
-
-function hashLabel(value: string): number {
-  let hash = 0;
-  for (let i = 0; i < value.length; i += 1) {
-    hash = (hash * 31 + value.charCodeAt(i)) >>> 0;
-  }
-  return hash;
-}
-
-function CategoricalBadge({ value }: { value: string }) {
-  const safeValue = value?.trim() || "-";
-  const style = categoricalBadgePalette[hashLabel(safeValue) % categoricalBadgePalette.length];
-  return <span className={`inline-flex rounded-full px-2 py-0.5 text-xs font-medium ${style}`}>{safeValue}</span>;
 }
 
 function normalizeCotizacionDraft(row: Cotizacion): Cotizacion {
@@ -619,7 +587,12 @@ export default function CotizacionesPage({ embeddedWorkspace = null }: Cotizacio
   const [tableViewState, setTableViewState] = useState<DataTableViewState>(
     () => initialUiState.tableView ?? { columnFilters: {}, sortKey: null, sortDirection: null },
   );
-  const [filteredRowsCount, setFilteredRowsCount] = useState<number | null>(null);
+  const [quotationSearch, setQuotationSearch] = useState("");
+  const [quotationStatusFilter, setQuotationStatusFilter] = useState("");
+  const [quotationClientFilter, setQuotationClientFilter] = useState("");
+  const [quotationDueFilter, setQuotationDueFilter] = useState<"" | "overdue" | "7" | "30">("");
+  const [personalColumnKeys, setPersonalColumnKeys] = useState<string[] | null>(null);
+  const [columnsMenuOpen, setColumnsMenuOpen] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [draft, setDraft] = useState<Cotizacion | null>(null);
   const [isQuotationSaving, setIsQuotationSaving] = useState(false);
@@ -632,7 +605,6 @@ export default function CotizacionesPage({ embeddedWorkspace = null }: Cotizacio
   const [adjudicationLoading, setAdjudicationLoading] = useState(false);
   const [adjudicationError, setAdjudicationError] = useState<string | null>(null);
   const [adjudicationMessage, setAdjudicationMessage] = useState<string | null>(null);
-  const [pendingNewQuotationConfirm, setPendingNewQuotationConfirm] = useState(false);
   const [selectedRequirementId, setSelectedRequirementId] = useState<string | null>(null);
   const [requirementDraft, setRequirementDraft] = useState<Requerimiento | null>(null);
   const [requirementItems, setRequirementItems] = useState<EditableRequirementItem[]>([]);
@@ -774,7 +746,49 @@ export default function CotizacionesPage({ embeddedWorkspace = null }: Cotizacio
     };
   }, []);
 
-  const totalFilteredRows = filteredRowsCount ?? cotizaciones.length;
+  const filteredCotizaciones = useMemo(() => {
+    const query = normalizeQuotationSearch(quotationSearch);
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+
+    return cotizaciones.filter((row) => {
+      const searchable = normalizeQuotationSearch(
+        [row.codigo, row.cliente, row.proyecto, row.tipo_servicio, row.estado, row.estado_propuesta, row.responsable_tecnico]
+          .filter(Boolean)
+          .join(" "),
+      );
+      if (query && !searchable.includes(query)) return false;
+      if (quotationStatusFilter && row.estado !== quotationStatusFilter) return false;
+      if (quotationClientFilter && row.cliente !== quotationClientFilter) return false;
+      if (quotationDueFilter) {
+        const due = row.fecha_entrega ? new Date(`${row.fecha_entrega}T00:00:00`) : null;
+        if (!due || Number.isNaN(due.getTime())) return false;
+        if (quotationDueFilter === "overdue" && due >= today) return false;
+        if (quotationDueFilter === "7" && !isQuotationDueWithin(row.fecha_entrega, 7)) return false;
+        if (quotationDueFilter === "30" && !isQuotationDueWithin(row.fecha_entrega, 30)) return false;
+      }
+      return true;
+    });
+  }, [cotizaciones, quotationClientFilter, quotationDueFilter, quotationSearch, quotationStatusFilter]);
+
+  const quotationMetrics = useMemo(() => {
+    const preparation = new Set(["Borrador", "En revisión", "Elaboración de cotización", "VB Gerencia", "Aprobada para envío"]);
+    const sent = new Set(["Enviada"]);
+    const awarded = new Set(["Ganada", "Adjudicado"]);
+    const closed = new Set(["Ganada", "Adjudicado", "Perdida / No adjudicada", "No adjudicado", "Cancelado", "No participa"]);
+    return {
+      total: cotizaciones.length,
+      preparation: cotizaciones.filter((row) => preparation.has(row.estado)).length,
+      sent: cotizaciones.filter((row) => sent.has(row.estado)).length,
+      awarded: cotizaciones.filter((row) => awarded.has(row.estado)).length,
+      dueSoon: cotizaciones.filter((row) => !closed.has(row.estado) && isQuotationDueWithin(row.fecha_entrega, 7)).length,
+    };
+  }, [cotizaciones]);
+
+  const hasQuotationFilters = Boolean(
+    quotationSearch || quotationStatusFilter || quotationClientFilter || quotationDueFilter,
+  );
+  const totalFilteredRows = filteredCotizaciones.length;
   const totalPages = Math.max(1, Math.ceil(totalFilteredRows / pageSize));
   const pageStartIndex = (page - 1) * pageSize;
 
@@ -967,7 +981,6 @@ export default function CotizacionesPage({ embeddedWorkspace = null }: Cotizacio
       ]);
       const { cotizaciones: cotizacionesResult, requerimientos: requerimientosResult } = result;
       setCotizaciones(cotizacionesResult.rows.map(normalizeCotizacionDraft));
-      setFilteredRowsCount(cotizacionesResult.rows.length);
       setRequerimientos(requerimientosResult.rows);
       setRecursos(recursosResult.rows);
       setDetalleItems([]);
@@ -1021,7 +1034,6 @@ export default function CotizacionesPage({ embeddedWorkspace = null }: Cotizacio
         const warningMessage = result.warning;
 
         setCotizaciones(cotizacionesResult.rows.map(normalizeCotizacionDraft));
-        setFilteredRowsCount(cotizacionesResult.rows.length);
         setRequerimientos(requerimientosResult.rows);
         setRecursos(recursosResult.rows);
         setDataSource(source);
@@ -1067,7 +1079,6 @@ export default function CotizacionesPage({ embeddedWorkspace = null }: Cotizacio
             : "No se pudo cargar cotizaciones desde Supabase. Se usa data demo local.";
 
         setCotizaciones(fallbackCotizaciones);
-        setFilteredRowsCount(fallbackCotizaciones.length);
         setRequerimientos(fallbackRequerimientos);
         setDetalleItems(fallbackItems);
         setDataSource("demo");
@@ -1099,50 +1110,102 @@ export default function CotizacionesPage({ embeddedWorkspace = null }: Cotizacio
 
   const cotizacionesColumns = useMemo(
     () => [
-      { key: "codigo", title: "Cotización" },
-      { key: "proyecto", title: "Proyecto" },
-      { key: "tipo_servicio", title: "Tipo de servicio", render: (row: Cotizacion) => <CategoricalBadge value={row.tipo_servicio} /> },
-      { key: "estado_propuesta", title: "Estado propuesta", render: (row: Cotizacion) => <CategoricalBadge value={row.estado_propuesta} /> },
-      { key: "cliente", title: "Cliente" },
-      { key: "unidad_trabajo", title: "Unidad de Trabajo" },
-      { key: "solicitante", title: "Solicitante" },
-      { key: "prioridad", title: "Prioridad" },
-      { key: "responsable_tecnico", title: "Resp. Técnico" },
-      { key: "responsable_economico", title: "Resp. Económico" },
-      { key: "avance", title: "Avance", align: "right" as const, render: (row: Cotizacion) => `${Number(row.avance ?? 0).toFixed(2)}%` },
-      { key: "fecha_registro", title: "Fecha registro", render: (row: Cotizacion) => formatDate(row.fecha_registro) || "-" },
-      { key: "fecha_invitacion", title: "Fecha invitación", render: (row: Cotizacion) => formatDate(row.fecha_invitacion) || "-" },
-      { key: "fecha_confirmacion", title: "Fecha confirmación", render: (row: Cotizacion) => formatDate(row.fecha_confirmacion) || "-" },
-      { key: "fecha_visita_tecnica", title: "Fecha visita téc.", render: (row: Cotizacion) => formatDate(row.fecha_visita_tecnica) || "-" },
-      { key: "fecha_consultas", title: "Fecha consultas", render: (row: Cotizacion) => formatDate(row.fecha_consultas) || "-" },
-      { key: "fecha_abs_consultas", title: "Fecha abs. consultas", render: (row: Cotizacion) => formatDate(row.fecha_abs_consultas) || "-" },
-      { key: "fecha_entrega", title: "Fecha entrega", render: (row: Cotizacion) => formatDate(row.fecha_entrega) || "-" },
-      { key: "fecha_entregada", title: "Fecha entregada", render: (row: Cotizacion) => formatDate(row.fecha_entregada) || "-" },
+      {
+        key: "codigo",
+        title: "Código",
+        minWidth: 128,
+        render: (row: Cotizacion) => <span className="quotation-code-cell">{row.codigo}</span>,
+      },
+      {
+        key: "cliente",
+        title: "Cliente",
+        minWidth: 180,
+        render: (row: Cotizacion) => row.cliente || "-",
+      },
+      { key: "unidad_trabajo", title: "Unidad de trabajo", minWidth: 175, render: (row: Cotizacion) => row.unidad_trabajo || "-" },
+      { key: "proyecto", title: "Proyecto", minWidth: 240, render: (row: Cotizacion) => row.proyecto || "-" },
+      {
+        key: "tipo_servicio",
+        title: "Servicio",
+        minWidth: 175,
+        render: (row: Cotizacion) => (
+          <span className="quotation-service-cell" title={row.tipo_servicio || undefined}>
+            {row.tipo_servicio || "-"}
+          </span>
+        ),
+      },
+      { key: "estado_propuesta", title: "Estado propuesta", minWidth: 145, render: (row: Cotizacion) => row.estado_propuesta || "-" },
+      { key: "solicitante", title: "Solicitante", minWidth: 150, render: (row: Cotizacion) => row.solicitante || "-" },
+      { key: "prioridad", title: "Prioridad", minWidth: 95, render: (row: Cotizacion) => row.prioridad || "-" },
+      { key: "estado", title: "Estado", minWidth: 150, render: (row: Cotizacion) => <StatusBadge status={row.estado} /> },
+      {
+        key: "responsable_tecnico",
+        title: "Resp. técnico",
+        minWidth: 160,
+        render: (row: Cotizacion) => row.responsable_tecnico || "Sin asignar",
+      },
+      { key: "responsable_economico", title: "Resp. económico", minWidth: 160, render: (row: Cotizacion) => row.responsable_economico || "Sin asignar" },
+      { key: "avance", title: "Avance", minWidth: 90, align: "right" as const, render: (row: Cotizacion) => `${Number(row.avance || 0).toFixed(2)}%` },
+      { key: "fecha_registro", title: "Fecha registro", minWidth: 115, render: (row: Cotizacion) => formatDate(row.fecha_registro) || "-" },
+      { key: "fecha_invitacion", title: "Fecha invitación", minWidth: 115, render: (row: Cotizacion) => formatDate(row.fecha_invitacion) || "-" },
+      { key: "fecha_confirmacion", title: "Fecha confirmación", minWidth: 125, render: (row: Cotizacion) => formatDate(row.fecha_confirmacion) || "-" },
+      { key: "fecha_visita_tecnica", title: "Visita técnica", minWidth: 115, render: (row: Cotizacion) => formatDate(row.fecha_visita_tecnica) || "-" },
+      { key: "fecha_consultas", title: "Consultas", minWidth: 105, render: (row: Cotizacion) => formatDate(row.fecha_consultas) || "-" },
+      { key: "fecha_abs_consultas", title: "Abs. consultas", minWidth: 115, render: (row: Cotizacion) => formatDate(row.fecha_abs_consultas) || "-" },
+      {
+        key: "fecha_entrega",
+        title: "Vencimiento",
+        minWidth: 112,
+        render: (row: Cotizacion) => (
+          <span className={isQuotationDueWithin(row.fecha_entrega, 7) ? "quotation-due quotation-due--soon" : "quotation-due"}>
+            {formatDate(row.fecha_entrega) || "Sin fecha"}
+          </span>
+        ),
+      },
+      { key: "fecha_entregada", title: "Fecha entregada", minWidth: 120, render: (row: Cotizacion) => formatDate(row.fecha_entregada) || "-" },
       {
         key: "monto",
-        title: "Monto",
+        title: "Monto ofertado",
+        minWidth: 130,
         align: "right" as const,
         render: (row: Cotizacion) => `${row.moneda_cotizacion} ${formatCurrencyNumber(row.monto)}`,
       },
-      { key: "moneda_cotizacion", title: "Moneda" },
-      { key: "estado", title: "Estado oferta", render: (row: Cotizacion) => <StatusBadge status={row.estado} /> },
-      { key: "oc", title: "OC" },
+      { key: "moneda_cotizacion", title: "Moneda", minWidth: 85, render: (row: Cotizacion) => row.moneda_cotizacion },
+      { key: "oc", title: "OC", minWidth: 125, render: (row: Cotizacion) => row.oc || "-" },
+      {
+        key: "actions",
+        title: "",
+        minWidth: 54,
+        align: "center" as const,
+        sortable: false,
+        filterable: false,
+        render: () => <span className="quotation-row-open" aria-hidden="true">›</span>,
+      },
     ],
     [],
   );
 
-  const isElevatedQuotationUser =
-    profile?.is_super_admin === true || profile?.role === "admin" || currentUserEmail === "edwin.qm@outlook.com";
-  const effectiveCanView = modulePermissions?.can_view ?? true;
-  const effectiveCanViewPrices = modulePermissions?.can_view_prices ?? isElevatedQuotationUser;
-  const effectiveCanViewSupplier = modulePermissions?.can_view_supplier ?? isElevatedQuotationUser;
-  const effectiveSensitiveFlags = readCotizacionSensitivePermissions(modulePermissions?.metadata);
+  const isElevatedQuotationUser = profile?.is_super_admin === true || profile?.role === "admin";
+  const effectiveCanView = isElevatedQuotationUser || (modulePermissions?.can_view ?? true);
+  const effectiveCanViewPrices = isElevatedQuotationUser || modulePermissions?.can_view_prices === true;
+  const effectiveCanViewSupplier =
+    dataSource === "demo" ||
+    isElevatedResourceUser ||
+    resolveSensitivePermission(resourceModulePermissions, "recursos", "can_view_supplier", false);
+  const configuredSensitiveFlags = readCotizacionSensitivePermissions(modulePermissions?.metadata);
+  const effectiveSensitiveFlags = isElevatedQuotationUser
+    ? { can_view_margin: true, can_view_economic_support: true, can_delete_associated_requirements: true }
+    : configuredSensitiveFlags;
   const viewGroupPermissions = useMemo(
-    () => readCotizacionViewGroupPermissions(modulePermissions, isElevatedQuotationUser),
+    () => isElevatedQuotationUser
+      ? DEFAULT_COTIZACION_VIEW_GROUPS
+      : readCotizacionViewGroupPermissions(modulePermissions, false),
     [isElevatedQuotationUser, modulePermissions],
   );
   const canViewQuotationMainTable = viewGroupPermissions.quotation_main_table;
   const canViewQuotationEconomicSummary = viewGroupPermissions.quotation_economic_summary;
+  const canAccessQuotationEconomicSummary =
+    isElevatedQuotationUser || (canViewQuotationEconomicSummary && effectiveCanViewPrices);
   const canViewQuotationRelatedRequirements = viewGroupPermissions.quotation_related_requirements;
   // In demo mode there are no real permission restrictions — always allow actions so
   // the "Nueva cotización" button renders for all users.
@@ -1153,37 +1216,58 @@ export default function CotizacionesPage({ embeddedWorkspace = null }: Cotizacio
     canOpenRequirementsFromQuotation &&
     (effectiveSensitiveFlags.can_delete_associated_requirements || isElevatedQuotationUser);
 
-  const visibleCotizacionesColumns = useMemo(() => {
-    const afterSensitiveRestrictions = cotizacionesColumns.filter((column) => {
-      if (!effectiveCanViewPrices && (column.key === "monto" || column.key === "moneda_cotizacion")) {
-        return false;
-      }
-      if (!effectiveCanViewSupplier && column.key === "proveedor") {
-        return false;
-      }
-      if (!effectiveSensitiveFlags.can_view_margin && column.key === "margen") {
-        return false;
-      }
-      if (!effectiveSensitiveFlags.can_view_economic_support && column.key === "sustento_economico") {
-        return false;
-      }
+  const quotationCatalogColumns = MODULE_PERMISSION_CATALOG_BY_KEY.cotizaciones.columns;
+  const authorizedQuotationColumnKeys = useMemo(() => {
+    const catalogKeys = quotationCatalogColumns.map((column) => column.key);
+    const configured = modulePermissions?.visible_columns ?? [];
+    const adminAllowed = isElevatedQuotationUser || !modulePermissions
+      ? new Set(catalogKeys)
+      : new Set(["codigo", ...configured]);
+    return catalogKeys.filter((key) => {
+      if (!adminAllowed.has(key)) return false;
+      if (!effectiveCanViewPrices && (key === "monto" || key === "moneda_cotizacion")) return false;
       return true;
     });
+  }, [effectiveCanViewPrices, isElevatedQuotationUser, modulePermissions, quotationCatalogColumns]);
+  const columnPreferenceStorageKey = `opsia:cotizaciones:columns:${currentUserId || currentUserEmail || "anonymous"}`;
 
-    const allowedColumns = new Set(modulePermissions?.visible_columns ?? []);
-    if (allowedColumns.size === 0) {
-      return afterSensitiveRestrictions;
+  useEffect(() => {
+    const timeoutId = window.setTimeout(() => {
+      try {
+        const saved = window.localStorage.getItem(columnPreferenceStorageKey);
+        const parsed = saved ? JSON.parse(saved) : null;
+        setPersonalColumnKeys(Array.isArray(parsed) ? parsed.filter((key): key is string => typeof key === "string") : null);
+      } catch {
+        setPersonalColumnKeys(null);
+      }
+    }, 0);
+    return () => window.clearTimeout(timeoutId);
+  }, [columnPreferenceStorageKey]);
+
+  const selectedQuotationColumnKeys = useMemo(() => {
+    const authorized = new Set(authorizedQuotationColumnKeys);
+    const recommended = RECOMMENDED_QUOTATION_COLUMNS.filter((key) => authorized.has(key));
+    const requested = personalColumnKeys ?? recommended;
+    const sanitized = requested.filter((key) => authorized.has(key));
+    if (authorized.has("codigo") && !sanitized.includes("codigo")) sanitized.unshift("codigo");
+    return sanitized.length > 0 ? sanitized : authorizedQuotationColumnKeys.slice(0, 1);
+  }, [authorizedQuotationColumnKeys, personalColumnKeys]);
+  const visibleCotizacionesColumns = useMemo(() => {
+    const selected = new Set(selectedQuotationColumnKeys);
+    return cotizacionesColumns.filter((column) => column.key === "actions" || selected.has(String(column.key)));
+  }, [cotizacionesColumns, selectedQuotationColumnKeys]);
+
+  function updatePersonalColumns(next: string[]) {
+    const authorized = new Set(authorizedQuotationColumnKeys);
+    const sanitized = next.filter((key) => authorized.has(key));
+    if (authorized.has("codigo") && !sanitized.includes("codigo")) sanitized.unshift("codigo");
+    setPersonalColumnKeys(sanitized);
+    try {
+      window.localStorage.setItem(columnPreferenceStorageKey, JSON.stringify(sanitized));
+    } catch {
+      // La preferencia personal puede vivir solo durante esta sesión si el navegador bloquea localStorage.
     }
-
-    return afterSensitiveRestrictions.filter((column) => allowedColumns.has(String(column.key)));
-  }, [
-    cotizacionesColumns,
-    effectiveCanViewPrices,
-    effectiveCanViewSupplier,
-    effectiveSensitiveFlags.can_view_economic_support,
-    effectiveSensitiveFlags.can_view_margin,
-    modulePermissions?.visible_columns,
-  ]);
+  }
 
   useEffect(() => {
     if (process.env.NODE_ENV !== "development") return;
@@ -1352,19 +1436,11 @@ export default function CotizacionesPage({ embeddedWorkspace = null }: Cotizacio
     });
   }, [cotizaciones.length, dataSource, page, totalFilteredRows]);
 
-  const hiddenBusinessFields = useMemo(
-    () =>
-      buildHiddenBusinessFields({
-        visibleColumns: visibleCotizacionesColumns.map((column) => ({ key: String(column.key) })),
-        canViewPrices: effectiveCanViewPrices,
-      }),
-    [visibleCotizacionesColumns, effectiveCanViewPrices],
-  );
-
   const permissionsReady = !isPermissionsLoading;
   const isSupabaseReadOnly = dataSource === "supabase";
-  const canCreateQuotationByPermission = modulePermissions?.can_create === true;
+  const canCreateQuotationByPermission = isElevatedQuotationUser || modulePermissions?.can_create === true;
   const canEditQuotationByPermission = modulePermissions?.can_edit === true || isElevatedQuotationUser;
+  const canChangeQuotationStatusByPermission = isElevatedQuotationUser || modulePermissions?.can_change_status === true;
   const canUploadQuotationDocumentsByPermission =
     modulePermissions?.can_upload_files === true || canEditQuotationByPermission || canCreateQuotationByPermission;
   const canCreateSupabaseQuotation =
@@ -1667,7 +1743,6 @@ export default function CotizacionesPage({ embeddedWorkspace = null }: Cotizacio
           );
           clearCoreAppDataCache();
           setCotizaciones((prev) => [created, ...prev.filter((row) => row.id !== created.id)]);
-          setFilteredRowsCount(null);
           setPage(1);
           setEditingId(created.id);
           setDraft(created);
@@ -2391,16 +2466,188 @@ export default function CotizacionesPage({ embeddedWorkspace = null }: Cotizacio
     <section className="sgp-page app-table-section min-w-0">
       {!isEmbeddedWorkspace ? (
         <PageHeader
-          eyebrow="SGP"
           title="Cotizaciones"
-          description="Control operativo de propuestas, clientes, estados, responsables y requerimientos vinculados."
+          description="Seguimiento comercial, técnico y económico de las cotizaciones."
           actions={
-            <>
-              <Badge tone="neutral">Fuente: {dataSource === "supabase" ? "Supabase" : "Demo local"}</Badge>
-              <Badge tone="info">{totalFilteredRows} registros</Badge>
-            </>
+            canViewQuotationActions ? (
+              <Button
+                type="button"
+                variant="primary"
+                size="sm"
+                onClick={openNewQuotation}
+                disabled={!canCreateQuotationInCurrentSource}
+                title={
+                  canCreateQuotationInCurrentSource
+                    ? "Crear una nueva cotización"
+                    : dataSource === "supabase"
+                      ? "Requiere permiso para crear cotizaciones"
+                      : "Nueva cotización no disponible"
+                }
+              >
+                <span aria-hidden="true">+</span>
+                Nueva cotización
+              </Button>
+            ) : null
           }
         />
+      ) : null}
+      {!isEmbeddedWorkspace && permissionsReady && canViewQuotationTable ? (
+        <>
+          <div className="quotation-kpis" aria-label="Resumen operativo de cotizaciones">
+            {[
+              ["Total", quotationMetrics.total],
+              ["En preparación", quotationMetrics.preparation],
+              ["Enviadas", quotationMetrics.sent],
+              ["Adjudicadas", quotationMetrics.awarded],
+              ["Por vencer", quotationMetrics.dueSoon],
+            ].map(([label, value]) => (
+              <div key={String(label)} className="quotation-kpi">
+                <span className="quotation-kpi__label">{label}</span>
+                <strong className="quotation-kpi__value">{value}</strong>
+              </div>
+            ))}
+          </div>
+          <div className="quotation-toolbar" role="search" aria-label="Buscar y filtrar cotizaciones">
+            <div className="quotation-toolbar__search">
+              <span className="quotation-toolbar__search-icon" aria-hidden="true">⌕</span>
+              <Input
+                value={quotationSearch}
+                onChange={(event) => {
+                  setQuotationSearch(event.target.value);
+                  setPage(1);
+                }}
+                placeholder="Buscar código, cliente, proyecto o descripción"
+                aria-label="Buscar cotizaciones"
+              />
+            </div>
+            <Select
+              value={quotationStatusFilter}
+              onChange={(event) => {
+                setQuotationStatusFilter(event.target.value);
+                setPage(1);
+              }}
+              aria-label="Filtrar por estado"
+            >
+              <option value="">Todos los estados</option>
+              {uniqueSortedOptions([...estadoCotizacionOptions, ...cotizaciones.map((row) => row.estado)]).map((status) => (
+                <option key={status} value={status}>{status}</option>
+              ))}
+            </Select>
+            <Select
+              value={quotationClientFilter}
+              onChange={(event) => {
+                setQuotationClientFilter(event.target.value);
+                setPage(1);
+              }}
+              aria-label="Filtrar por cliente"
+            >
+              <option value="">Todos los clientes</option>
+              {clientOptions.map((client) => <option key={client} value={client}>{client}</option>)}
+            </Select>
+            <Select
+              value={quotationDueFilter}
+              onChange={(event) => {
+                setQuotationDueFilter(event.target.value as "" | "overdue" | "7" | "30");
+                setPage(1);
+              }}
+              aria-label="Filtrar por vencimiento"
+            >
+              <option value="">Cualquier vencimiento</option>
+              <option value="overdue">Vencidas</option>
+              <option value="7">Próximos 7 días</option>
+              <option value="30">Próximos 30 días</option>
+            </Select>
+            {hasQuotationFilters ? (
+              <Button
+                size="sm"
+                variant="ghost"
+                onClick={() => {
+                  setQuotationSearch("");
+                  setQuotationStatusFilter("");
+                  setQuotationClientFilter("");
+                  setQuotationDueFilter("");
+                  setPage(1);
+                }}
+              >
+                Limpiar filtros
+              </Button>
+            ) : null}
+            <div className="relative">
+              <Button
+                type="button"
+                size="sm"
+                variant="ghost"
+                onClick={() => setColumnsMenuOpen((open) => !open)}
+                aria-expanded={columnsMenuOpen}
+                aria-haspopup="dialog"
+              >
+                Columnas ({selectedQuotationColumnKeys.length})
+              </Button>
+              {columnsMenuOpen ? (
+                <div
+                  role="dialog"
+                  aria-label="Columnas visibles del log"
+                  className="absolute right-0 top-[calc(100%+4px)] z-30 w-[290px] rounded-lg border border-border bg-white p-2 shadow-lg"
+                >
+                  <div className="mb-2 flex items-center justify-between gap-2 border-b border-stone-100 pb-2">
+                    <span className="text-[11px] font-semibold text-stone-700">Mi vista del log</span>
+                    <button type="button" className="text-[11px] text-stone-500 hover:text-stone-800" onClick={() => setColumnsMenuOpen(false)}>
+                      Cerrar
+                    </button>
+                  </div>
+                  <div className="mb-2 flex flex-wrap gap-1">
+                    <button
+                      type="button"
+                      className="rounded border border-stone-200 px-2 py-1 text-[10px] text-stone-600"
+                      onClick={() => updatePersonalColumns(RECOMMENDED_QUOTATION_COLUMNS.filter((key) => authorizedQuotationColumnKeys.includes(key)))}
+                    >
+                      Recomendadas
+                    </button>
+                    <button
+                      type="button"
+                      className="rounded border border-stone-200 px-2 py-1 text-[10px] text-stone-600"
+                      onClick={() => updatePersonalColumns(authorizedQuotationColumnKeys)}
+                    >
+                      Todas autorizadas
+                    </button>
+                  </div>
+                  <div className="max-h-[320px] overflow-y-auto">
+                    {quotationCatalogColumns
+                      .filter((column) => authorizedQuotationColumnKeys.includes(column.key))
+                      .map((column) => (
+                        <label key={column.key} className="flex items-center gap-2 rounded px-2 py-1.5 text-xs hover:bg-stone-50">
+                          <input
+                            type="checkbox"
+                            checked={selectedQuotationColumnKeys.includes(column.key)}
+                            disabled={column.key === "codigo"}
+                            onChange={(event) => updatePersonalColumns(
+                              event.target.checked
+                                ? [...selectedQuotationColumnKeys, column.key]
+                                : selectedQuotationColumnKeys.filter((key) => key !== column.key),
+                            )}
+                          />
+                          <span>{column.label}</span>
+                        </label>
+                      ))}
+                  </div>
+                  <p className="mt-2 border-t border-stone-100 pt-2 text-[10px] leading-snug text-stone-500">
+                    Esta preferencia solo cambia tu tabla; no modifica permisos administrativos.
+                  </p>
+                </div>
+              ) : null}
+            </div>
+            <Button
+              type="button"
+              onClick={() => void refreshCotizacionesData()}
+              size="sm"
+              variant="ghost"
+              className="quotation-toolbar__refresh"
+              title="Actualizar cotizaciones"
+            >
+              Actualizar
+            </Button>
+          </div>
+        </>
       ) : null}
       {!permissionsReady ? (
         <div className="ops-list-state">
@@ -2415,68 +2662,53 @@ export default function CotizacionesPage({ embeddedWorkspace = null }: Cotizacio
           Preparando workspace de cotización...
         </div>
       ) : !isEmbeddedWorkspace && canViewQuotationTable ? (
+        <div className="quotation-log-table">
         <DataTable
-          rows={cotizaciones}
+          rows={filteredCotizaciones}
           onRowClick={openEditQuotation}
-          maxHeightClassName="max-h-[62vh]"
+          maxHeightClassName="max-h-[58vh]"
           tableTitle="Log de cotizaciones"
           tableIcon="file-text"
+          showToolbar={false}
+          enableFilters={false}
           rowWindow={{ start: pageStartIndex, size: pageSize }}
-          onVisibleRowsChange={(rows) => setFilteredRowsCount(rows.length)}
           onTableStateChange={() => setPage(1)}
-          initialColumnFilters={tableViewState.columnFilters}
+          initialColumnFilters={{}}
           initialSortKey={tableViewState.sortKey}
           initialSortDirection={tableViewState.sortDirection}
           onTableViewChange={(state) => {
-            setTableViewState(state);
+            setTableViewState({ ...state, columnFilters: {} });
             setPage(1);
           }}
-          toolbarActions={
-            <>
-              <Button
-                type="button"
-                onClick={() => void refreshCotizacionesData()}
-                size="sm"
-                variant="ghost"
-                className="ops-list-action"
-                title="Forzar recarga de cotizaciones y requerimientos"
-              >
-                Actualizar datos
-              </Button>
-              {canViewQuotationActions ? (
+          emptyMessage={
+            <div className="quotation-empty-state">
+              <strong>{cotizaciones.length === 0 ? "Aún no hay cotizaciones" : "No hay resultados"}</strong>
+              <span>
+                {cotizaciones.length === 0
+                  ? "Crea la primera cotización para iniciar el seguimiento."
+                  : "Prueba con otros términos o limpia los filtros activos."}
+              </span>
+              {cotizaciones.length === 0 && canCreateQuotationInCurrentSource ? (
+                <Button size="sm" variant="primary" onClick={openNewQuotation}>Crear primera cotización</Button>
+              ) : hasQuotationFilters ? (
                 <Button
-                  type="button"
-                  onClick={() => {
-                    if (!canCreateQuotationInCurrentSource) {
-                      setWarning(
-                        dataSource === "supabase"
-                          ? "No tienes permiso can_create para crear cotizaciones en Supabase."
-                          : "No se puede crear una cotización en el estado actual de la vista.",
-                      );
-                      return;
-                    }
-                    setPendingNewQuotationConfirm(true);
-                  }}
-                  disabled={!canCreateQuotationInCurrentSource}
                   size="sm"
-                  variant="secondary"
-                  className="ops-list-action"
-                  title={
-                    canCreateQuotationInCurrentSource
-                      ? "Nueva cotización"
-                      : dataSource === "supabase"
-                        ? "Requiere permiso can_create en cotizaciones"
-                        : "Nueva cotización no disponible"
-                  }
+                  variant="ghost"
+                  onClick={() => {
+                    setQuotationSearch("");
+                    setQuotationStatusFilter("");
+                    setQuotationClientFilter("");
+                    setQuotationDueFilter("");
+                  }}
                 >
-                  <span className="text-sm leading-none">+</span>
-                  <span>Nueva cotización</span>
+                  Limpiar filtros
                 </Button>
               ) : null}
-            </>
+            </div>
           }
           columns={visibleCotizacionesColumns}
         />
+        </div>
       ) : !isEmbeddedWorkspace && effectiveCanView ? (
         <div className="ops-list-state">
           Tabla principal oculta por permisos.
@@ -2486,33 +2718,6 @@ export default function CotizacionesPage({ embeddedWorkspace = null }: Cotizacio
           No tienes permiso para ver el Log de cotizaciones.
         </div>
       ) : null}
-      {!isEmbeddedWorkspace && permissionsReady && effectiveCanView && canViewQuotationActions && canCreateQuotationInCurrentSource && pendingNewQuotationConfirm ? (
-        <div className="fixed inset-0 z-[65] flex items-center justify-center bg-black/20 p-3">
-          <div className="w-full max-w-[420px] rounded-lg border border-stone-300 bg-panel p-3 shadow-md">
-            <p className="text-[12px] font-medium text-stone-700">¿Deseas crear una nueva cotización?</p>
-            <div className="mt-3 flex items-center justify-end gap-2">
-              <button
-                type="button"
-                onClick={() => setPendingNewQuotationConfirm(false)}
-                className="inline-flex h-6 min-h-6 items-center justify-center gap-1 rounded border border-stone-200 px-1.5 text-[11px] leading-none text-stone-500 hover:border-stone-300 hover:bg-stone-100 active:bg-stone-200"
-              >
-                Cancelar
-              </button>
-              <button
-                type="button"
-                onClick={() => {
-                  setPendingNewQuotationConfirm(false);
-                  openNewQuotation();
-                }}
-                className="inline-flex h-6 min-h-6 items-center justify-center gap-1 rounded border border-stone-300 bg-stone-100 px-1.5 text-[11px] leading-none text-stone-700 hover:bg-stone-200"
-              >
-                Aceptar
-              </button>
-            </div>
-          </div>
-        </div>
-      ) : null}
-
       {!isEmbeddedWorkspace && permissionsReady && effectiveCanView && canViewQuotationTable ? (
         <div className="ops-list-meta">
           <span>Fuente: {dataSource === "supabase" ? "Supabase" : "Demo local"}</span>
@@ -2590,6 +2795,7 @@ export default function CotizacionesPage({ embeddedWorkspace = null }: Cotizacio
         priorityOptions={["Alta", "Media", "Baja"]}
         autoEditOnOpen={!editingId}
         canEditQuotation={canSaveCurrentQuotation}
+        canChangeStatus={dataSource === "demo" || canChangeQuotationStatusByPermission}
         canUploadQuotationDocuments={canUploadQuotationDocumentsInCurrentSource}
         isSavingQuotation={isQuotationSaving}
         adjudicatedProject={draft ? adjudicatedProjectsByQuotationId[draft.id] ?? null : null}
@@ -2616,8 +2822,11 @@ export default function CotizacionesPage({ embeddedWorkspace = null }: Cotizacio
         onConfirmAdjudication={canViewQuotationActions && canEditQuotationInCurrentSource ? handleConfirmAdjudication : undefined}
         canDeleteAssociatedRequirements={canDeleteAssociatedRequirements}
         requirementCreationError={requirementCreationError}
-        hiddenBusinessFields={hiddenBusinessFields}
-        canViewPrices={effectiveCanViewPrices && canViewQuotationEconomicSummary}
+        hiddenBusinessFields={[]}
+        canViewPrices={canAccessQuotationEconomicSummary}
+        canViewSupplier={effectiveCanViewSupplier}
+        canViewMargin={effectiveSensitiveFlags.can_view_margin}
+        canViewEconomicSupport={effectiveSensitiveFlags.can_view_economic_support}
         canCreateResource={canCreateResource}
         canManageResourceDocuments={canManageResourceDocuments}
         viewGroupPermissions={viewGroupPermissions}
@@ -2670,8 +2879,8 @@ export default function CotizacionesPage({ embeddedWorkspace = null }: Cotizacio
         canAddCatalogResource={canAddCatalogResourceToRequirement}
         isCreatingRecurso={savingResource}
         hiddenItemColumnKeys={hiddenRequirementItemColumnKeys}
-        hiddenBusinessFields={hiddenBusinessFields}
-        canViewPrices={effectiveCanViewPrices && canViewQuotationEconomicSummary}
+        hiddenBusinessFields={[]}
+        canViewPrices={canAccessQuotationEconomicSummary}
         currentUser={currentObservationUser}
         userDirectory={observationUserDirectory}
         loadingUsers={loadingObservationUsers}

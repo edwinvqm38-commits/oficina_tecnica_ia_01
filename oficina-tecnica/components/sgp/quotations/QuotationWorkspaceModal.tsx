@@ -11,6 +11,7 @@ import { QuotationBudgetPanel } from "@/components/sgp/quotations/QuotationBudge
 import { QuotationDocumentationPanel, type QuotationDocumentationPanelHandle } from "@/components/sgp/quotations/QuotationDocumentationPanel";
 import { TechnicalProposalWorkspaceModal } from "@/components/sgp/quotations/TechnicalProposalWorkspaceModal";
 import { EmailThreadButton } from "@/components/sgp/EmailThreadButton";
+import { Button, Input, Select, Tab, Tabs, Textarea } from "@/components/ui";
 import type { Cotizacion, DetalleRequerimientoItem, Recurso, Requerimiento } from "@/lib/sgp/demoData";
 import type { AdjudicatedProject, AdjudicatedTechnicalProposalOption } from "@/lib/sgp/adjudicatedProjectsRepository";
 import type { QuotationBudget } from "@/lib/sgp/quotationBudgetsRepository";
@@ -35,6 +36,7 @@ type QuotationWorkspaceModalProps = {
   priorityOptions: Array<Cotizacion["prioridad"]>;
   autoEditOnOpen?: boolean;
   canEditQuotation?: boolean;
+  canChangeStatus?: boolean;
   canUploadQuotationDocuments?: boolean;
   isSavingQuotation?: boolean;
   adjudicatedProject?: AdjudicatedProject | null;
@@ -58,6 +60,9 @@ type QuotationWorkspaceModalProps = {
   requirementCreationError?: string | null;
   hiddenBusinessFields?: string[];
   canViewPrices?: boolean;
+  canViewSupplier?: boolean;
+  canViewMargin?: boolean;
+  canViewEconomicSupport?: boolean;
   canCreateResource?: boolean;
   canManageResourceDocuments?: boolean;
   viewGroupPermissions?: {
@@ -343,6 +348,7 @@ export function QuotationWorkspaceModal({
   priorityOptions,
   autoEditOnOpen = false,
   canEditQuotation = true,
+  canChangeStatus = canEditQuotation,
   canUploadQuotationDocuments = canEditQuotation,
   isSavingQuotation = false,
   adjudicatedProject = null,
@@ -363,12 +369,17 @@ export function QuotationWorkspaceModal({
   requirementCreationError,
   hiddenBusinessFields = [],
   canViewPrices = true,
+  canViewSupplier = true,
+  canViewMargin = true,
+  canViewEconomicSupport = true,
   canCreateResource = false,
   canManageResourceDocuments = false,
   viewGroupPermissions,
 }: QuotationWorkspaceModalProps) {
   const [isQuotationEditing, setIsQuotationEditing] = useState(false);
   const [isEconomicEditing, setIsEconomicEditing] = useState(false);
+  const [showNewQuotationAdditional, setShowNewQuotationAdditional] = useState(false);
+  const [workspaceTab, setWorkspaceTab] = useState<"summary" | "technical-economic" | "documents">("summary");
   const [rightPanelMode, setRightPanelMode] = useState<"detail" | "documents">("detail");
   const [summaryViewMode, setSummaryViewMode] = useState<"economic" | "budget" | "cashflow">("economic");
   const [cashflowViewMode, setCashflowViewMode] = useState<"summary" | "dashboard">("summary");
@@ -392,7 +403,6 @@ export function QuotationWorkspaceModal({
   const [flatMensualDraft, setFlatMensualDraft] = useState<boolean>(false);
   const [montoDraft, setMontoDraft] = useState<string | null>(null);
   const [avanceDraft, setAvanceDraft] = useState<string | null>(null);
-  const [technicalProposalOpen, setTechnicalProposalOpen] = useState(false);
   const [adjudicationConfirmOpen, setAdjudicationConfirmOpen] = useState(false);
   const [selectedAwardProposalId, setSelectedAwardProposalId] = useState("");
   const [selectedAwardBudgetId, setSelectedAwardBudgetId] = useState("");
@@ -461,6 +471,8 @@ export function QuotationWorkspaceModal({
   useEffect(() => {
     if (!open) return;
     setIsQuotationEditing(autoEditOnOpen);
+    setShowNewQuotationAdditional(false);
+    setWorkspaceTab("summary");
     setIsEconomicEditing(false);
     setEconomicEditDrafts({});
     setMontoDraft(null);
@@ -493,7 +505,6 @@ export function QuotationWorkspaceModal({
   useEffect(() => {
     if (open) return;
     setPendingConfirm(null);
-    setTechnicalProposalOpen(false);
     setAdjudicationConfirmOpen(false);
   }, [open]);
 
@@ -1174,12 +1185,338 @@ export function QuotationWorkspaceModal({
     { label: "Monto ofertado", value: `${draft.moneda_cotizacion} ${formatCurrencyNumber(draft.monto)}` },
   ];
 
+  if (autoEditOnOpen) {
+    const requiredReady = Boolean(draft.codigo.trim() && draft.proyecto.trim());
+    const additionalDateFields = [
+      ["fecha_invitacion", "Invitación"],
+      ["fecha_confirmacion", "Confirmación"],
+      ["fecha_visita_tecnica", "Visita técnica"],
+      ["fecha_consultas", "Consultas"],
+      ["fecha_abs_consultas", "Absolución de consultas"],
+      ["fecha_presentacion", "Presentación"],
+      ["fecha_entregada", "Entrega realizada"],
+      ["fecha_oc", "Orden de compra"],
+    ] as const;
+
+    return (
+      <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/25 p-3">
+        <div className="quotation-create-dialog" role="dialog" aria-modal="true" aria-labelledby="new-quotation-title">
+          <header className="quotation-create-header">
+            <div>
+              <p className="quotation-create-eyebrow">Cotizaciones</p>
+              <h2 id="new-quotation-title">Nueva cotización</h2>
+              <p>Registra primero la información necesaria. Podrás completar el detalle en el workspace.</p>
+            </div>
+            <button type="button" onClick={onClose} className={actionButtonClassName(true)} title="Cerrar" aria-label="Cerrar">
+              <ModalActionIcon name="close" />
+            </button>
+          </header>
+
+          <div className="quotation-create-body">
+            <section className="quotation-form-section" aria-labelledby="quotation-main-data">
+              <div className="quotation-form-section__header">
+                <span className="quotation-form-section__step">1</span>
+                <div>
+                  <h3 id="quotation-main-data">Información principal</h3>
+                  <p>Los campos marcados son necesarios para guardar.</p>
+                </div>
+              </div>
+              <div className="quotation-form-grid quotation-form-grid--main">
+                <label className="quotation-form-field">
+                  <span>Código <em>*</em></span>
+                  <Input value={draft.codigo} onChange={(event) => onDraftChange({ codigo: event.target.value })} required autoFocus />
+                </label>
+                <label className="quotation-form-field quotation-form-field--wide">
+                  <span>Proyecto o servicio <em>*</em></span>
+                  <Input
+                    value={draft.proyecto}
+                    onChange={(event) => onDraftChange({ proyecto: event.target.value })}
+                    placeholder="Nombre breve y reconocible"
+                    required
+                  />
+                </label>
+                <div className="quotation-form-status">
+                  <span>Estado inicial</span>
+                  <strong>Borrador</strong>
+                </div>
+              </div>
+            </section>
+
+            <section className="quotation-form-section" aria-labelledby="quotation-client-data">
+              <div className="quotation-form-section__header">
+                <span className="quotation-form-section__step">2</span>
+                <div><h3 id="quotation-client-data">Cliente y solicitud</h3></div>
+              </div>
+              <div className="quotation-form-grid">
+                <label className="quotation-form-field">
+                  <span>Cliente</span>
+                  <Select value={draft.cliente} onChange={(event) => onDraftChange({ cliente: event.target.value })}>
+                    <option value="">Seleccionar cliente</option>
+                    {clientOptions.map((option) => <option key={option} value={option}>{option}</option>)}
+                  </Select>
+                </label>
+                <label className="quotation-form-field">
+                  <span>Unidad de trabajo</span>
+                  <Select value={draft.unidad_trabajo} onChange={(event) => onDraftChange({ unidad_trabajo: event.target.value })}>
+                    <option value="">Seleccionar unidad</option>
+                    {unitOptions.map((option) => <option key={option} value={option}>{option}</option>)}
+                  </Select>
+                </label>
+                <label className="quotation-form-field">
+                  <span>Tipo de servicio</span>
+                  <Select value={draft.tipo_servicio} onChange={(event) => onDraftChange({ tipo_servicio: event.target.value })}>
+                    <option value="">Seleccionar servicio</option>
+                    {serviceTypeOptions.map((option) => <option key={option} value={option}>{option}</option>)}
+                  </Select>
+                </label>
+                <label className="quotation-form-field">
+                  <span>Solicitante</span>
+                  <Select value={draft.solicitante} onChange={(event) => onDraftChange({ solicitante: event.target.value })}>
+                    <option value="">Seleccionar solicitante</option>
+                    {solicitanteOptions.map((option) => <option key={option} value={option}>{option}</option>)}
+                  </Select>
+                </label>
+              </div>
+            </section>
+
+            <section className="quotation-form-section" aria-labelledby="quotation-commercial-data">
+              <div className="quotation-form-section__header">
+                <span className="quotation-form-section__step">3</span>
+                <div><h3 id="quotation-commercial-data">Datos comerciales</h3></div>
+              </div>
+              <div className="quotation-form-grid">
+                <label className="quotation-form-field">
+                  <span>Fecha de entrega</span>
+                  <Input type="date" value={draft.fecha_entrega} onChange={(event) => onDraftChange({ fecha_entrega: event.target.value })} />
+                </label>
+                <label className="quotation-form-field">
+                  <span>Responsable técnico</span>
+                  <Select value={draft.responsable_tecnico} onChange={(event) => onDraftChange({ responsable_tecnico: event.target.value })}>
+                    <option value="">Sin asignar</option>
+                    {technicalResponsibleOptions.map((option) => <option key={option} value={option}>{option}</option>)}
+                  </Select>
+                </label>
+                {canViewPrices ? (
+                  <label className="quotation-form-field">
+                    <span>Moneda</span>
+                    <Select
+                      value={draft.moneda_cotizacion}
+                      onChange={(event) => onDraftChange({ moneda_cotizacion: event.target.value as Cotizacion["moneda_cotizacion"] })}
+                    >
+                      <option value="PEN">PEN</option>
+                      <option value="USD">USD</option>
+                    </Select>
+                  </label>
+                ) : null}
+                {canViewPrices ? (
+                  <label className="quotation-form-field">
+                    <span>Monto ofertado</span>
+                    <Input
+                      type="number"
+                      min="0"
+                      step="0.01"
+                      value={draft.monto}
+                      onChange={(event) => onDraftChange({ monto: Number(event.target.value) || 0 })}
+                    />
+                  </label>
+                ) : null}
+                <label className="quotation-form-field">
+                  <span>Prioridad</span>
+                  <Select
+                    value={draft.prioridad}
+                    onChange={(event) => onDraftChange({ prioridad: event.target.value as Cotizacion["prioridad"] })}
+                  >
+                    {priorityOptions.map((option) => <option key={option} value={option}>{option}</option>)}
+                  </Select>
+                </label>
+              </div>
+            </section>
+
+            <section className="quotation-form-section quotation-form-section--additional">
+              <button
+                type="button"
+                className="quotation-additional-toggle"
+                onClick={() => setShowNewQuotationAdditional((current) => !current)}
+                aria-expanded={showNewQuotationAdditional}
+              >
+                <span>
+                  <strong>Información complementaria</strong>
+                  <small>Fechas intermedias, responsables, propuesta técnica y observaciones</small>
+                </span>
+                <span aria-hidden="true">{showNewQuotationAdditional ? "−" : "+"}</span>
+              </button>
+              {showNewQuotationAdditional ? (
+                <div className="quotation-additional-content">
+                  <div className="quotation-form-grid">
+                    <label className="quotation-form-field">
+                      <span>Estado de propuesta</span>
+                      <Select value={draft.estado_propuesta} onChange={(event) => onDraftChange({ estado_propuesta: event.target.value })}>
+                        <option value="">Sin definir</option>
+                        {proposalStatusOptions.map((option) => <option key={option} value={option}>{option}</option>)}
+                      </Select>
+                    </label>
+                    <label className="quotation-form-field">
+                      <span>Responsable económico</span>
+                      <Select value={draft.responsable_economico} onChange={(event) => onDraftChange({ responsable_economico: event.target.value })}>
+                        <option value="">Sin asignar</option>
+                        {economicResponsibleOptions.map((option) => <option key={option} value={option}>{option}</option>)}
+                      </Select>
+                    </label>
+                    <label className="quotation-form-field">
+                      <span>Orden de compra</span>
+                      <Input value={draft.oc} onChange={(event) => onDraftChange({ oc: event.target.value })} />
+                    </label>
+                    <label className="quotation-form-field">
+                      <span>Avance (%)</span>
+                      <Input
+                        type="number"
+                        min="0"
+                        max="100"
+                        step="0.01"
+                        value={draft.avance}
+                        onChange={(event) => onDraftChange({ avance: Number(event.target.value) || 0 })}
+                      />
+                    </label>
+                    {additionalDateFields.map(([key, label]) => (
+                      <label key={key} className="quotation-form-field">
+                        <span>Fecha de {label.toLowerCase()}</span>
+                        <Input
+                          type="date"
+                          value={draft[key] ?? ""}
+                          onChange={(event) => onDraftChange({ [key]: event.target.value } as Partial<Cotizacion>)}
+                        />
+                      </label>
+                    ))}
+                    <label className="quotation-form-field">
+                      <span>Propuesta técnica</span>
+                      <Select
+                        value={draft.requiere_propuesta_tecnica === false ? "not_required" : "required"}
+                        onChange={(event) => onDraftChange({
+                          requiere_propuesta_tecnica: event.target.value === "required",
+                          no_requiere_pt_justificacion: event.target.value === "required" ? "" : draft.no_requiere_pt_justificacion ?? "",
+                        })}
+                      >
+                        <option value="required">Requiere PT</option>
+                        <option value="not_required">No requiere PT</option>
+                      </Select>
+                    </label>
+                    {draft.requiere_propuesta_tecnica === false ? (
+                      <label className="quotation-form-field quotation-form-field--wide">
+                        <span>Justificación de no requerir PT</span>
+                        <Input
+                          value={draft.no_requiere_pt_justificacion ?? ""}
+                          onChange={(event) => onDraftChange({ no_requiere_pt_justificacion: event.target.value })}
+                          required
+                        />
+                      </label>
+                    ) : null}
+                    <label className="quotation-form-field quotation-form-field--full">
+                      <span>Observaciones</span>
+                      <Textarea
+                        rows={3}
+                        value={draft.observaciones}
+                        onChange={(event) => onDraftChange({ observaciones: event.target.value })}
+                        placeholder="Información adicional relevante"
+                      />
+                    </label>
+                  </div>
+                </div>
+              ) : null}
+            </section>
+          </div>
+
+          <footer className="quotation-create-footer">
+            <p>{requiredReady ? "Lista para guardar como borrador." : "Completa código y proyecto para continuar."}</p>
+            <div>
+              <Button variant="ghost" onClick={onClose}>Cancelar</Button>
+              <Button
+                variant="primary"
+                onClick={() => void onSave()}
+                disabled={!requiredReady || !canEditQuotation || isSavingQuotation}
+                loading={isSavingQuotation}
+              >
+                Guardar cotización
+              </Button>
+            </div>
+          </footer>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/20 p-1.5">
-      <div className="relative flex h-auto max-h-[calc(100dvh-12px)] w-[97vw] max-w-[1860px] flex-col overflow-hidden rounded-xl border border-border bg-panel shadow-lg">
+      <div className="relative flex h-[calc(100dvh-12px)] max-h-[calc(100dvh-12px)] w-[97vw] max-w-[1860px] flex-col overflow-hidden rounded-xl border border-border bg-panel shadow-lg">
         <div className="flex min-h-0 flex-1 flex-col overflow-y-auto overflow-x-hidden p-2.5 xl:overflow-hidden">
+          <header className="quotation-workspace-header">
+            <div className="quotation-workspace-identity">
+              <div>
+                <span className="quotation-workspace-eyebrow">Cotización</span>
+                <h2>Workspace de cotización</h2>
+              </div>
+            </div>
+            <button onClick={onClose} className={actionButtonClassName(true)} title="Cerrar workspace" aria-label="Cerrar workspace">
+              <ModalActionIcon name="close" />
+            </button>
+          </header>
+          <Tabs className="quotation-workspace-tabs" aria-label="Secciones de la cotización">
+            <Tab
+              active={workspaceTab === "summary"}
+              onClick={() => {
+                setWorkspaceTab("summary");
+                setRightPanelMode("detail");
+                setSummaryViewMode("economic");
+              }}
+            >
+              Resumen
+            </Tab>
+            <Tab
+              active={workspaceTab === "technical-economic"}
+              onClick={() => {
+                setWorkspaceTab("technical-economic");
+                setRightPanelMode("detail");
+                setSummaryViewMode("budget");
+              }}
+            >
+              Propuesta Técnica-Económica
+            </Tab>
+            {viewGroupPermissions?.quotation_documents !== false ? (
+              <Tab
+                active={workspaceTab === "documents"}
+                onClick={() => {
+                  setWorkspaceTab("documents");
+                  setRightPanelMode("documents");
+                }}
+              >
+                Documentos e historial{documentationPendingCount > 0 ? ` (${documentationPendingCount})` : ""}
+              </Tab>
+            ) : null}
+          </Tabs>
+          {workspaceTab === "technical-economic" ? (
+            <div className="min-h-0 flex-1 overflow-hidden pb-2">
+              <TechnicalProposalWorkspaceModal
+                open
+                embedded
+                cotizacion={draft}
+                recursos={recursos}
+                technicalProposalOptions={technicalProposalOptions}
+                canViewPrices={canViewPrices}
+                canViewMargin={canViewMargin}
+                canViewEconomicSupport={canViewEconomicSupport}
+                canViewSupplier={canViewSupplier}
+                canCreateResource={canCreateResource}
+                canManageResourceDocuments={canManageResourceDocuments}
+                canManageProposalImages={canUploadQuotationDocuments}
+                canEditBudgetPrices={canEditQuotation && canViewPrices && canViewQuotationActions}
+                onClose={() => {
+                  setWorkspaceTab("summary");
+                  setSummaryViewMode("economic");
+                }}
+              />
+            </div>
+          ) : null}
           <section
-            className="mb-2 flex flex-col gap-2 xl:min-h-0 xl:flex-1 xl:flex-row xl:items-stretch"
+            className={`${workspaceTab === "technical-economic" ? "hidden" : "mb-2 flex flex-col gap-2 xl:min-h-0 xl:flex-1 xl:flex-row xl:items-stretch"}`}
             style={sectionDynamicStyle}
           >
             <div
@@ -1187,24 +1524,8 @@ export function QuotationWorkspaceModal({
               className="flex flex-col gap-1 xl:min-h-0 xl:flex-1 xl:overflow-hidden xl:basis-[calc(100%-520px)] xl:max-w-[calc(100%-520px)]"
             >
               <div className="flex min-h-6 items-center justify-between gap-2">
-                <FieldLabelIcon icon="file-text" label="Datos de la cotización" className="text-[11px] font-medium" />
+                <FieldLabelIcon icon="file-text" label="Información de la cotización" className="text-[11px] font-medium" />
                 <div className="flex items-center gap-1.5">
-                  {viewGroupPermissions?.quotation_documents !== false ? (
-                    <button
-                      type="button"
-                      onClick={() => setRightPanelMode((mode) => (mode === "documents" ? "detail" : "documents"))}
-                      className={`${actionButtonClassName()} ${
-                        rightPanelMode === "documents" ? "border-sky-200 bg-sky-50 text-sky-700" : ""
-                      }`}
-                      title="Abrir documentación de la cotización"
-                    >
-                      <FieldLabelIcon
-                        icon="files"
-                        label={`Documentación${documentationPendingCount > 0 ? ` (${documentationPendingCount})` : ""}`}
-                        className="text-[11px] font-medium"
-                      />
-                    </button>
-                  ) : null}
                   <EmailThreadButton
                     kind="quotation"
                     entityCode={draft.codigo}
@@ -1215,14 +1536,6 @@ export function QuotationWorkspaceModal({
                     className={actionButtonClassName()}
                     buttonLabel="Correo"
                   />
-                  <button
-                    type="button"
-                    onClick={() => setTechnicalProposalOpen(true)}
-                    className={actionButtonClassName()}
-                    title="Abrir Propuesta Técnica REV00"
-                  >
-                    <FieldLabelIcon icon="file-text" label="PT REV00" className="text-[11px] font-medium" />
-                  </button>
                   {canShowAdjudicationAction ? (
                     <button
                       type="button"
@@ -1248,9 +1561,6 @@ export function QuotationWorkspaceModal({
                     unlockedTitle="Guardar cotización"
                   />
                   ) : null}
-                  <button onClick={onClose} className={actionButtonClassName(true)} title="Cerrar" aria-label="Cerrar">
-                    <ModalActionIcon name="close" />
-                  </button>
                 </div>
               </div>
               {canViewQuotationGeneralData ? (
@@ -1355,6 +1665,7 @@ export function QuotationWorkspaceModal({
                   <LabelValueRow
                     icon="user"
                     label="Solicitante"
+                    className="xl:col-span-2"
                     value={
                       isQuotationEditing ? (
                         <select
@@ -1371,28 +1682,6 @@ export function QuotationWorkspaceModal({
                         </select>
                       ) : (
                         <span className={readOnlyValueClassName("md")}>{draft.solicitante}</span>
-                      )
-                    }
-                  />
-                  <LabelValueRow
-                    icon="shield-check"
-                    label="Prioridad"
-                    value={
-                      isQuotationEditing ? (
-                        <select
-                          value={draft.prioridad}
-                          onChange={(event) => onDraftChange({ prioridad: event.target.value as Cotizacion["prioridad"] })}
-                          className={editableInputClassName("sm", true)}
-                        >
-                          <option value=""></option>
-                          {priorityOptions.map((opt) => (
-                            <option key={opt} value={opt}>
-                              {opt}
-                            </option>
-                          ))}
-                        </select>
-                      ) : (
-                        <span className={readOnlyValueClassName("sm")}>{draft.prioridad}</span>
                       )
                     }
                   />
@@ -1459,6 +1748,28 @@ export function QuotationWorkspaceModal({
                         </select>
                       ) : (
                         <span className={readOnlyValueClassName("md")}>{draft.responsable_economico}</span>
+                      )
+                    }
+                  />
+                  <LabelValueRow
+                    icon="shield-check"
+                    label="Prioridad"
+                    value={
+                      isQuotationEditing ? (
+                        <select
+                          value={draft.prioridad}
+                          onChange={(event) => onDraftChange({ prioridad: event.target.value as Cotizacion["prioridad"] })}
+                          className={editableInputClassName("sm", true)}
+                        >
+                          <option value=""></option>
+                          {priorityOptions.map((opt) => (
+                            <option key={opt} value={opt}>
+                              {opt}
+                            </option>
+                          ))}
+                        </select>
+                      ) : (
+                        <span className={readOnlyValueClassName("sm")}>{draft.prioridad}</span>
                       )
                     }
                   />
@@ -1684,7 +1995,7 @@ export function QuotationWorkspaceModal({
                     icon="circle-dot"
                     label="Estado de oferta"
                     value={
-                      isQuotationEditing ? (
+                      isQuotationEditing && canChangeStatus ? (
                         <select
                           value={draft.estado}
                           onChange={(event) => onDraftChange({ estado: event.target.value as Cotizacion["estado"] })}
@@ -1778,28 +2089,38 @@ export function QuotationWorkspaceModal({
                   <div className="flex min-w-0 items-center gap-2">
                     <FieldLabelIcon icon="pie-chart" label="Resumen económico" className="text-[11px] font-medium" />
                     <div className="inline-flex rounded-md border border-stone-200 bg-white p-[2px]">
+                      {workspaceTab !== "technical-economic" ? (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setWorkspaceTab("summary");
+                            setSummaryViewMode("economic");
+                          }}
+                          className={`rounded px-2 py-0.5 text-[10px] font-medium ${
+                            summaryViewMode === "economic" ? "bg-stone-100 text-stone-700" : "text-stone-500"
+                          }`}
+                        >
+                          Resumen
+                        </button>
+                      ) : null}
                       <button
                         type="button"
-                        onClick={() => setSummaryViewMode("economic")}
-                        className={`rounded px-2 py-0.5 text-[10px] font-medium ${
-                          summaryViewMode === "economic" ? "bg-stone-100 text-stone-700" : "text-stone-500"
-                        }`}
-                      >
-                        Resumen
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => setSummaryViewMode("budget")}
+                        onClick={() => {
+                          setWorkspaceTab("technical-economic");
+                          setSummaryViewMode("budget");
+                        }}
                         className={`rounded px-2 py-0.5 text-[10px] font-medium ${
                           summaryViewMode === "budget" ? "bg-stone-100 text-stone-700" : "text-stone-500"
                         }`}
                       >
-                        Presupuesto
+                        Presupuesto económico
                       </button>
+                      {workspaceTab !== "technical-economic" ? (
                       <button
                         type="button"
                         onClick={() => {
                           if (!draft.flat_mensual) return;
+                          setWorkspaceTab("summary");
                           setSummaryViewMode("cashflow");
                         }}
                         disabled={!draft.flat_mensual}
@@ -1814,6 +2135,7 @@ export function QuotationWorkspaceModal({
                       >
                         Flujo mensual
                       </button>
+                      ) : null}
                     </div>
                   </div>
                   <div className="flex items-center gap-2">
@@ -1889,6 +2211,7 @@ export function QuotationWorkspaceModal({
                     <tbody>
                       {economicRowsWithoutTotal.map((row) => {
                         const canEditSummaryValue = isEconomicEditing;
+                        const canEditBaseValue = isEconomicEditing && canViewEconomicSupport;
                         const baseDraftValue =
                           economicEditDrafts[row.tipo_recurso]?.base ??
                           formatEditableMoneyInput(formatSummaryEditableNumber(row.base));
@@ -1922,7 +2245,7 @@ export function QuotationWorkspaceModal({
                             </div>
                           </td>
                           <td className="h-[26px] pl-2 pr-0 py-0 text-right align-middle">
-                            {canEditSummaryValue ? (
+                            {canEditBaseValue ? (
                               <span className={economicMoneyCellShellClassName(true)}>
                                 <input
                                   type="text"
@@ -1959,7 +2282,7 @@ export function QuotationWorkspaceModal({
                             ) : (
                               <span className={economicMoneyCellShellClassName(false)}>
                                 <span className={economicReadValueClassName()}>
-                                  {formatSummaryNumber(row.base)}
+                                  {canViewEconomicSupport ? formatSummaryNumber(row.base) : "—"}
                                 </span>
                               </span>
                             )}
@@ -2008,7 +2331,7 @@ export function QuotationWorkspaceModal({
                             )}
                           </td>
                           <td className="h-[26px] px-2 py-0 text-right align-middle">
-                            {canOpenEconomicDrill ? (
+                            {canViewEconomicSupport && canOpenEconomicDrill ? (
                               <button
                                 type="button"
                                 onDoubleClick={() => handleOpenEconomicTypeDrill(row.tipo_recurso)}
@@ -2018,24 +2341,24 @@ export function QuotationWorkspaceModal({
                                 {formatSummaryNumber(row.real)}
                               </button>
                             ) : (
-                              formatSummaryNumber(row.real)
+                              canViewEconomicSupport ? formatSummaryNumber(row.real) : "—"
                             )}
                           </td>
                           <td className="h-[26px] px-2 py-0 text-right align-middle">
-                            {formatSummaryNumber(row.margen_ofertado)}
+                            {canViewMargin ? formatSummaryNumber(row.margen_ofertado) : "—"}
                           </td>
                           <td className="h-[26px] px-2 py-0 text-right align-middle">
-                            {percentLabel(row.porcentaje_margen_ofertado)}
+                            {canViewMargin ? percentLabel(row.porcentaje_margen_ofertado) : "—"}
                           </td>
                           <td
                             className={`h-[26px] px-2 py-0 text-right align-middle ${
                               row.margen_real < 0 ? "font-semibold text-rose-700" : ""
                             }`}
                           >
-                            {formatSummaryNumber(row.margen_real)}
+                            {canViewMargin ? formatSummaryNumber(row.margen_real) : "—"}
                           </td>
                           <td className={`h-[26px] px-2 py-0 text-right align-middle ${row.margen_real < 0 ? "text-rose-700" : ""}`}>
-                            {percentLabel(row.porcentaje_margen_real)}
+                            {canViewMargin ? percentLabel(row.porcentaje_margen_real) : "—"}
                           </td>
                           </tr>
                         );
@@ -2053,7 +2376,7 @@ export function QuotationWorkspaceModal({
                         </td>
                         <td className="h-[26px] pl-2 pr-0 py-0 text-right align-middle">
                           <span className={economicMoneyCellShellClassName(false)}>
-                            {formatSummaryNumber(economicTotalRow.base)}
+                            {canViewEconomicSupport ? formatSummaryNumber(economicTotalRow.base) : "—"}
                           </span>
                         </td>
                         <td className="h-[26px] pl-2 pr-0 py-0 text-right align-middle">
@@ -2062,23 +2385,23 @@ export function QuotationWorkspaceModal({
                           </span>
                         </td>
                         <td className="h-[26px] px-2 py-0 text-right align-middle">
-                          {formatSummaryNumber(economicTotalRow.real)}
+                          {canViewEconomicSupport ? formatSummaryNumber(economicTotalRow.real) : "—"}
                         </td>
                         <td className="h-[26px] px-2 py-0 text-right align-middle">
-                          {formatSummaryNumber(economicTotalRow.margen_ofertado)}
+                          {canViewMargin ? formatSummaryNumber(economicTotalRow.margen_ofertado) : "—"}
                         </td>
                         <td className="h-[26px] px-2 py-0 text-right align-middle">
-                          {percentLabel(economicTotalRow.porcentaje_margen_ofertado)}
+                          {canViewMargin ? percentLabel(economicTotalRow.porcentaje_margen_ofertado) : "—"}
                         </td>
                         <td
                           className={`h-[26px] px-2 py-0 text-right align-middle ${
                             economicTotalRow.margen_real < 0 ? "font-semibold text-rose-700" : ""
                           }`}
                         >
-                          {formatSummaryNumber(economicTotalRow.margen_real)}
+                          {canViewMargin ? formatSummaryNumber(economicTotalRow.margen_real) : "—"}
                         </td>
                         <td className={`h-[26px] px-2 py-0 text-right align-middle ${economicTotalRow.margen_real < 0 ? "text-rose-700" : ""}`}>
-                          {percentLabel(economicTotalRow.porcentaje_margen_real)}
+                          {canViewMargin ? percentLabel(economicTotalRow.porcentaje_margen_real) : "—"}
                         </td>
                       </tr>
                     </tfoot>
@@ -2835,19 +3158,6 @@ export function QuotationWorkspaceModal({
               </div>
             </div>
           </div>
-        ) : null}
-        {technicalProposalOpen ? (
-          <TechnicalProposalWorkspaceModal
-            open={technicalProposalOpen}
-            cotizacion={draft}
-            recursos={recursos}
-            technicalProposalOptions={technicalProposalOptions}
-            canViewPrices={canViewPrices}
-            canCreateResource={canCreateResource}
-            canManageResourceDocuments={canManageResourceDocuments}
-            canEditBudgetPrices={canEditQuotation && canViewPrices && canViewQuotationActions}
-            onClose={() => setTechnicalProposalOpen(false)}
-          />
         ) : null}
       </div>
     </div>

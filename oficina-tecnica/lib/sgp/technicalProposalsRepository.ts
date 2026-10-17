@@ -1,4 +1,5 @@
 import { supabase } from "@/lib/sgp/supabaseClient";
+import { authFetch } from "@/lib/api/authFetch";
 
 type JsonObject = Record<string, unknown>;
 
@@ -224,6 +225,14 @@ export type TechnicalProposalFileInput = {
   file_size?: number | null;
   metadata?: JsonObject;
   created_by?: string | null;
+};
+
+export type TechnicalProposalImageUpload = {
+  driveFileId: string;
+  driveFolderId: string | null;
+  publicUrl: string | null;
+  mimeType: string;
+  fileSize: number;
 };
 
 export type TechnicalProposalEventInput = {
@@ -627,6 +636,59 @@ export async function listTechnicalProposalResources(technicalProposalId: string
 
   if (error) throw error;
   return ((data ?? []) as TechnicalProposalResourceRecord[]).map(mapTechnicalProposalResource);
+}
+
+export async function listTechnicalProposalFiles(technicalProposalId: string): Promise<TechnicalProposalFileRecord[]> {
+  if (!hasSupabaseConfig() || !technicalProposalId) return [];
+
+  const { data, error } = await supabase
+    .from("technical_proposal_files")
+    .select("id,technical_proposal_id,technical_proposal_item_id,resource_snapshot_id,file_type,title,relation_label,storage_path,public_url,mime_type,file_size,metadata,created_at,created_by")
+    .eq("technical_proposal_id", technicalProposalId)
+    .order("created_at", { ascending: true });
+
+  if (error) throw error;
+  return ((data ?? []) as TechnicalProposalFileRecord[]).map((row) => ({ ...row, metadata: toObject(row.metadata) }));
+}
+
+export async function uploadTechnicalProposalImage(
+  proposalCode: string,
+  file: File,
+): Promise<TechnicalProposalImageUpload> {
+  const form = new FormData();
+  form.append("file", file);
+  form.append("entityType", "technical_proposal");
+  form.append("entityCode", proposalCode);
+  form.append("category", "image");
+
+  const response = await authFetch("/api/drive/upload", { method: "POST", body: form });
+  const result = (await response.json()) as {
+    file_id?: string;
+    mime_type?: string;
+    size?: number;
+    folder_id?: string;
+    web_view_link?: string;
+    error?: string;
+  };
+  if (!response.ok || !result.file_id) {
+    throw new Error(result.error ?? "No se pudo subir la imagen de la Propuesta Técnica a Google Drive.");
+  }
+  return {
+    driveFileId: result.file_id,
+    driveFolderId: result.folder_id ?? null,
+    publicUrl: result.web_view_link ?? null,
+    mimeType: result.mime_type || file.type || "application/octet-stream",
+    fileSize: Number(result.size ?? file.size ?? 0),
+  };
+}
+
+export async function loadTechnicalProposalImageUrl(driveFileId: string): Promise<string> {
+  const response = await authFetch(`/api/drive/file/${encodeURIComponent(driveFileId)}`);
+  if (!response.ok) {
+    const result = (await response.json().catch(() => null)) as { error?: string } | null;
+    throw new Error(result?.error ?? "No se pudo leer la imagen de la Propuesta Técnica desde Google Drive.");
+  }
+  return URL.createObjectURL(await response.blob());
 }
 
 export async function addTechnicalProposalFile(input: TechnicalProposalFileInput): Promise<TechnicalProposalFileRecord> {

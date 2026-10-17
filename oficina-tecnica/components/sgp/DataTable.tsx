@@ -35,7 +35,8 @@ type DataTableProps<T extends { id: string }> = {
   initialSortKey?: string | null;
   initialSortDirection?: SortDirection;
   onTableViewChange?: (state: DataTableViewState) => void;
-  emptyMessage?: string;
+  emptyMessage?: ReactNode;
+  showToolbar?: boolean;
 };
 
 type SortDirection = "asc" | "desc" | null;
@@ -178,6 +179,7 @@ export function DataTable<T extends { id: string }>({
   initialSortDirection = null,
   onTableViewChange,
   emptyMessage = "No se encontraron registros para los filtros aplicados.",
+  showToolbar = true,
 }: DataTableProps<T>) {
   const pathname = usePathname() || "/";
   const [columnFilters, setColumnFilters] = useState<Record<string, string>>(() => initialColumnFilters ?? {});
@@ -360,7 +362,7 @@ export function DataTable<T extends { id: string }>({
         isWidthsReady ? "opacity-100" : "opacity-0"
       }`}
     >
-      <div className="ops-list-toolbar">
+      {showToolbar ? <div className="ops-list-toolbar">
         <div className="ops-list-title-group">
           <FieldLabelIcon
             icon={tableIcon}
@@ -382,7 +384,7 @@ export function DataTable<T extends { id: string }>({
           ) : null}
           {toolbarActions}
         </div>
-      </div>
+      </div> : null}
 
       <div className={`app-table-scroll ${maxHeightClassName}`}>
         <table
@@ -479,6 +481,18 @@ export function DataTable<T extends { id: string }>({
                 }`}
                 onClick={() => onRowClick?.(row)}
                 role={onRowClick ? "button" : undefined}
+                tabIndex={onRowClick ? 0 : undefined}
+                aria-label={onRowClick ? "Abrir registro" : undefined}
+                onKeyDown={
+                  onRowClick
+                    ? (event) => {
+                        if (event.key === "Enter" || event.key === " ") {
+                          event.preventDefault();
+                          onRowClick(row);
+                        }
+                      }
+                    : undefined
+                }
               >
                 {columns.map((column) => (
                   <td

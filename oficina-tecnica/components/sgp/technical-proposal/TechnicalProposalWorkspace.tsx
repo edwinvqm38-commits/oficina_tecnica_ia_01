@@ -4,6 +4,8 @@ import { useEffect, useMemo, useRef, useState, type ChangeEvent, type KeyboardEv
 import { flushSync } from "react-dom";
 import { FieldLabelIcon } from "@/components/sgp/ui/FieldLabelIcon";
 import { ResourceAutocompleteInput } from "@/components/sgp/technical-proposal/ResourceAutocompleteInput";
+import { TechnicalProposalConsolidatedResourcesPanel } from "@/components/sgp/technical-proposal/TechnicalProposalConsolidatedResourcesPanel";
+import { TechnicalProposalDocumentPreview } from "@/components/sgp/technical-proposal/TechnicalProposalDocumentPreview";
 import { TechnicalProposalResourceCatalogPanel } from "@/components/sgp/technical-proposal/TechnicalProposalResourceCatalogPanel";
 import { TechnicalProposalTopbar } from "@/components/sgp/technical-proposal/TechnicalProposalTopbar";
 import { TechnicalProposalUsedResourcesPanel, type UsedResourceItem } from "@/components/sgp/technical-proposal/TechnicalProposalUsedResourcesPanel";
@@ -30,6 +32,13 @@ import {
   type QuotationBudgetDetail,
 } from "@/lib/sgp/quotationBudgetsRepository";
 import { buildTechnicalProposalResourceTree, displayResourceCategory } from "@/lib/sgp/technicalProposalResourceUsage";
+import {
+  buildTechnicalProposalHierarchy,
+  numberTechnicalProposalHierarchy,
+  numberTechnicalProposalResourceGroups,
+  resolveTechnicalProposalInsertionLevel,
+} from "@/lib/sgp/technicalProposalHierarchy";
+import { normalizeEnabledResourceTables } from "@/lib/sgp/technicalProposalOutput";
 import { buildTechnicalProposalRpcPayload, validateTechnicalProposalRpcPayload } from "@/lib/sgp/technicalProposalMappers";
 import {
   createRecurso,
@@ -41,19 +50,27 @@ import {
 } from "@/lib/sgp/recursosRepository";
 import {
   getTechnicalProposalByCotizacionRevision,
+  listTechnicalProposalFiles,
   listTechnicalProposalItems,
   listTechnicalProposalResources,
+  loadTechnicalProposalImageUrl,
   saveFullTechnicalProposal,
+  uploadTechnicalProposalImage,
 } from "@/lib/sgp/technicalProposalsRepository";
 
 type TechnicalProposalWorkspaceModalProps = {
   open: boolean;
+  embedded?: boolean;
   cotizacion: Cotizacion;
   recursos: Recurso[];
   technicalProposalOptions?: AdjudicatedTechnicalProposalOption[];
   canViewPrices?: boolean;
+  canViewMargin?: boolean;
+  canViewEconomicSupport?: boolean;
+  canViewSupplier?: boolean;
   canCreateResource?: boolean;
   canManageResourceDocuments?: boolean;
+  canManageProposalImages?: boolean;
   canEditBudgetPrices?: boolean;
   onClose: () => void;
 };
@@ -74,7 +91,7 @@ type TechnicalProposalMetadata = {
 type ScopeKind = "group" | "subgroup" | "activity";
 type ProposalMode = "cliente" | "interno";
 type ProposalWorkStatus = "Borrador" | "En proceso" | "Completado";
-type RightPanelView = "margins" | "resources";
+type RightPanelView = "preview" | "resources" | "budget";
 type ScopeContextMenuState = { x: number; y: number; scopeItemId: string | null };
 type ResourceCategoryKey =
   | "mano_obra_directa"
@@ -112,6 +129,13 @@ type ProposalImage = {
   relation_label: string;
   size: "1" | "2" | "4";
   data_url: string;
+  storage_path: string | null;
+  public_url: string | null;
+  mime_type: string | null;
+  file_size: number | null;
+  drive_file_id: string | null;
+  drive_folder_id: string | null;
+  file_name: string | null;
 };
 
 type TechnicalProposalResourceSnapshot = {
@@ -171,9 +195,20 @@ type TechnicalProposalDraft = {
   };
   scope_outline: string;
   scope_items: ScopeItem[];
+  enabled_resource_tables: Record<string, ResourceCategoryKey[]>;
   resources: TechnicalProposalResourceSnapshot[];
   general_images: ProposalImage[];
   activity_images: ProposalImage[];
+  economics: {
+    margin_percent_by_type: Record<string, number>;
+    base_prices_locked: boolean;
+    subtotal_visibility: {
+      item: boolean;
+      subtitle: boolean;
+      title: boolean;
+      resource_type: boolean;
+    };
+  };
   conditions: {
     notas_complementarias: string;
     presupuesto_no_incluye: string;
@@ -299,6 +334,12 @@ function cloneDraftAsNewRevision(draft: TechnicalProposalDraft, cotizacion: Coti
     work_status: "Borrador",
     scope_items: nextScopeItems,
     scope_outline: scopeItemsToOutline(nextScopeItems),
+    enabled_resource_tables: Object.fromEntries(
+      Object.entries(draft.enabled_resource_tables).flatMap(([scopeItemId, categories]) => {
+        const nextScopeItemId = scopeItemIdMap.get(scopeItemId);
+        return nextScopeItemId ? [[nextScopeItemId, categories]] : [];
+      }),
+    ),
     resources: draft.resources.map((resource) => ({
       ...resource,
       id: resourceIdMap.get(resource.id) ?? uid("ptr"),
@@ -424,9 +465,20 @@ function buildInitialDraft(cotizacion: Cotizacion, revision = REVISION): Technic
     },
     scope_outline: scopeItemsToOutline(scopeItems),
     scope_items: scopeItems,
+    enabled_resource_tables: {},
     resources: [],
     general_images: [],
     activity_images: [],
+    economics: {
+      margin_percent_by_type: {},
+      base_prices_locked: true,
+      subtotal_visibility: {
+        item: true,
+        subtitle: false,
+        title: true,
+        resource_type: true,
+      },
+    },
     conditions: {
       notas_complementarias: "Cliente dara facilidades de trabajo.",
       presupuesto_no_incluye: "Trabajos y/o suministros no indicados expresamente en la propuesta tecnica.",
@@ -489,7 +541,11 @@ function normalizeLegacyDraft(
   return {
     ...initial,
     ...parsed,
-    metadata: initial.metadata,
+    metadata: {
+      ...initial.metadata,
+      ...((parsed.metadata as Partial<TechnicalProposalMetadata> | undefined) ?? {}),
+      revision: normalizeRevision((parsed.metadata as Partial<TechnicalProposalMetadata> | undefined)?.revision ?? revision),
+    },
     mode: parsed.mode === "interno" ? "interno" : "cliente",
     field_mode: Boolean(parsed.field_mode),
     work_status:
@@ -501,6 +557,10 @@ function normalizeLegacyDraft(
     presentation: { ...initial.presentation, ...(parsed.presentation as Partial<TechnicalProposalDraft["presentation"]> | undefined) },
     scope_items: normalizedScopeItems,
     scope_outline: scopeItemsToOutline(normalizedScopeItems),
+    enabled_resource_tables: normalizeEnabledResourceTables(
+      parsed.enabled_resource_tables,
+      normalizedScopeItems.map((item) => item.id),
+    ) as Record<string, ResourceCategoryKey[]>,
     resources: oldResources.map((resource) => {
       const legacyResource = resource as TechnicalProposalResourceSnapshot & { activity_id?: string };
       return {
@@ -512,6 +572,14 @@ function normalizeLegacyDraft(
     }),
     general_images: Array.isArray(parsed.general_images) ? parsed.general_images : [],
     activity_images: Array.isArray(parsed.activity_images) ? parsed.activity_images : [],
+    economics: {
+      ...initial.economics,
+      ...(parsed.economics as Partial<TechnicalProposalDraft["economics"]> | undefined),
+      subtotal_visibility: {
+        ...initial.economics.subtotal_visibility,
+        ...((parsed.economics as Partial<TechnicalProposalDraft["economics"]> | undefined)?.subtotal_visibility ?? {}),
+      },
+    },
     conditions: {
       ...initial.conditions,
       ...(parsed.conditions as Partial<TechnicalProposalDraft["conditions"]> | undefined),
@@ -537,15 +605,19 @@ async function readPersistedDraft(cotizacion: Cotizacion, revision: string): Pro
   const proposal = await getTechnicalProposalByCotizacionRevision(cotizacion.id, revision);
   if (!proposal) return null;
 
-  const [items, resources] = await Promise.all([
+  const [items, resources, files] = await Promise.all([
     listTechnicalProposalItems(proposal.id),
     listTechnicalProposalResources(proposal.id),
+    listTechnicalProposalFiles(proposal.id),
   ]);
+  const persistedHierarchy = buildTechnicalProposalHierarchy(
+    items.map((item) => ({ id: item.id, level: item.level, parentId: item.parent_id })),
+  );
   const scopeItems = renumberScopeItems(
-    items.map((item) => ({
+    items.map((item, index) => ({
       id: item.id,
-      level: item.level,
-      number: item.item_number,
+      level: persistedHierarchy[index].level,
+      number: persistedHierarchy[index].number,
       kind: item.item_type,
       title: item.title,
       description: item.technical_description ?? "",
@@ -555,6 +627,19 @@ async function readPersistedDraft(cotizacion: Cotizacion, revision: string): Pro
       collapsed: false,
       internal_comments: item.internal_comments ?? "",
     })),
+  );
+  const persistedItemIdByLocalId = new Map<string, string>();
+  items.forEach((item) => {
+    const localId = item.metadata.local_id;
+    const clientKey = item.metadata.client_key;
+    if (typeof localId === "string" && localId) persistedItemIdByLocalId.set(localId, item.id);
+    if (typeof clientKey === "string" && clientKey) persistedItemIdByLocalId.set(clientKey, item.id);
+  });
+  const persistedEnabledResourceTables = Object.fromEntries(
+    Object.entries(proposal.metadata?.enabled_resource_tables ?? {}).map(([scopeItemId, categories]) => [
+      persistedItemIdByLocalId.get(scopeItemId) ?? scopeItemId,
+      categories,
+    ]),
   );
 
   const resourceRows: TechnicalProposalResourceSnapshot[] = resources.map((resource) => ({
@@ -577,6 +662,41 @@ async function readPersistedDraft(cotizacion: Cotizacion, revision: string): Pro
     detalle_adicional: resource.detalle_adicional ?? "",
     estado_origen: resource.origin_status === "catalogo_copiado" ? "catalogo_copiado" : "nuevo_por_formalizar",
   }));
+  const persistedImages = await Promise.all(
+    files
+      .filter((file) => file.file_type === "general_image" || file.file_type === "activity_image")
+      .map(async (file): Promise<{ type: "general" | "activity"; image: ProposalImage }> => {
+        const driveFileId = typeof file.metadata.drive_file_id === "string" ? file.metadata.drive_file_id : null;
+        let imageUrl = file.public_url ?? "";
+        if (driveFileId) {
+          try {
+            imageUrl = await loadTechnicalProposalImageUrl(driveFileId);
+          } catch (error) {
+            console.warn("[propuesta-tecnica] No se pudo hidratar una imagen desde Drive:", error);
+          }
+        }
+        const storedSize = String(file.metadata.size ?? "1");
+        return {
+          type: file.file_type === "activity_image" ? "activity" : "general",
+          image: {
+            id: typeof file.metadata.local_id === "string" ? file.metadata.local_id : file.id,
+            scope_item_id: file.technical_proposal_item_id,
+            resource_id: typeof file.metadata.resource_id === "string" ? file.metadata.resource_id : null,
+            title: file.title ?? "Imagen de referencia",
+            relation_label: file.relation_label ?? "",
+            size: storedSize === "2" || storedSize === "4" ? storedSize : "1",
+            data_url: imageUrl,
+            storage_path: file.storage_path,
+            public_url: file.public_url,
+            mime_type: file.mime_type,
+            file_size: file.file_size,
+            drive_file_id: driveFileId,
+            drive_folder_id: typeof file.metadata.drive_folder_id === "string" ? file.metadata.drive_folder_id : null,
+            file_name: typeof file.metadata.file_name === "string" ? file.metadata.file_name : null,
+          },
+        };
+      }),
+  );
 
   const persistedPayload = {
     metadata: {
@@ -591,9 +711,11 @@ async function readPersistedDraft(cotizacion: Cotizacion, revision: string): Pro
     conditions: proposal.commercial_terms,
     scope_items: scopeItems.length ? scopeItems : defaultScopeItems(cotizacion.proyecto),
     scope_outline: scopeItemsToOutline(scopeItems.length ? scopeItems : defaultScopeItems(cotizacion.proyecto)),
+    enabled_resource_tables: persistedEnabledResourceTables,
     resources: resourceRows,
-    general_images: [],
-    activity_images: [],
+    general_images: persistedImages.filter((entry) => entry.type === "general").map((entry) => entry.image),
+    activity_images: persistedImages.filter((entry) => entry.type === "activity").map((entry) => entry.image),
+    economics: (proposal.metadata?.economics ?? {}) as TechnicalProposalDraft["economics"],
     updated_at: proposal.updated_at,
   } as unknown as Partial<TechnicalProposalDraft> & Record<string, unknown>;
 
@@ -624,7 +746,7 @@ function parseScopeOutline(value: string): ParsedScopeLine[] {
       const indentMatch = raw.match(/^\s*/);
       const isActivity = scopeLineHasActivity(trimmed);
       const levelFromNumber = numberMatch ? numberMatch[1].split(".").length - 1 : null;
-      const indentDepth = Math.min(4, Math.floor(((indentMatch?.[0] ?? "").replace(/\t/g, "  ").length) / 2));
+      const indentDepth = Math.floor(((indentMatch?.[0] ?? "").replace(/\t/g, "  ").length) / 2);
       const level = levelFromNumber ?? (indentDepth > 0 ? indentDepth : isActivity && lastTopGroupSeen ? 1 : 0);
       const kind: ScopeKind = isActivity ? "activity" : level === 0 ? "group" : "subgroup";
       if (kind === "group") lastTopGroupSeen = true;
@@ -639,18 +761,7 @@ function parseScopeOutline(value: string): ParsedScopeLine[] {
 }
 
 function renumberScopeItems(items: ScopeItem[]): ScopeItem[] {
-  const counters: number[] = [];
-  return items.map((item) => {
-    const level = Math.max(0, Math.min(4, item.level));
-    counters[level] = (counters[level] ?? 0) + 1;
-    counters.splice(level + 1);
-    return {
-      ...item,
-      level,
-      kind: item.kind === "activity" ? "activity" : level === 0 ? "group" : "subgroup",
-      number: counters.slice(0, level + 1).join("."),
-    };
-  });
+  return numberTechnicalProposalHierarchy(items);
 }
 
 function scopeItemsToOutline(items: ScopeItem[]): string {
@@ -723,7 +834,7 @@ function scopeSubtreeRange(items: ScopeItem[], itemId: string): ScopeSubtreeRang
 function offsetScopeLevels(items: ScopeItem[], range: ScopeSubtreeRange, delta: number): ScopeItem[] {
   return items.map((item, index) => {
     if (index < range.start || index >= range.end) return item;
-    return { ...item, level: Math.max(0, Math.min(4, item.level + delta)) };
+    return { ...item, level: Math.max(0, item.level + delta) };
   });
 }
 
@@ -731,7 +842,7 @@ function indentScopeItem(items: ScopeItem[], itemId: string): ScopeItem[] {
   const range = scopeSubtreeRange(items, itemId);
   if (!range || range.start === 0) return items;
   const previousItem = items[range.start - 1];
-  const nextLevel = Math.min(4, previousItem.level + 1);
+  const nextLevel = previousItem.level + 1;
   const delta = nextLevel - items[range.start].level;
   if (delta <= 0) return items;
   return offsetScopeLevels(items, range, delta);
@@ -1087,12 +1198,17 @@ function TechnicalProposalQuickEntryModal({
 
 export function TechnicalProposalWorkspaceModal({
   open,
+  embedded = false,
   cotizacion,
   recursos,
   technicalProposalOptions = [],
   canViewPrices = true,
+  canViewMargin = true,
+  canViewEconomicSupport = true,
+  canViewSupplier = true,
   canCreateResource = false,
   canManageResourceDocuments = false,
+  canManageProposalImages = false,
   canEditBudgetPrices = false,
   onClose,
 }: TechnicalProposalWorkspaceModalProps) {
@@ -1101,8 +1217,11 @@ export function TechnicalProposalWorkspaceModal({
   const [selectedScopeItemId, setSelectedScopeItemId] = useState("scope-2");
   const [quickEntryOpen, setQuickEntryOpen] = useState(false);
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
-  const [editingLocked, setEditingLocked] = useState(true);
-  const [rightPanelView, setRightPanelView] = useState<RightPanelView>(() => (canViewPrices ? "margins" : "resources"));
+  const [editingLocked, setEditingLocked] = useState(false);
+  const [documentView, setDocumentView] = useState<"cover" | "content">("content");
+  const [rightPanelView, setRightPanelView] = useState<RightPanelView>("preview");
+  const [resourceCatalogOpen, setResourceCatalogOpen] = useState(false);
+  const [resourceCategoryTarget, setResourceCategoryTarget] = useState<ResourceCategoryKey | null>(null);
   const [createdResources, setCreatedResources] = useState<Recurso[]>([]);
   const [activeMasterResource, setActiveMasterResource] = useState<Recurso | null>(null);
   const [selectedResourceRowId, setSelectedResourceRowId] = useState<string | null>(null);
@@ -1142,8 +1261,11 @@ export function TechnicalProposalWorkspaceModal({
     setDraft(next);
     setSelectedScopeItemId(next.scope_items.find((item) => item.kind === "activity")?.id ?? next.scope_items[0]?.id ?? "scope-1");
     setStatusMessage(null);
-    setEditingLocked(true);
-    setRightPanelView(canViewPrices ? "margins" : "resources");
+    setEditingLocked(false);
+    setDocumentView("content");
+    setRightPanelView("preview");
+    setResourceCatalogOpen(false);
+    setResourceCategoryTarget(null);
     setActiveMasterResource(null);
     setSelectedResourceRowId(null);
     setActiveResourceTargetRowId(null);
@@ -1212,7 +1334,7 @@ export function TechnicalProposalWorkspaceModal({
       const item = parsedScopePreview[itemIndex++];
       return {
         key: item?.id ?? `scope-${lineIndex}`,
-        label: item?.kind === "activity" ? "•" : item?.number ?? "",
+        label: item?.number ?? "",
       };
     });
   }, [draft.scope_outline, parsedScopePreview]);
@@ -1258,6 +1380,7 @@ export function TechnicalProposalWorkspaceModal({
           resourceCategory: resource.resource_category,
           activityNumber: activity?.number ?? "-",
           activityTitle: activity?.title ?? "",
+          observation: resource.comentario || resource.detalle_adicional,
         };
       }),
     [draft.resources, draft.scope_items],
@@ -1377,7 +1500,7 @@ export function TechnicalProposalWorkspaceModal({
   }
 
   function saveLocalDraft() {
-    window.localStorage.setItem(buildStorageKey(cotizacion.codigo), JSON.stringify({ ...draft, updated_at: new Date().toISOString() }));
+    window.localStorage.setItem(buildStorageKey(cotizacion.codigo, draft.metadata.revision), JSON.stringify({ ...draft, updated_at: new Date().toISOString() }));
     setStatusMessage("Borrador temporal guardado en este navegador.");
   }
 
@@ -1428,8 +1551,34 @@ export function TechnicalProposalWorkspaceModal({
       if (process.env.NODE_ENV === "development") {
         console.debug("[propuesta-tecnica] RPC guardada", { technicalProposalId });
       }
-      setEditingLocked(true);
-      setStatusMessage(`Guardado en Supabase. ID: ${technicalProposalId}`);
+      setDraft((current) => ({
+        ...current,
+        metadata: { ...current.metadata, propuesta_tecnica_id: technicalProposalId },
+        updated_at: new Date().toISOString(),
+      }));
+      setEditingLocked(false);
+      setStatusMessage("Guardado en Supabase.");
+
+      const canCreateLiveBudget =
+        canViewPrices &&
+        canEditBudgetPrices &&
+        draft.work_status === "Completado" &&
+        !draft.metadata.propuesta_tecnica_id &&
+        !linkedBudgetDetail &&
+        draft.resources.length > 0 &&
+        draft.resources.every((resource) => Boolean(resource.recurso_id));
+      if (canCreateLiveBudget) {
+        try {
+          const budget = await createQuotationBudgetFromTechnicalProposal(technicalProposalId);
+          const detail = await getQuotationBudgetDetail(budget.id);
+          setLinkedBudgetDetail(detail);
+          setStatusMessage("Propuesta guardada y presupuesto económico vinculado.");
+        } catch (budgetError) {
+          setStatusMessage(
+            `Propuesta guardada. No se pudo vincular el presupuesto automáticamente: ${budgetError instanceof Error ? budgetError.message : "error desconocido"}`,
+          );
+        }
+      }
     } catch (error) {
       console.error("[propuesta-tecnica] Error guardando en Supabase:", error);
       const message = error instanceof Error ? error.message : "Error desconocido.";
@@ -1440,14 +1589,13 @@ export function TechnicalProposalWorkspaceModal({
   }
 
   function handleEditToggle() {
-    if (editingLocked) {
-      setEditingLocked(false);
-      setStatusMessage("Modo edicion activo. Los cambios se guardan como borrador local.");
-      return;
+    const nextLocked = !editingLocked;
+    setEditingLocked(nextLocked);
+    if (nextLocked) {
+      setRightPanelView("preview");
+      setResourceCatalogOpen(false);
     }
-
-    if (savingToSupabase) return;
-    void saveDraftToSupabase();
+    setStatusMessage(nextLocked ? "Modo vista previa activo; los campos están protegidos." : "Modo edición activo; puedes registrar y reorganizar contenido.");
   }
 
   function refreshPreview() {
@@ -1460,6 +1608,36 @@ export function TechnicalProposalWorkspaceModal({
     return selectedScopeItem ?? selectedActivity ?? draft.scope_items[0] ?? null;
   }
 
+  function enableResourceTable(scopeItemId: string, category: ResourceCategoryKey) {
+    setDraftWithTouch((prev) => {
+      const current = prev.enabled_resource_tables[scopeItemId] ?? [];
+      if (current.includes(category)) return prev;
+      return {
+        ...prev,
+        enabled_resource_tables: {
+          ...prev.enabled_resource_tables,
+          [scopeItemId]: [...current, category],
+        },
+      };
+    });
+  }
+
+  function openResourceCatalog(scopeItemId?: string, category?: ResourceCategoryKey) {
+    if (!isEditingProposalDocument) {
+      setStatusMessage("Activa Editar para agregar recursos desde el catálogo.");
+      return;
+    }
+    const target = draft.scope_items.find((item) => item.id === scopeItemId) ?? selectedResourceTargetItem();
+    if (!target) {
+      setStatusMessage("Selecciona un título, subtítulo o partida antes de abrir el catálogo.");
+      return;
+    }
+    setSelectedScopeItemId(target.id);
+    setResourceCategoryTarget(category ?? null);
+    if (category) enableResourceTable(target.id, category);
+    setResourceCatalogOpen(true);
+  }
+
   function attachCatalogResourceToSelectedItem(resource: Recurso) {
     if (!isEditingProposalDocument) {
       setStatusMessage("Activa Editar para agregar recursos desde el catalogo.");
@@ -1470,22 +1648,23 @@ export function TechnicalProposalWorkspaceModal({
       setStatusMessage("No hay un item de alcance seleccionado para asociar el recurso.");
       return;
     }
-    const snapshot = makeSnapshotFromResource(resource, target.id);
-    setDraftWithTouch((prev) => ({ ...prev, resources: [...prev.resources, snapshot] }));
+    const snapshot = makeSnapshotFromResource(resource, target.id, resourceCategoryTarget ?? undefined);
+    setDraftWithTouch((prev) => {
+      const category = snapshot.resource_category;
+      const currentTables = prev.enabled_resource_tables[target.id] ?? [];
+      return {
+        ...prev,
+        resources: [...prev.resources, snapshot],
+        enabled_resource_tables: currentTables.includes(category)
+          ? prev.enabled_resource_tables
+          : { ...prev.enabled_resource_tables, [target.id]: [...currentTables, category] },
+      };
+    });
     setSelectedResourceRowId(snapshot.id);
     setActiveResourceTargetRowId(snapshot.id);
     setActiveMasterResource(resource);
     setRightPanelView("resources");
     setStatusMessage(`Recurso ${resource.codigo_recurso || resource.descripcion} agregado a ${target.number}.`);
-  }
-
-  function handleAddCatalogResource(resourceId: string) {
-    const resource = resourceCatalog.find((item) => item.id === resourceId);
-    if (!resource) {
-      setStatusMessage("El recurso seleccionado ya no esta disponible en el catalogo cargado.");
-      return;
-    }
-    attachCatalogResourceToSelectedItem(resource);
   }
 
   async function openCreateResourceFromTechnicalProposal() {
@@ -1585,11 +1764,26 @@ export function TechnicalProposalWorkspaceModal({
   }
 
   async function handleApplyMarginByType(resourceType: string, percent: number) {
-    if (!linkedBudgetDetail) {
-      setStatusMessage("No hay presupuesto asociado a esta propuesta tecnica.");
+    if (!canViewMargin) {
+      setStatusMessage("No tienes permiso para consultar ni modificar margenes.");
       return;
     }
-    if (!canViewPrices || !canEditBudgetPrices || linkedBudgetDetail.presupuesto.estado !== "BORRADOR") {
+    const marginKey = normalizeSearch(resourceType);
+    setDraftWithTouch((prev) => ({
+      ...prev,
+      economics: {
+        ...prev.economics,
+        margin_percent_by_type: {
+          ...prev.economics.margin_percent_by_type,
+          [marginKey]: percent,
+        },
+      },
+    }));
+    if (!linkedBudgetDetail) {
+      setStatusMessage(`Margen de ${resourceType} aplicado a la proyección económica.`);
+      return;
+    }
+    if (!canViewPrices || !canViewMargin || !canEditBudgetPrices || linkedBudgetDetail.presupuesto.estado !== "BORRADOR") {
       setStatusMessage("La revision de precios requiere permiso economico y presupuesto BORRADOR.");
       return;
     }
@@ -1620,6 +1814,58 @@ export function TechnicalProposalWorkspaceModal({
     }
   }
 
+  async function handleEconomicResourceChange(
+    rowId: string,
+    patch: { cantidad?: number; precioBaseUnitario?: number; observaciones?: string },
+  ) {
+    const proposalResource = draft.resources.find((resource) => resource.id === rowId);
+    if (!proposalResource) return;
+    const permittedPatch = {
+      ...(patch.cantidad !== undefined ? { cantidad: patch.cantidad } : {}),
+      ...(canViewPrices && patch.precioBaseUnitario !== undefined ? { precioBaseUnitario: patch.precioBaseUnitario } : {}),
+      ...(canViewEconomicSupport && patch.observaciones !== undefined ? { observaciones: patch.observaciones } : {}),
+    };
+    if (Object.keys(permittedPatch).length === 0) return;
+    const nextDraftPatch: Partial<TechnicalProposalResourceSnapshot> = {};
+    if (permittedPatch.cantidad !== undefined) nextDraftPatch.cantidad = permittedPatch.cantidad;
+    if (permittedPatch.precioBaseUnitario !== undefined) nextDraftPatch.precio_unitario_ref = permittedPatch.precioBaseUnitario;
+    if (permittedPatch.observaciones !== undefined) nextDraftPatch.comentario = permittedPatch.observaciones;
+    updateResource(rowId, nextDraftPatch);
+
+    const budgetResource = linkedBudgetDetail?.recursos.find((resource) =>
+      resource.propuestaTecnicaRecursoId === rowId ||
+      (!resource.propuestaTecnicaRecursoId && proposalResource.recurso_id === resource.recursoId),
+    );
+    if (!budgetResource || !canEditBudgetPrices || linkedBudgetDetail?.presupuesto.estado !== "BORRADOR") return;
+
+    try {
+      const updated = await updateBudgetResource(budgetResource.id, permittedPatch);
+      setLinkedBudgetDetail((current) => current ? {
+        ...current,
+        recursos: current.recursos.map((resource) => resource.id === updated.id ? updated : resource),
+      } : current);
+      setStatusMessage("Economía actualizada.");
+    } catch (error) {
+      setStatusMessage(error instanceof Error ? error.message : "No se pudo sincronizar el recurso económico.");
+    }
+  }
+
+  async function refreshEconomicProjection() {
+    if (!linkedBudgetDetail) {
+      setStatusMessage("Proyección económica actualizada desde la propuesta técnica.");
+      return;
+    }
+    setBudgetContextLoading(true);
+    try {
+      setLinkedBudgetDetail(await getQuotationBudgetDetail(linkedBudgetDetail.presupuesto.id));
+      setStatusMessage("Presupuesto económico actualizado.");
+    } catch (error) {
+      setStatusMessage(error instanceof Error ? error.message : "No se pudo actualizar el presupuesto económico.");
+    } finally {
+      setBudgetContextLoading(false);
+    }
+  }
+
   function safeExportFileName(extension: string): string {
     const base = draft.metadata.documento_codigo || draft.metadata.cotizacion_codigo || "propuesta_tecnica";
     return `${base.replace(/[\\/:*?"<>|]+/g, "_")}_propuesta_tecnica.${extension}`;
@@ -1644,6 +1890,7 @@ export function TechnicalProposalWorkspaceModal({
     const clonedScopeEditors = Array.from(clone.querySelectorAll<HTMLElement>(".scope-editor-main"));
     const clonedScopeHelp = Array.from(clone.querySelectorAll<HTMLElement>(".scope-editor-help"));
     const clonedScopePrintLists = Array.from(clone.querySelectorAll<HTMLElement>(".scope-print-list"));
+    const clonedDocumentPages = Array.from(clone.querySelectorAll<HTMLElement>(".doc-page"));
     const clonedButtons = Array.from(clone.querySelectorAll<HTMLButtonElement>("button"));
     const printableButtons = new Set(clone.querySelectorAll<HTMLButtonElement>(".scope-print-list button,.resource-cell-readonly,.sheet-btn"));
     const clonedTableColumns = Array.from(clone.querySelectorAll<HTMLTableElement>(".doc-table")).map((table) => {
@@ -1697,6 +1944,9 @@ export function TechnicalProposalWorkspaceModal({
     clonedScopeHelp.forEach((element) => element.remove());
     clonedScopePrintLists.forEach((element) => {
       element.style.display = "block";
+    });
+    clonedDocumentPages.forEach((page) => {
+      page.style.display = "flex";
     });
     clone.removeAttribute("key");
     clone.classList.add("exported-proposal-document");
@@ -1951,7 +2201,7 @@ ${clone.outerHTML}
 
   function addScopeItem(kind: ScopeKind, afterId?: string) {
     const selected = afterId ? draft.scope_items.find((item) => item.id === afterId) : selectedScopeItem;
-    const level = kind === "group" ? 0 : kind === "subgroup" ? Math.min(4, (selected?.level ?? 0) + 1) : Math.min(4, selected?.kind === "group" ? selected.level + 1 : selected?.level ?? 1);
+    const level = resolveTechnicalProposalInsertionLevel(kind, selected);
     const nextItem: ScopeItem = {
       id: uid("scope"),
       level,
@@ -1999,6 +2249,7 @@ ${clone.outerHTML}
         scope_outline: scopeItemsToOutline(nextItems.length ? nextItems : defaultScopeItems(cotizacion.proyecto)),
         resources: prev.resources.filter((resource) => resource.scope_item_id !== itemId),
         activity_images: prev.activity_images.filter((image) => image.scope_item_id !== itemId),
+        enabled_resource_tables: Object.fromEntries(Object.entries(prev.enabled_resource_tables).filter(([scopeItemId]) => scopeItemId !== itemId)),
       };
     });
     if (selectedScopeItemId === itemId) {
@@ -2048,7 +2299,7 @@ ${clone.outerHTML}
     const { lines, lineIndex } = currentLineInfo(textarea);
     const parsed = parseScopeOutline(lines[lineIndex] ?? "");
     const current = parsed[0] ?? { level: 0, kind: "group" as ScopeKind, title: cleanScopeTitle(lines[lineIndex] ?? ""), number: "" };
-    current.level = Math.max(0, Math.min(4, current.level + delta));
+    current.level = Math.max(0, current.level + delta);
     const prefix = "\t".repeat(current.level);
     lines[lineIndex] = `${prefix}${current.kind === "activity" ? "* " : ""}${current.title}`;
     setScopeTextareaLines(textarea, scopeItemsToOutline(parsedLinesToScopeItems(parseScopeOutline(lines.join("\n")), draft.scope_items)).split("\n"), lineIndex);
@@ -2075,7 +2326,16 @@ ${clone.outerHTML}
 
   function addNewResource(scopeItemId: string, category: ResourceCategoryKey) {
     const nextResource = { ...makeNewFormalizationResource(scopeItemId, category), descripcion: "" };
-    setDraftWithTouch((prev) => ({ ...prev, resources: [...prev.resources, nextResource] }));
+    setDraftWithTouch((prev) => {
+      const currentTables = prev.enabled_resource_tables[scopeItemId] ?? [];
+      return {
+        ...prev,
+        resources: [...prev.resources, nextResource],
+        enabled_resource_tables: currentTables.includes(category)
+          ? prev.enabled_resource_tables
+          : { ...prev.enabled_resource_tables, [scopeItemId]: [...currentTables, category] },
+      };
+    });
     setSelectedResourceRowId(nextResource.id);
     setActiveResourceTargetRowId(nextResource.id);
     setActiveMasterResource(null);
@@ -2123,6 +2383,27 @@ ${clone.outerHTML}
     if (activeResourceTargetRowId === resourceId) setActiveResourceTargetRowId(null);
   }
 
+  function deleteResourceTable(scopeItemId: string, category: ResourceCategoryKey) {
+    const rowsToDelete = draft.resources.filter(
+      (resource) => resource.scope_item_id === scopeItemId && resource.resource_category === category,
+    );
+    if (rowsToDelete.length > 0 && !window.confirm(`Quitar esta tabla eliminará ${rowsToDelete.length} recurso(s) asociado(s). ¿Continuar?`)) return;
+    setDraftWithTouch((prev) => {
+      const remainingCategories = (prev.enabled_resource_tables[scopeItemId] ?? []).filter((item) => item !== category);
+      const enabledResourceTables = { ...prev.enabled_resource_tables };
+      if (remainingCategories.length > 0) enabledResourceTables[scopeItemId] = remainingCategories;
+      else delete enabledResourceTables[scopeItemId];
+      return {
+        ...prev,
+        enabled_resource_tables: enabledResourceTables,
+        resources: prev.resources.filter(
+          (resource) => !(resource.scope_item_id === scopeItemId && resource.resource_category === category),
+        ),
+      };
+    });
+    setStatusMessage("Tabla de recursos eliminada; la numeración fue actualizada.");
+  }
+
   function openScopeContextMenu(event: MouseEvent<HTMLElement>, scopeItemId: string | null) {
     event.preventDefault();
     event.stopPropagation();
@@ -2162,7 +2443,7 @@ ${clone.outerHTML}
       closeScopeContextMenu();
       return;
     }
-    addNewResource(target.id, category);
+    openResourceCatalog(target.id, category);
     closeScopeContextMenu();
   }
 
@@ -2182,7 +2463,14 @@ ${clone.outerHTML}
             comentario: row.comentario,
           };
         });
-      return { ...prev, resources: [...prev.resources, ...snapshots] };
+      const currentTables = prev.enabled_resource_tables[scopeItemId] ?? [];
+      return {
+        ...prev,
+        resources: [...prev.resources, ...snapshots],
+        enabled_resource_tables: currentTables.includes(category)
+          ? prev.enabled_resource_tables
+          : { ...prev.enabled_resource_tables, [scopeItemId]: [...currentTables, category] },
+      };
     });
     setQuickEntryOpen(false);
     setStatusMessage("Recursos de ingreso rapido aplicados a la actividad.");
@@ -2192,21 +2480,41 @@ ${clone.outerHTML}
     const file = event.target.files?.[0];
     event.target.value = "";
     if (!file) return;
-    const dataUrl = await fileToDataUrl(file);
-    const nextImage: ProposalImage = {
-      id: uid("img"),
-      scope_item_id: scopeItemId,
-      resource_id: null,
-      title: file.name.replace(/\.[^.]+$/, ""),
-      relation_label: target === "general" ? "Referencia general" : "Actividad completa",
-      size: "1",
-      data_url: dataUrl,
-    };
-    setDraftWithTouch((prev) =>
-      target === "general"
-        ? { ...prev, general_images: [...prev.general_images, nextImage] }
-        : { ...prev, activity_images: [...prev.activity_images, nextImage] },
-    );
+    if (!canManageProposalImages) {
+      setStatusMessage("No tienes permiso para subir imágenes de la propuesta técnica.");
+      return;
+    }
+    setStatusMessage("Subiendo imagen a Google Drive...");
+    try {
+      const [dataUrl, uploaded] = await Promise.all([
+        fileToDataUrl(file),
+        uploadTechnicalProposalImage(draft.metadata.documento_codigo, file),
+      ]);
+      const nextImage: ProposalImage = {
+        id: uid("img"),
+        scope_item_id: scopeItemId,
+        resource_id: null,
+        title: file.name.replace(/\.[^.]+$/, ""),
+        relation_label: target === "general" ? "Referencia general" : "Actividad completa",
+        size: "1",
+        data_url: dataUrl,
+        storage_path: null,
+        public_url: uploaded.publicUrl,
+        mime_type: uploaded.mimeType,
+        file_size: uploaded.fileSize,
+        drive_file_id: uploaded.driveFileId,
+        drive_folder_id: uploaded.driveFolderId,
+        file_name: file.name,
+      };
+      setDraftWithTouch((prev) =>
+        target === "general"
+          ? { ...prev, general_images: [...prev.general_images, nextImage] }
+          : { ...prev, activity_images: [...prev.activity_images, nextImage] },
+      );
+      setStatusMessage("Imagen subida. Guarda la propuesta para registrar su vínculo.");
+    } catch (error) {
+      setStatusMessage(error instanceof Error ? error.message : "No se pudo subir la imagen de la propuesta técnica.");
+    }
   }
 
   function updateImage(imageId: string, target: "general" | "activity", patch: Partial<ProposalImage>) {
@@ -2223,10 +2531,16 @@ ${clone.outerHTML}
     });
   }
 
-  function renderImageEditor(images: ProposalImage[], target: "general" | "activity", scopeItemId: string | null) {
+  function renderImageEditor(
+    images: ProposalImage[],
+    target: "general" | "activity",
+    scopeItemId: string | null,
+    showAddButton = true,
+    showEmptyState = true,
+  ) {
     return (
       <div className="space-y-2">
-        {images.length === 0 ? (
+        {images.length === 0 && showEmptyState ? (
           <div className="rounded-lg border border-dashed border-stone-300 bg-stone-50 px-3 py-5 text-center text-[11px] text-stone-500">
             No se adjuntan imagenes de referencia.
           </div>
@@ -2263,10 +2577,12 @@ ${clone.outerHTML}
             </button>
           </div>
         ))}
-        <label className={`${smallButtonClassName("primary")} ${!isEditingProposalDocument ? "pointer-events-none opacity-45" : ""}`}>
-          Agregar imagen
-          <input type="file" accept="image/*" className="hidden" onChange={(event) => addImageFromFile(event, target, scopeItemId)} disabled={!isEditingProposalDocument} />
-        </label>
+        {showAddButton ? (
+          <label className={`${smallButtonClassName("primary")} ${!isEditingProposalDocument || !canManageProposalImages ? "pointer-events-none opacity-45" : ""}`}>
+            Agregar imagen
+            <input type="file" accept="image/*" className="hidden" onChange={(event) => addImageFromFile(event, target, scopeItemId)} disabled={!isEditingProposalDocument || !canManageProposalImages} />
+          </label>
+        ) : null}
       </div>
     );
   }
@@ -2334,6 +2650,8 @@ ${clone.outerHTML}
     setActiveResourceTargetRowId(resource.id);
     setActiveMasterResource(resource.recurso_id ? resourceCatalog.find((item) => item.id === resource.recurso_id) ?? null : null);
     setRightPanelView(view);
+    setResourceCategoryTarget(resource.resource_category);
+    setResourceCatalogOpen(true);
   }
 
   function renderA4ResourceRow(
@@ -2410,6 +2728,7 @@ ${clone.outerHTML}
             min={0}
             value={resource.cantidad}
             onChange={(event) => updateResource(resource.id, { cantidad: toFiniteNumber(event.target.value) })}
+            onBlur={(event) => void handleEconomicResourceChange(resource.id, { cantidad: toFiniteNumber(event.target.value) })}
             className={a4FieldClassName("h-7 text-right tabular-nums")}
             disabled={!isEditingProposalDocument}
           />
@@ -2485,18 +2804,23 @@ ${clone.outerHTML}
     );
   }
 
-  function renderA4ResourceTable(item: ScopeItem, category: (typeof RESOURCE_CATEGORIES)[number], blockIndex: number) {
+  function renderA4ResourceTable(item: ScopeItem, category: (typeof RESOURCE_CATEGORIES)[number], blockNumber: string) {
     const rows = resourceRowsFor(item.id, draft.resources, category.key);
-    if (!rows.length) return null;
     const isLabor = category.key.includes("mano_obra");
-    const blockNumber = `${item.number}.${blockIndex + 1}`;
     const hasObservations = rows.some((resource) => Boolean((resource.comentario || resource.detalle_adicional).trim()));
     const showObservations = !cleanTableView && ((isEditingProposalDocument && !printingReady) || hasObservations);
     const showActions = isEditingProposalDocument && !printingReady && !cleanTableView;
+    const columnCount = 4 + (isLabor ? 2 : 1) + (category.hasTime ? 1 : 0) + (showObservations ? 1 : 0) + (showActions ? 1 : 0);
     return (
       <div key={category.key} className="resource-block mt-2 break-inside-avoid">
-        <div className="resource-title uppercase">
-          {blockNumber} {category.label}
+        <div className="resource-title flex items-center justify-between gap-2 uppercase">
+          <span>{blockNumber} {category.label}</span>
+          {isEditingProposalDocument && !printingReady ? (
+            <span className="flex items-center gap-1 normal-case">
+              <button type="button" onClick={() => openResourceCatalog(item.id, category.key)} className="rounded border border-blue-200 bg-white px-2 py-1 text-[8px] font-bold text-blue-700">+ Agregar recurso</button>
+              <button type="button" onClick={() => deleteResourceTable(item.id, category.key)} className="rounded border border-rose-200 bg-white px-2 py-1 text-[8px] font-bold text-rose-700">Quitar tabla</button>
+            </span>
+          ) : null}
         </div>
         <div className="overflow-visible">
           <table className={`doc-table w-full table-fixed border-collapse text-[8px] ${category.key.includes("mano_obra") ? "mo-table" : ""}`}>
@@ -2526,7 +2850,17 @@ ${clone.outerHTML}
                 {showActions ? <th className="operational-column border border-stone-200 px-1 py-1">Acc.</th> : null}
               </tr>
             </thead>
-            <tbody>{rows.map((resource, index) => renderA4ResourceRow(resource, index, category, item, rows.length, showObservations, showActions))}</tbody>
+            <tbody>
+              {rows.map((resource, index) => renderA4ResourceRow(resource, index, category, item, rows.length, showObservations, showActions))}
+              {!rows.length ? (
+                <tr>
+                  <td colSpan={columnCount} className="border border-dashed border-slate-300 bg-slate-50 px-3 py-3 text-center text-[8px] text-slate-500">
+                    Tabla preparada sin recursos.
+                    {isEditingProposalDocument ? <button type="button" onClick={() => openResourceCatalog(item.id, category.key)} className="ml-2 rounded border border-blue-200 bg-white px-2 py-1 font-bold text-blue-700">+ Agregar recurso</button> : null}
+                  </td>
+                </tr>
+              ) : null}
+            </tbody>
           </table>
         </div>
       </div>
@@ -2538,9 +2872,12 @@ ${clone.outerHTML}
     if (!item) return null;
 
     const activityImages = draft.activity_images.filter((image) => image.scope_item_id === item.id);
+    const linkedGeneralImages = draft.general_images.filter((image) => image.scope_item_id === item.id);
     const isSelected = selectedScopeItemId === item.id;
-    const visibleResourceCategories = RESOURCE_CATEGORIES.filter((category) => resourceRowsFor(item.id, draft.resources, category.key).length > 0);
-    const resourceTables = visibleResourceCategories.map((category, index) => renderA4ResourceTable(item, category, index));
+    const enabledTables = draft.enabled_resource_tables[item.id] ?? [];
+    const visibleResourceCategories = RESOURCE_CATEGORIES.filter((category) => enabledTables.includes(category.key) || resourceRowsFor(item.id, draft.resources, category.key).length > 0);
+    const resourceTables = numberTechnicalProposalResourceGroups(item.number, visibleResourceCategories)
+      .map((category) => renderA4ResourceTable(item, category, category.number));
     const titleClassName =
       item.kind === "group"
         ? "a4-section-title text-[11px] font-black uppercase text-stone-900"
@@ -2619,16 +2956,17 @@ ${clone.outerHTML}
 
         {!item.collapsed ? (
           <div className="mt-1 space-y-2">
-            {resourceTables.length > 0 ? <div className="a4-resource-stack space-y-2">{resourceTables}</div> : null}
-
-            {item.kind === "activity" ? (
+            {linkedGeneralImages.length > 0 || activityImages.length > 0 || (isSelected && isEditingProposalDocument) ? (
               <div className="image-gallery border border-stone-200 bg-stone-50 p-2">
                 <div className="mb-2 flex items-center justify-between gap-2">
                   <FieldLabelIcon icon="image" label="Imagenes tecnicas" className="text-[9px] font-black uppercase text-stone-700" />
                 </div>
-                {renderImageEditor(activityImages, "activity", item.id)}
+                {linkedGeneralImages.length > 0 ? renderImageEditor(linkedGeneralImages, "general", item.id, false) : null}
+                {renderImageEditor(activityImages, "activity", item.id, true, linkedGeneralImages.length === 0)}
               </div>
             ) : null}
+
+            {resourceTables.length > 0 ? <div className="a4-resource-stack space-y-2">{resourceTables}</div> : null}
 
             {showInternal ? (
               <label className="a4-internal-note grid gap-1 p-2 text-[8px] font-bold uppercase text-stone-600">
@@ -2716,6 +3054,14 @@ ${clone.outerHTML}
           --danger: #b42318;
           --success: #166534;
           --font: Arial, sans-serif;
+        }
+
+        .pt-promanager .technical-proposal-document.view-cover .doc-page:not(.cover-page-v66) {
+          display: none;
+        }
+
+        .pt-promanager .technical-proposal-document.view-content .cover-page-v66 {
+          display: none;
         }
 
         .technical-proposal-a4-editor.doc-page {
@@ -3523,7 +3869,7 @@ ${clone.outerHTML}
           min-width: 0;
           min-height: 0;
           display: grid;
-          grid-template-rows: 34px minmax(0, 1fr);
+          grid-template-rows: 40px minmax(0, 1fr);
           overflow: hidden;
           border: 1px solid #cfd5dc;
           border-radius: 6px;
@@ -3535,14 +3881,10 @@ ${clone.outerHTML}
 
         .pt-promanager .right-tabs {
           display: grid;
-          grid-template-columns: 1fr 1fr;
-          height: 34px;
+          grid-template-columns: 0.9fr 1.2fr 1.15fr;
+          height: 40px;
           border-bottom: 1px solid #d8dde3;
           background: #f8f9fa;
-        }
-
-        .pt-promanager .right-tabs.only-resources {
-          grid-template-columns: 1fr;
         }
 
         .pt-promanager .right-tab {
@@ -3552,7 +3894,7 @@ ${clone.outerHTML}
           color: #59616c;
           font-size: 9px;
           font-weight: 700;
-          text-transform: uppercase;
+          line-height: 1.15;
         }
 
         .pt-promanager .right-tab:last-child {
@@ -3563,6 +3905,12 @@ ${clone.outerHTML}
           background: #eef8f4;
           color: #195f50;
           box-shadow: inset 0 -2px 0 #58bfa9;
+        }
+
+        .pt-promanager .right-tab:disabled {
+          cursor: not-allowed;
+          color: #a0a8b3;
+          background: #f4f5f6;
         }
 
         .pt-promanager .right-body {
@@ -3720,7 +4068,7 @@ ${clone.outerHTML}
         .pt-promanager .resource-panel {
           height: 100%;
           display: grid;
-          grid-template-rows: 86px 210px minmax(210px, 1fr) 108px;
+          grid-template-rows: 132px 210px minmax(210px, 1fr) 82px;
           background: #ffffff;
         }
 
@@ -4026,80 +4374,71 @@ ${clone.outerHTML}
           }
         }
       `}</style>
-      <div className="pt-promanager fixed inset-0 z-[60] flex items-center justify-center bg-black/30 p-2">
-      <div className="flex h-[calc(100dvh-18px)] w-[98vw] max-w-[1920px] flex-col overflow-hidden rounded-xl border border-stone-300 bg-stone-100 shadow-2xl">
+      <div className={`pt-promanager ${embedded ? "flex h-full min-h-0 w-full" : "fixed inset-0 z-[60] flex items-center justify-center bg-black/30 p-2"}`}>
+      <div className={`relative flex min-h-0 flex-col overflow-hidden border border-slate-200 bg-slate-100 ${embedded ? "h-full w-full rounded-lg" : "h-[calc(100dvh-18px)] w-[98vw] max-w-[1920px] rounded-xl shadow-2xl"}`}>
         <TechnicalProposalTopbar
           documentCode={draft.metadata.documento_codigo}
-          revisionFolder={draft.metadata.subcarpeta_revision}
+          revision={draft.metadata.revision}
+          revisionOptions={revisionOptions}
+          workStatus={draft.work_status}
           mode={draft.mode}
+          statusMessage={statusMessage}
           onModeChange={(mode) => patchDraft({ mode })}
+          onWorkStatusChange={(work_status) => patchDraft({ work_status })}
+          onRevisionChange={handleRevisionChange}
+          onCreateRevision={handleCreateNextRevision}
           editingLocked={editingLocked}
-          onEditToggle={handleEditToggle}
+          saving={savingToSupabase}
+          cleanTableView={cleanTableView}
+          onToggleCleanTableView={setCleanTableView}
+          onToggleEditing={handleEditToggle}
+          onSave={() => void saveDraftToSupabase()}
+          onExportPdf={() => handlePrintPdf()}
+          onExportWord={exportWordFromPreview}
+          onExportHtml={exportHtmlFromPreview}
+          onExportJson={exportJsonFromDraft}
           onClose={onClose}
         />
 
-        <div className="grid min-h-0 flex-1 grid-cols-1 gap-2 overflow-hidden p-2 xl:grid-cols-[minmax(820px,3fr)_minmax(360px,2fr)]">
+        <div className="grid min-h-0 flex-1 grid-cols-1 gap-2 overflow-hidden p-2 xl:grid-cols-[minmax(0,3fr)_minmax(340px,2fr)]">
           <main className="flex min-h-0 flex-col overflow-hidden rounded-xl border border-stone-200 bg-stone-200">
-            <div className="sticky top-0 z-20 border-b border-stone-300 bg-white px-3 py-2 shadow-sm">
-              <div className="flex flex-wrap items-center justify-between gap-2">
-                <FieldLabelIcon icon="file-text" label="Editor documental A4" className="text-[12px] font-black text-stone-800" />
-                <div className="flex flex-wrap items-center gap-1.5">
-                  <label className="flex items-center gap-1 text-[10px] font-bold uppercase tracking-wide text-stone-500">
-                    Revision
-                    <select
-                      value={draft.metadata.revision}
-                      onChange={(event) => handleRevisionChange(event.target.value)}
-                      className="h-7 border border-stone-300 bg-white px-2 text-[11px] font-semibold normal-case text-stone-700 outline-none focus:border-teal-500"
-                    >
-                      {revisionOptions.map((revision) => (
-                        <option key={revision} value={revision}>
-                          {revision}
-                        </option>
-                      ))}
-                    </select>
-                  </label>
-                  <button type="button" onClick={handleCreateNextRevision} className={smallButtonClassName("secondary")} disabled={!isEditingProposalDocument}>
-                    Nueva REV
-                  </button>
-                  <label className="flex items-center gap-1 text-[10px] font-bold uppercase tracking-wide text-stone-500">
-                    Estado PT
-                    <select
-                      value={draft.work_status}
-                      onChange={(event) => patchDraft({ work_status: event.target.value as ProposalWorkStatus })}
-                      className="h-7 border border-stone-300 bg-white px-2 text-[11px] font-semibold normal-case text-stone-700 outline-none focus:border-teal-500"
-                      disabled={!isEditingProposalDocument}
-                    >
-                      <option value="Borrador">Borrador</option>
-                      <option value="En proceso">En proceso</option>
-                      <option value="Completado">Completado</option>
-                    </select>
-                  </label>
-                  <label className="flex h-7 items-center gap-1.5 border border-stone-300 bg-stone-50 px-2 text-[10px] font-semibold text-stone-600" title="Oculta observaciones y acciones en las tablas">
-                    <input
-                      type="checkbox"
-                      checked={cleanTableView}
-                      onChange={(event) => setCleanTableView(event.target.checked)}
-                      className="h-3.5 w-3.5 accent-teal-700"
-                    />
-                    Vista limpia
-                  </label>
-                  <span className="mx-1 h-5 w-px bg-stone-200" />
-                  <button type="button" onClick={exportWordFromPreview} className={smallButtonClassName("secondary")}>Word</button>
-                  <button type="button" onClick={exportHtmlFromPreview} className={smallButtonClassName("secondary")}>HTML</button>
-                  <button type="button" onClick={exportJsonFromDraft} className={smallButtonClassName("secondary")}>JSON</button>
-                  <button type="button" onClick={handlePrintPdf} disabled={printingReady} className={smallButtonClassName("primary")}>Imprimir / PDF</button>
+            <div className="sticky top-0 z-20 flex flex-wrap items-center justify-between gap-2 border-b border-slate-200 bg-white px-3 py-2 shadow-sm">
+              <div className="flex min-w-0 flex-wrap items-center gap-1.5">
+                <span className={`rounded-full px-2 py-1 text-[9px] font-black ${isEditingProposalDocument ? "bg-blue-50 text-blue-700" : "bg-slate-100 text-slate-600"}`}>
+                  {isEditingProposalDocument ? "Modo edición" : "Modo vista previa"}
+                </span>
+                <button type="button" onClick={() => addScopeItem("group")} disabled={!isEditingProposalDocument} className={smallButtonClassName("soft")}>+ Título</button>
+                <button type="button" onClick={() => addScopeItem("subgroup")} disabled={!isEditingProposalDocument} className={smallButtonClassName("soft")}>+ Subtítulo</button>
+                <button type="button" onClick={() => addScopeItem("activity")} disabled={!isEditingProposalDocument} className={smallButtonClassName("soft")}>+ Partida</button>
+                <details className="group relative">
+                  <summary className={`${smallButtonClassName("primary")} cursor-pointer list-none [&::-webkit-details-marker]:hidden`}>+ Agregar contenido ▾</summary>
+                  <div className="absolute left-0 top-[calc(100%+5px)] z-50 grid w-64 gap-1 rounded-lg border border-slate-200 bg-white p-2 shadow-xl">
+                    <button type="button" onClick={() => selectedScopeItem && showScopeDescription(selectedScopeItem.id)} disabled={!isEditingProposalDocument || !selectedScopeItem} className="rounded px-2 py-1.5 text-left text-[10px] font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-40">Texto / detalle</button>
+                    <div className="my-1 h-px bg-slate-100" />
+                    <div className="px-2 text-[8px] font-black uppercase tracking-wide text-slate-400">Agregar tabla y elegir recurso</div>
+                    {RESOURCE_CATEGORIES.filter((category) => ["mano_obra", "materiales", "equipos", "herramientas", "consumibles"].includes(category.key)).map((category) => (
+                      <button key={category.key} type="button" onClick={() => selectedScopeItem && openResourceCatalog(selectedScopeItem.id, category.key)} disabled={!isEditingProposalDocument || !selectedScopeItem} className="rounded px-2 py-1.5 text-left text-[10px] text-slate-700 hover:bg-blue-50 disabled:opacity-40">Tabla de {category.label.toLocaleLowerCase("es")}</button>
+                    ))}
+                    <div className="my-1 h-px bg-slate-100" />
+                    <button type="button" onClick={() => { if (selectedScopeItem) { setSelectedScopeItemId(selectedScopeItem.id); setStatusMessage(`Usa “Agregar imagen” en ${selectedScopeItem.number}. ${selectedScopeItem.title}.`); } }} disabled={!isEditingProposalDocument || !selectedScopeItem || !canManageProposalImages} className="rounded px-2 py-1.5 text-left text-[10px] text-slate-700 hover:bg-slate-50 disabled:opacity-40">Imagen</button>
+                    <button type="button" disabled className="cursor-not-allowed rounded px-2 py-1.5 text-left text-[10px] text-slate-400" title="Pendiente de modelo documental para anexos">Anexo · pendiente</button>
+                  </div>
+                </details>
+                <button type="button" onClick={() => openResourceCatalog()} disabled={!isEditingProposalDocument || !selectedScopeItem} className={smallButtonClassName()}>+ Recurso</button>
+              </div>
+              <div className="flex min-w-0 items-center gap-2">
+                <span className="max-w-[220px] truncate text-[9px] text-slate-500" title={`${selectedResourceTargetItem()?.number ?? "-"} ${selectedResourceTargetItem()?.title ?? ""}`}>
+                  Selección: <strong className="text-slate-700">{selectedResourceTargetItem()?.number ?? "-"} {selectedResourceTargetItem()?.title ?? ""}</strong>
+                </span>
+                <div className="inline-flex rounded-lg border border-slate-200 bg-slate-50 p-0.5" aria-label="Vista del editor">
+                  <button type="button" onClick={() => setDocumentView("cover")} className={`rounded-md px-2 py-1 text-[9px] font-bold ${documentView === "cover" ? "bg-white text-blue-700 shadow-sm" : "text-slate-500"}`}>Portada</button>
+                  <button type="button" onClick={() => setDocumentView("content")} className={`rounded-md px-2 py-1 text-[9px] font-bold ${documentView === "content" ? "bg-white text-blue-700 shadow-sm" : "text-slate-500"}`}>Contenido</button>
                 </div>
               </div>
-              <div className="mt-1 flex flex-wrap gap-x-4 gap-y-1 text-[10px] text-stone-500">
-                <span><strong className="text-stone-700">Documento:</strong> {draft.metadata.documento_codigo}</span>
-                <span><strong className="text-stone-700">Cotizacion:</strong> {draft.metadata.cotizacion_codigo}</span>
-                <span><strong className="text-stone-700">Destino recursos:</strong> {selectedResourceTargetItem()?.number ?? "-"} {selectedResourceTargetItem()?.title ?? ""}</span>
-              </div>
-              {statusMessage ? <div className="mt-2 border border-teal-100 bg-teal-50 px-2 py-1 text-[11px] text-teal-700">{statusMessage}</div> : null}
             </div>
 
             <div className="min-h-0 overflow-auto p-4">
-              <div ref={previewDocumentRef} className="technical-proposal-document mx-auto flex w-max flex-col gap-4">
+              <div ref={previewDocumentRef} className={`technical-proposal-document view-${documentView} mx-auto flex w-max flex-col gap-4`}>
                 <article className="technical-proposal-a4-editor doc-page cover-page-v66">
                   <div className="cover-client-mark-v66">
                     {clientLogo?.logo_url ? (
@@ -4306,9 +4645,9 @@ ${clone.outerHTML}
                   <section className="mt-4 border border-stone-200 p-2">
                     <div className="mb-2 flex items-center justify-between gap-2">
                       <FieldLabelIcon icon="image" label="Imagenes tecnicas generales" className="text-[9px] font-black uppercase text-stone-700" />
-                      <span className="text-[8px] text-stone-400">{draft.general_images.length} imagen(es)</span>
+                      <span className="text-[8px] text-stone-400">{draft.general_images.filter((image) => !image.scope_item_id).length} imagen(es)</span>
                     </div>
-                    {renderImageEditor(draft.general_images, "general", null)}
+                    {renderImageEditor(draft.general_images.filter((image) => !image.scope_item_id), "general", null)}
                   </section>
 
                   </div>
@@ -4376,44 +4715,117 @@ ${clone.outerHTML}
           </main>
 
           <aside className="editor-right">
-            <div className={`right-tabs ${canViewPrices ? "" : "only-resources"}`}>
-              {canViewPrices ? (
-                <button type="button" className={`right-tab ${rightPanelView === "margins" ? "active" : ""}`} onClick={() => setRightPanelView("margins")}>
-                  Margenes
-                </button>
-              ) : null}
+            <div className="right-tabs">
+              <button type="button" className={`right-tab ${rightPanelView === "preview" ? "active" : ""}`} onClick={() => setRightPanelView("preview")}>
+                Vista previa
+              </button>
               <button type="button" className={`right-tab ${rightPanelView === "resources" ? "active" : ""}`} onClick={() => setRightPanelView("resources")}>
-                Recursos
+                Recursos consolidados
+              </button>
+              <button type="button" className={`right-tab ${rightPanelView === "budget" ? "active" : ""}`} onClick={() => canViewPrices && setRightPanelView("budget")} disabled={!canViewPrices} title={canViewPrices ? "Presupuesto económico" : "Sin permiso para ver información económica"}>
+                Presupuesto económico
               </button>
             </div>
             <div className="right-body">
-              {rightPanelView === "margins" && canViewPrices ? (
+              {rightPanelView === "preview" ? (
+                <TechnicalProposalDocumentPreview
+                  documentCode={draft.metadata.documento_codigo}
+                  revision={draft.metadata.revision}
+                  date={formatDateForDocument(draft.header.fecha)}
+                  title={draft.header.titulo}
+                  subtitle={draft.header.subtitulo}
+                  company={draft.header.empresa_emisora}
+                  client={draft.recipient.cliente}
+                  unit={draft.recipient.unidad_trabajo}
+                  attention={draft.recipient.atencion}
+                  reference={draft.presentation.referencia}
+                  presentation={draft.presentation.texto}
+                  companyLogoUrl={companyLogo?.logo_url}
+                  clientLogoUrl={clientLogo?.logo_url}
+                  scopeItems={draft.scope_items}
+                  resources={usedResourceItems}
+                  resourceCategoryOrder={RESOURCE_CATEGORIES.map((category) => category.key)}
+                  generalImages={draft.general_images}
+                  activityImages={draft.activity_images}
+                  enabledResourceTables={draft.enabled_resource_tables}
+                  conditions={{ ...draft.conditions }}
+                />
+              ) : rightPanelView === "resources" ? (
+                <TechnicalProposalConsolidatedResourcesPanel items={usedResourceItems} scopeItems={scopeItemsForResourceTree} />
+              ) : canViewPrices ? (
                 <TechnicalProposalUsedResourcesPanel
                   items={usedResourceItems}
+                  scopeItems={scopeItemsForResourceTree}
                   canViewPrices={canViewPrices}
+                  canViewMargin={canViewMargin}
+                  canViewEconomicSupport={canViewEconomicSupport}
                   budgetDetail={linkedBudgetDetail}
                   busy={budgetContextLoading}
-                  canCreateBudgetFromTechnicalProposal={Boolean(canEditBudgetPrices && technicalProposalId && !linkedBudgetDetail && !budgetContextLoading)}
-                  canApplyMargins={Boolean(canEditBudgetPrices && linkedBudgetDetail?.presupuesto.estado === "BORRADOR" && !budgetContextLoading)}
+                  canCreateBudgetFromTechnicalProposal={Boolean(
+                    canEditBudgetPrices &&
+                    technicalProposalId &&
+                    draft.work_status === "Completado" &&
+                    draft.resources.every((resource) => Boolean(resource.recurso_id)) &&
+                    !linkedBudgetDetail &&
+                    !budgetContextLoading
+                  )}
+                  canApplyMargins={Boolean(canViewMargin && canEditBudgetPrices && (!linkedBudgetDetail || linkedBudgetDetail.presupuesto.estado === "BORRADOR") && !budgetContextLoading)}
+                  canEditPrices={Boolean(canViewPrices && canEditBudgetPrices && (!linkedBudgetDetail || linkedBudgetDetail.presupuesto.estado === "BORRADOR") && !budgetContextLoading)}
+                  canEditEconomicSupport={Boolean(canViewEconomicSupport && canEditBudgetPrices && (!linkedBudgetDetail || linkedBudgetDetail.presupuesto.estado === "BORRADOR") && !budgetContextLoading)}
+                  marginPercentByType={draft.economics.margin_percent_by_type}
+                  basePricesLocked={draft.economics.base_prices_locked}
+                  subtotalVisibility={draft.economics.subtotal_visibility}
+                  onBasePricesLockedChange={(base_prices_locked) => setDraftWithTouch((prev) => ({
+                    ...prev,
+                    economics: { ...prev.economics, base_prices_locked },
+                  }))}
+                  onSubtotalVisibilityChange={(subtotal_visibility) => setDraftWithTouch((prev) => ({
+                    ...prev,
+                    economics: { ...prev.economics, subtotal_visibility },
+                  }))}
                   onCreateBudgetFromTechnicalProposal={handleCreateBudgetFromTechnicalProposal}
                   onApplyMarginByType={handleApplyMarginByType}
+                  onResourceChange={handleEconomicResourceChange}
+                  onRefresh={refreshEconomicProjection}
                 />
               ) : (
+                <div className="flex h-full items-center justify-center p-6 text-center text-[10px] text-slate-500">No tienes permiso para ver el presupuesto económico.</div>
+              )}
+            </div>
+          </aside>
+        </div>
+
+        {resourceCatalogOpen ? (
+          <div className="absolute inset-0 z-[70]">
+            <button type="button" className="absolute inset-0 bg-slate-950/25" onClick={() => setResourceCatalogOpen(false)} aria-label="Cerrar catálogo de recursos" />
+            <aside className="absolute inset-y-0 right-0 flex w-[min(560px,92vw)] flex-col border-l border-slate-300 bg-white shadow-2xl" aria-label="Panel lateral del catálogo de recursos">
+              <header className="flex shrink-0 items-center justify-between gap-3 border-b border-slate-200 bg-slate-50 px-4 py-3">
+                <div className="min-w-0">
+                  <h3 className="text-[12px] font-black text-slate-900">Catálogo maestro de recursos</h3>
+                  <p className="truncate text-[9px] text-slate-500">
+                    Destino: {selectedResourceTargetItem()?.number ?? "-"} {selectedResourceTargetItem()?.title ?? ""}
+                    {resourceCategoryTarget ? ` · ${RESOURCE_CATEGORIES.find((category) => category.key === resourceCategoryTarget)?.label ?? resourceCategoryTarget}` : ""}
+                  </p>
+                </div>
+                <button type="button" onClick={() => setResourceCatalogOpen(false)} className="rounded-md border border-slate-200 bg-white px-2.5 py-1.5 text-[10px] font-bold text-slate-600 hover:bg-slate-100">Cerrar</button>
+              </header>
+              <div className="min-h-0 flex-1">
                 <TechnicalProposalResourceCatalogPanel
                   resources={resourceCatalog}
                   selectedResourceId={displayedResource?.id ?? null}
                   canAddResource={isEditingProposalDocument}
                   canCreateResource={canCreateResource}
                   canViewPrices={canViewPrices}
+                  canViewSupplier={canViewSupplier}
                   targetLabel={`${selectedResourceTargetItem()?.number ?? "-"} ${selectedResourceTargetItem()?.title ?? ""}`.trim()}
                   onInspectResource={(resource) => setActiveMasterResource(resource)}
-                  onAddResource={handleAddCatalogResource}
+                  onAddResource={attachCatalogResourceToSelectedItem}
                   onCreateResource={openCreateResourceFromTechnicalProposal}
                 />
-              )}
-            </div>
-          </aside>
-        </div>
+              </div>
+            </aside>
+          </div>
+        ) : null}
 
         {scopeContextMenu
           ? (() => {
@@ -4495,6 +4907,7 @@ ${clone.outerHTML}
           }}
           onSave={saveCreatedResourceFromTechnicalProposal}
           canViewPrices={canViewPrices}
+          canViewSupplier={canViewSupplier}
           allowFilePicker={canManageResourceDocuments && canCreateResource}
           filesReadOnly={!canManageResourceDocuments}
           isSaving={savingResource}

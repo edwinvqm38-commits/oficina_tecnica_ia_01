@@ -173,8 +173,11 @@ function mapPermissionToForm(permissions: ModulePermissions, moduleKey: Permissi
     can_edit: permissions.can_edit ?? defaults.can_edit,
     can_change_status: permissions.can_change_status ?? defaults.can_change_status,
     can_upload_files: permissions.can_upload_files ?? defaults.can_upload_files,
-    visible_columns:
-      permissions.visible_columns.length > 0 ? permissions.visible_columns : defaults.visible_columns,
+    visible_columns: moduleKey === "cotizaciones"
+      ? Array.from(new Set(["codigo", ...permissions.visible_columns]))
+      : permissions.visible_columns.length > 0
+        ? permissions.visible_columns
+        : defaults.visible_columns,
     sensitiveFlags,
     viewGroups,
   };
@@ -312,6 +315,7 @@ export default function AdministradorContent() {
   const toggleVisibleColumn = useCallback((columnKey: string) => {
     setPermissionForm((current) => {
       const exists = current.visible_columns.includes(columnKey);
+      if (selectedPermissionModule === "cotizaciones" && columnKey === "codigo" && exists) return current;
       return {
         ...current,
         visible_columns: exists
@@ -319,7 +323,32 @@ export default function AdministradorContent() {
           : [...current.visible_columns, columnKey],
       };
     });
-  }, []);
+  }, [selectedPermissionModule]);
+
+  const setAllowedColumns = useCallback((mode: "all" | "recommended" | "clear") => {
+    const catalog = MODULE_PERMISSION_CATALOG_BY_KEY[selectedPermissionModule];
+    const recommendedCotizaciones = [
+      "codigo",
+      "cliente",
+      "unidad_trabajo",
+      "proyecto",
+      "tipo_servicio",
+      "estado",
+      "responsable_tecnico",
+      "fecha_entrega",
+      "monto",
+    ];
+    const next = mode === "all"
+      ? catalog.columns.map((column) => column.key)
+      : mode === "recommended" && selectedPermissionModule === "cotizaciones"
+        ? recommendedCotizaciones.filter((key) => catalog.columns.some((column) => column.key === key))
+        : mode === "recommended"
+          ? catalog.columns.map((column) => column.key)
+          : selectedPermissionModule === "cotizaciones"
+            ? ["codigo"]
+            : [];
+    setPermissionForm((current) => ({ ...current, visible_columns: next }));
+  }, [selectedPermissionModule]);
 
   const toggleViewGroup = useCallback((groupKey: string) => {
     setPermissionForm((current) => ({
@@ -383,7 +412,10 @@ export default function AdministradorContent() {
       can_upload_files: permissionForm.can_upload_files,
       can_view_prices: Boolean(permissionForm.sensitiveFlags.can_view_prices),
       can_view_supplier: Boolean(permissionForm.sensitiveFlags.can_view_supplier),
-      visible_columns: permissionForm.visible_columns,
+      visible_columns:
+        selectedPermissionModule === "cotizaciones" && !permissionForm.visible_columns.includes("codigo")
+          ? ["codigo", ...permissionForm.visible_columns]
+          : permissionForm.visible_columns,
       editable_fields: loadedPermissions?.editable_fields ?? [],
       required_fields: loadedPermissions?.required_fields ?? [],
       enabled_buttons: loadedPermissions?.enabled_buttons ?? [],
@@ -806,10 +838,10 @@ export default function AdministradorContent() {
         {!moduleNotReady ? (
           <div className="grid gap-3 p-3">
             <p className="rounded-md border border-sky-100 bg-sky-50 px-3 py-2 text-[11px] text-sky-700">
-              Primero controla secciones completas. Luego ajusta columnas específicas si necesitas más detalle.
+              La autorización, las secciones del workspace y las columnas permitidas son capas independientes.
             </p>
             <div className="rounded-lg border border-stone-200 bg-stone-50 p-3">
-              <p className="text-xs font-semibold text-stone-700">Permisos basicos</p>
+              <p className="text-xs font-semibold tracking-wide text-stone-700">ACCESO</p>
               <div className="mt-2 grid gap-2 md:grid-cols-2 xl:grid-cols-3">
                 {selectedModuleCatalog.standardPermissions.map((permissionKey) => (
                   <label
@@ -835,7 +867,7 @@ export default function AdministradorContent() {
 
             {hasSensitivePermissionsConfig ? (
               <div className="rounded-lg border border-stone-200 bg-stone-50 p-3">
-                <p className="text-xs font-semibold text-stone-700">Permisos sensibles</p>
+                <p className="text-xs font-semibold tracking-wide text-stone-700">DATOS SENSIBLES</p>
                 <div className="mt-2 grid gap-2 md:grid-cols-2 xl:grid-cols-3">
                   {selectedModuleCatalog.sensitivePermissions.map((permission) => (
                     <label
@@ -867,7 +899,7 @@ export default function AdministradorContent() {
               <div className="rounded-lg border border-stone-200 bg-stone-50 p-3">
                 <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
                   <div>
-                    <p className="text-xs font-semibold text-stone-700">Grupos de vista</p>
+                    <p className="text-xs font-semibold tracking-wide text-stone-700">VISIBILIDAD DEL WORKSPACE</p>
                     <p className="text-[11px] text-stone-500">Activa u oculta secciones completas de la vista.</p>
                   </div>
                   <span className="text-[11px] text-stone-500">
@@ -902,10 +934,15 @@ export default function AdministradorContent() {
             {hasColumnsConfig ? (
               <div className="rounded-lg border border-stone-200 bg-stone-50 p-3">
                 <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
-                  <p className="text-xs font-semibold text-stone-700">Columnas visibles ({selectedModuleMeta?.label})</p>
-                  <span className="text-[11px] text-stone-500">
-                    Columnas visibles seleccionadas: {selectedColumnsCount} de {totalColumnsCount}
-                  </span>
+                  <div>
+                    <p className="text-xs font-semibold tracking-wide text-stone-700">COLUMNAS PERMITIDAS</p>
+                    <p className="text-[11px] text-stone-500">{selectedModuleMeta?.label}: {selectedColumnsCount} de {totalColumnsCount}</p>
+                  </div>
+                  <div className="flex flex-wrap gap-1">
+                    <button type="button" onClick={() => setAllowedColumns("all")} className="rounded border border-stone-200 bg-white px-2 py-1 text-[10px] text-stone-600">Seleccionar todas</button>
+                    <button type="button" onClick={() => setAllowedColumns("recommended")} className="rounded border border-stone-200 bg-white px-2 py-1 text-[10px] text-stone-600">Recomendadas</button>
+                    <button type="button" onClick={() => setAllowedColumns("clear")} className="rounded border border-stone-200 bg-white px-2 py-1 text-[10px] text-stone-600">Limpiar</button>
+                  </div>
                 </div>
                 <div className="grid gap-2 md:grid-cols-2 xl:grid-cols-3">
                   {selectedModuleCatalog.columns.map((columnOption) => (
@@ -914,7 +951,12 @@ export default function AdministradorContent() {
                         type="checkbox"
                         checked={permissionForm.visible_columns.includes(columnOption.key)}
                         onChange={() => toggleVisibleColumn(columnOption.key)}
-                        disabled={permissionLoading || permissionSaving || !canManagePermissions}
+                        disabled={
+                          permissionLoading ||
+                          permissionSaving ||
+                          !canManagePermissions ||
+                          (selectedPermissionModule === "cotizaciones" && columnOption.key === "codigo")
+                        }
                       />
                       <span className="text-stone-700">{columnOption.label}</span>
                     </label>
@@ -948,6 +990,7 @@ export default function AdministradorContent() {
     rejectProfile,
     resetPermissionConfig,
     savePermissionConfig,
+    setAllowedColumns,
     section,
     selectedPermissionModule,
     selectedPermissionUser,

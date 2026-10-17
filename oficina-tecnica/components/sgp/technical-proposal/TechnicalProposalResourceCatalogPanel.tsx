@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { Recurso, ResourceFileMeta } from "@/lib/sgp/demoData";
+import { listRecursos } from "@/lib/sgp/recursosRepository";
 
 type TechnicalProposalResourceCatalogPanelProps = {
   resources: Recurso[];
@@ -9,9 +10,10 @@ type TechnicalProposalResourceCatalogPanelProps = {
   canAddResource: boolean;
   canCreateResource: boolean;
   canViewPrices: boolean;
+  canViewSupplier: boolean;
   targetLabel: string;
   onInspectResource: (resource: Recurso) => void;
-  onAddResource: (resourceId: string) => void;
+  onAddResource: (resource: Recurso) => void;
   onCreateResource: () => void | Promise<void>;
 };
 
@@ -53,28 +55,67 @@ function datasheetUrl(resource: Recurso): string {
   return usableUrl(fileUrl(resource.resourceFiles?.fichaTecnica)) || usableUrl(fileUrl(sheets[0])) || usableUrl(resource.ficha_tecnica || "");
 }
 
+function resourceDocumentCount(resource: Recurso): number {
+  const files = resource.resourceFiles;
+  if (!files) return 0;
+  return (files.fichasTecnicas?.length ?? 0) + (files.cotizaciones?.length ?? 0) + (files.archivos?.length ?? 0);
+}
+
 export function TechnicalProposalResourceCatalogPanel({
   resources,
   selectedResourceId,
   canAddResource,
   canCreateResource,
   canViewPrices,
+  canViewSupplier,
   targetLabel,
   onInspectResource,
   onAddResource,
   onCreateResource,
 }: TechnicalProposalResourceCatalogPanelProps) {
   const [query, setQuery] = useState("");
+  const [typeFilter, setTypeFilter] = useState("");
+  const [remoteRows, setRemoteRows] = useState<Recurso[] | null>(null);
+  const [searching, setSearching] = useState(false);
+  const [searchError, setSearchError] = useState<string | null>(null);
   const searchRef = useRef<HTMLInputElement | null>(null);
   const normalizedQuery = normalizeSearch(query);
+  const remoteSearchActive = normalizedQuery.length >= 2 || Boolean(typeFilter);
+  const resourceTypes = useMemo(() => Array.from(new Set(resources.map((resource) => resource.tipo_recurso).filter(Boolean))).sort((a, b) => a.localeCompare(b, "es")), [resources]);
   const filteredResources = useMemo(
-    () => resources
+    () => (remoteSearchActive ? (remoteRows ?? []) : resources)
       .filter((resource) => resource.estado !== "Inactivo")
       .filter((resource) => !normalizedQuery || searchableText(resource).includes(normalizedQuery))
-      .slice(0, 100),
-    [normalizedQuery, resources],
+      .filter((resource) => !typeFilter || resource.tipo_recurso === typeFilter)
+      .slice(0, 50),
+    [normalizedQuery, remoteRows, remoteSearchActive, resources, typeFilter],
   );
-  const selectedResource = resources.find((resource) => resource.id === selectedResourceId) ?? filteredResources[0] ?? null;
+  const selectedResource = [...(remoteRows ?? []), ...resources].find((resource) => resource.id === selectedResourceId) ?? filteredResources[0] ?? null;
+
+  useEffect(() => {
+    if (normalizedQuery.length < 2 && !typeFilter) {
+      return;
+    }
+    let cancelled = false;
+    const timer = window.setTimeout(() => {
+      setSearching(true);
+      setSearchError(null);
+      void listRecursos({ search: query, tipoRecurso: typeFilter || undefined, page: 1, pageSize: 50 })
+        .then((result) => {
+          if (!cancelled) setRemoteRows(result.rows);
+        })
+        .catch((error) => {
+          if (!cancelled) setSearchError(error instanceof Error ? error.message : "No se pudo buscar en el catálogo.");
+        })
+        .finally(() => {
+          if (!cancelled) setSearching(false);
+        });
+    }, 300);
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
+  }, [normalizedQuery, query, typeFilter]);
 
   useEffect(() => {
     function handleWorkspaceKeyDown(event: globalThis.KeyboardEvent) {
@@ -96,7 +137,7 @@ export function TechnicalProposalResourceCatalogPanel({
 
   function addSelectedResource() {
     if (!canAddResource || !selectedResource) return;
-    onAddResource(selectedResource.id);
+    onAddResource(selectedResource);
   }
 
   return (
@@ -127,9 +168,18 @@ export function TechnicalProposalResourceCatalogPanel({
               addSelectedResource();
             }
           }}
-          placeholder="Codigo, descripcion, tipo, marca, proveedor..."
+          placeholder="Código, EKA, fabricante, descripción o modelo..."
           autoComplete="off"
         />
+        <select value={typeFilter} onChange={(event) => setTypeFilter(event.target.value)} className="mt-1 h-8 w-full rounded border border-slate-200 bg-white px-2 text-[10px] text-slate-700">
+          <option value="">Todos los tipos</option>
+          {resourceTypes.map((type) => <option key={type} value={type}>{type}</option>)}
+        </select>
+        <div className="mt-1 flex items-center justify-between text-[9px] text-slate-400">
+          <span>{searching ? "Buscando…" : `${filteredResources.length} resultado(s)`}</span>
+          <span>Máx. 50</span>
+        </div>
+        {remoteSearchActive && searchError ? <div className="mt-1 text-[9px] text-rose-600">{searchError}</div> : null}
         <div className="resource-target" title={targetLabel}>Destino: <strong>{targetLabel || "Sin seleccion"}</strong></div>
       </div>
 
@@ -140,7 +190,7 @@ export function TechnicalProposalResourceCatalogPanel({
             type="button"
             className={`resource-row ${selectedResource?.id === resource.id ? "active" : ""}`}
             onClick={() => onInspectResource(resource)}
-            onDoubleClick={() => canAddResource && onAddResource(resource.id)}
+            onDoubleClick={() => canAddResource && onAddResource(resource)}
             role="option"
             aria-selected={selectedResource?.id === resource.id}
           >
@@ -173,12 +223,15 @@ export function TechnicalProposalResourceCatalogPanel({
                 <label>Tipo</label><div>{selectedResource.tipo_recurso || "-"}</div>
                 <label>Unidad</label><div>{selectedResource.unidad || "-"}</div>
                 <label>Marca</label><div>{selectedResource.marca || "-"}</div>
-                <label>Proveedor</label><div>{selectedResource.proveedor || "-"}</div>
+                <label>Modelo</label><div>{selectedResource.modelo || "-"}</div>
+                {canViewSupplier ? <><label>Proveedor</label><div>{selectedResource.proveedor || "-"}</div></> : null}
                 {canViewPrices ? <><label>Precio ref.</label><div>{selectedResource.moneda} {selectedResource.precio_unitario_ref.toFixed(2)}</div></> : null}
+                {canViewPrices ? <><label>Fecha precio</label><div>{selectedResource.fecha_actualizacion || "-"}</div></> : null}
                 <label>Ficha tecnica</label>
                 <div className="link">
                   {datasheetUrl(selectedResource) ? <a href={datasheetUrl(selectedResource)} target="_blank" rel="noreferrer">Abrir documento</a> : "-"}
                 </div>
+                <label>Documentos</label><div>{resourceDocumentCount(selectedResource)}</div>
               </div>
             </div>
             <div className="resource-card-actions">

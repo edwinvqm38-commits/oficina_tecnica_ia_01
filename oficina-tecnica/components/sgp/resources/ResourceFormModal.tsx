@@ -33,6 +33,7 @@ type ResourceFormModalProps = {
   onSave: (value: Recurso) => void | Promise<void>;
   detailsReadOnly?: boolean;
   canViewPrices?: boolean;
+  canViewSupplier?: boolean;
   filesReadOnly?: boolean;
   allowFilePicker?: boolean;
   isSaving?: boolean;
@@ -127,6 +128,7 @@ export function ResourceFormModal({
   onSave,
   detailsReadOnly = false,
   canViewPrices = true,
+  canViewSupplier = true,
   filesReadOnly = false,
   allowFilePicker = true,
   isSaving = false,
@@ -182,7 +184,7 @@ export function ResourceFormModal({
       next.precio_unitario_ref = "Debe ser mayor o igual a 0";
     }
     if (canViewPrices && !current.moneda.trim()) next.moneda = "Campo obligatorio";
-    if (canViewPrices && !current.proveedor.trim()) next.proveedor = "Campo obligatorio";
+    if (canViewPrices && canViewSupplier && !current.proveedor.trim()) next.proveedor = "Campo obligatorio";
     if (!current.estado.trim()) next.estado = "Campo obligatorio";
 
     const repeated = usedCodes.some(
@@ -451,7 +453,7 @@ export function ResourceFormModal({
                         ))}
                       </select>
                     </div>
-                    <div className="md:col-span-2 xl:col-span-3">
+                    {canViewSupplier ? <div className="md:col-span-2 xl:col-span-3">
                       <FieldLabel icon="store" label="Proveedor" required />
                       <select
                         value={form.proveedor}
@@ -465,7 +467,7 @@ export function ResourceFormModal({
                           </option>
                         ))}
                       </select>
-                    </div>
+                    </div> : null}
                     <div className="md:col-span-1 xl:col-span-2">
                       <FieldLabel icon="clock" label="Tiempo entrega ref." />
                       <input

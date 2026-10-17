@@ -6,6 +6,7 @@ import {
   consolidateTechnicalProposalResources,
   displayResourceCategory,
   economicFieldsVisible,
+  resolveTechnicalProposalEconomicVisibility,
   technicalProposalResourceCreationAvailable,
   // @ts-expect-error Node 24 ejecuta tests TypeScript con extension explicita.
 } from "./technicalProposalResourceUsage.ts";
@@ -74,6 +75,38 @@ describe("technical proposal resource usage", () => {
     assert.equal(economicFieldsVisible(false), false);
     assert.equal(technicalProposalResourceCreationAvailable(true), true);
     assert.equal(technicalProposalResourceCreationAvailable(false), false);
+  });
+
+  it("shows prices without exposing margins when only price permission is granted", () => {
+    assert.deepEqual(
+      resolveTechnicalProposalEconomicVisibility({
+        canViewPrices: true,
+        canViewMargin: false,
+        canViewEconomicSupport: false,
+      }),
+      {
+        showEconomicPanel: true,
+        showPrices: true,
+        showMargins: false,
+        showEconomicSupport: false,
+      },
+    );
+  });
+
+  it("keeps all economic fields hidden without price permission", () => {
+    assert.deepEqual(
+      resolveTechnicalProposalEconomicVisibility({
+        canViewPrices: false,
+        canViewMargin: true,
+        canViewEconomicSupport: true,
+      }),
+      {
+        showEconomicPanel: false,
+        showPrices: false,
+        showMargins: false,
+        showEconomicSupport: false,
+      },
+    );
   });
 
   it("builds a complete hierarchy with direct title, subgroup and activity resources", () => {
