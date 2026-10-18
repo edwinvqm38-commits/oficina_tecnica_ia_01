@@ -104,6 +104,20 @@ describe("technical proposal RPC payload", () => {
     });
   });
 
+  it("reuses explicitly hydrated source_key values on later saves", () => {
+    const draft = buildDraft("44444444-4444-4444-8444-444444444444");
+    draft.scope_items[0].source_key = "persisted-item-source";
+    draft.resources[0].source_key = "persisted-resource-source";
+
+    const payload = buildTechnicalProposalRpcPayload(draft, cotizacion);
+
+    assert.equal(payload.items[0].client_key, draft.scope_items[0].id);
+    assert.equal(payload.items[0].source_key, "persisted-item-source");
+    assert.equal((payload.items[0].metadata as Record<string, unknown>).source_key, "persisted-item-source");
+    assert.equal(payload.resources[0].source_key, "persisted-resource-source");
+    assert.equal((payload.resources[0].metadata as Record<string, unknown>).source_key, "persisted-resource-source");
+  });
+
   it("preserves complex structural order in sort_order and parent keys", () => {
     const draft = buildDraft(null);
     draft.scope_items = [

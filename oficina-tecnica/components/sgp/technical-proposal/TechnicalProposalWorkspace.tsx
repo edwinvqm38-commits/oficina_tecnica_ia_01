@@ -109,6 +109,7 @@ type ResourceCategoryKey =
 
 type ScopeItem = {
   id: string;
+  source_key: string;
   level: number;
   number: string;
   kind: ScopeKind;
@@ -140,6 +141,7 @@ type ProposalImage = {
 
 type TechnicalProposalResourceSnapshot = {
   id: string;
+  source_key: string;
   scope_item_id: string;
   recurso_id: string | null;
   codigo_recurso: string;
@@ -322,11 +324,10 @@ function cloneDraftAsNewRevision(draft: TechnicalProposalDraft, cotizacion: Coti
   const remapScopeItemId = (value: string | null): string | null => (value ? scopeItemIdMap.get(value) ?? null : null);
   const remapResourceId = (value: string | null): string | null => (value ? resourceIdMap.get(value) ?? null : null);
 
-  const nextScopeItems = draft.scope_items.map((item) => ({
-    ...item,
-    id: scopeItemIdMap.get(item.id) ?? uid("scope"),
-    collapsed: false,
-  }));
+  const nextScopeItems = draft.scope_items.map((item) => {
+    const nextId = scopeItemIdMap.get(item.id) ?? uid("scope");
+    return { ...item, id: nextId, source_key: nextId, collapsed: false };
+  });
 
   return {
     ...draft,
@@ -340,11 +341,15 @@ function cloneDraftAsNewRevision(draft: TechnicalProposalDraft, cotizacion: Coti
         return nextScopeItemId ? [[nextScopeItemId, categories]] : [];
       }),
     ),
-    resources: draft.resources.map((resource) => ({
-      ...resource,
-      id: resourceIdMap.get(resource.id) ?? uid("ptr"),
-      scope_item_id: remapScopeItemId(resource.scope_item_id) ?? resource.scope_item_id,
-    })),
+    resources: draft.resources.map((resource) => {
+      const nextId = resourceIdMap.get(resource.id) ?? uid("ptr");
+      return {
+        ...resource,
+        id: nextId,
+        source_key: nextId,
+        scope_item_id: remapScopeItemId(resource.scope_item_id) ?? resource.scope_item_id,
+      };
+    }),
     general_images: draft.general_images.map((image) => ({
       ...image,
       id: uid("img"),
@@ -409,6 +414,7 @@ function defaultScopeItems(projectName: string): ScopeItem[] {
   return renumberScopeItems([
     {
       id: "scope-1",
+      source_key: "scope-1",
       level: 0,
       number: "1",
       kind: "group",
@@ -422,6 +428,7 @@ function defaultScopeItems(projectName: string): ScopeItem[] {
     },
     {
       id: "scope-2",
+      source_key: "scope-2",
       level: 1,
       number: "1.1",
       kind: "activity",
@@ -506,26 +513,34 @@ function normalizeLegacyDraft(
   const legacyActivities = Array.isArray(parsed.actividades)
     ? (parsed.actividades as Array<{ id?: string; titulo?: string; descripcion?: string }>)
     : [];
-  const migratedItems =
+  const migratedItemsRaw =
     Array.isArray(parsed.scope_items) && parsed.scope_items.length > 0
       ? renumberScopeItems(parsed.scope_items as ScopeItem[])
       : legacyActivities.length
         ? renumberScopeItems(
-            legacyActivities.map((activity, index) => ({
-              id: activity.id || uid("scope"),
-              level: index === 0 ? 0 : 1,
-              number: "",
-              kind: "activity" as ScopeKind,
-              title: activity.titulo || `Actividad ${index + 1}`,
-              description: activity.descripcion || "",
-              time_value: 1,
-              time_unit: "dias",
-              complete: false,
-              collapsed: false,
-              internal_comments: "",
-            })),
+            legacyActivities.map((activity, index) => {
+              const sourceKey = activity.id || uid("scope");
+              return {
+                id: sourceKey,
+                source_key: sourceKey,
+                level: index === 0 ? 0 : 1,
+                number: "",
+                kind: "activity" as ScopeKind,
+                title: activity.titulo || `Actividad ${index + 1}`,
+                description: activity.descripcion || "",
+                time_value: 1,
+                time_unit: "dias",
+                complete: false,
+                collapsed: false,
+                internal_comments: "",
+              };
+            }),
           )
         : initial.scope_items;
+  const migratedItems = migratedItemsRaw.map((item) => ({
+    ...item,
+    source_key: item.source_key || item.id,
+  }));
 
   const oldResources = Array.isArray(parsed.resources)
     ? (parsed.resources as TechnicalProposalResourceSnapshot[])
@@ -565,6 +580,7 @@ function normalizeLegacyDraft(
       const legacyResource = resource as TechnicalProposalResourceSnapshot & { activity_id?: string };
       return {
         ...legacyResource,
+        source_key: legacyResource.source_key || legacyResource.id,
         scope_item_id: legacyResource.scope_item_id || legacyResource.activity_id || firstActivity?.id || "scope-1",
         resource_category: normalizeResourceCategoryKey(legacyResource.resource_category, legacyResource.tipo_recurso),
         tiempo: toFiniteNumber(legacyResource.tiempo),
@@ -610,12 +626,19 @@ async function readPersistedDraft(cotizacion: Cotizacion, revision: string): Pro
     listTechnicalProposalResources(proposal.id),
     listTechnicalProposalFiles(proposal.id),
   ]);
+  const itemSourceKeyByDatabaseId = new Map(items.map((item) => [item.id, item.source_key]));
+  const resourceSourceKeyByDatabaseId = new Map(resources.map((resource) => [resource.id, resource.source_key]));
   const persistedHierarchy = buildTechnicalProposalHierarchy(
-    items.map((item) => ({ id: item.id, level: item.level, parentId: item.parent_id })),
+    items.map((item) => ({
+      id: item.source_key,
+      level: item.level,
+      parentId: item.parent_id ? itemSourceKeyByDatabaseId.get(item.parent_id) ?? null : null,
+    })),
   );
   const scopeItems = renumberScopeItems(
     items.map((item, index) => ({
-      id: item.id,
+      id: item.source_key,
+      source_key: item.source_key,
       level: persistedHierarchy[index].level,
       number: persistedHierarchy[index].number,
       kind: item.item_type,
@@ -632,8 +655,10 @@ async function readPersistedDraft(cotizacion: Cotizacion, revision: string): Pro
   items.forEach((item) => {
     const localId = item.metadata.local_id;
     const clientKey = item.metadata.client_key;
-    if (typeof localId === "string" && localId) persistedItemIdByLocalId.set(localId, item.id);
-    if (typeof clientKey === "string" && clientKey) persistedItemIdByLocalId.set(clientKey, item.id);
+    persistedItemIdByLocalId.set(item.id, item.source_key);
+    persistedItemIdByLocalId.set(item.source_key, item.source_key);
+    if (typeof localId === "string" && localId) persistedItemIdByLocalId.set(localId, item.source_key);
+    if (typeof clientKey === "string" && clientKey) persistedItemIdByLocalId.set(clientKey, item.source_key);
   });
   const persistedEnabledResourceTables = Object.fromEntries(
     Object.entries(proposal.metadata?.enabled_resource_tables ?? {}).map(([scopeItemId, categories]) => [
@@ -643,8 +668,9 @@ async function readPersistedDraft(cotizacion: Cotizacion, revision: string): Pro
   );
 
   const resourceRows: TechnicalProposalResourceSnapshot[] = resources.map((resource) => ({
-    id: resource.id,
-    scope_item_id: resource.technical_proposal_item_id,
+    id: resource.source_key,
+    source_key: resource.source_key,
+    scope_item_id: itemSourceKeyByDatabaseId.get(resource.technical_proposal_item_id) ?? resource.technical_proposal_item_id,
     recurso_id: resource.resource_id,
     codigo_recurso: resource.codigo_recurso ?? "",
     codigo_fabricante: resource.codigo_fabricante ?? "",
@@ -680,8 +706,13 @@ async function readPersistedDraft(cotizacion: Cotizacion, revision: string): Pro
           type: file.file_type === "activity_image" ? "activity" : "general",
           image: {
             id: typeof file.metadata.local_id === "string" ? file.metadata.local_id : file.id,
-            scope_item_id: file.technical_proposal_item_id,
-            resource_id: typeof file.metadata.resource_id === "string" ? file.metadata.resource_id : null,
+            scope_item_id: file.technical_proposal_item_id
+              ? itemSourceKeyByDatabaseId.get(file.technical_proposal_item_id) ?? file.technical_proposal_item_id
+              : null,
+            resource_id:
+              typeof file.metadata.resource_id === "string"
+                ? resourceSourceKeyByDatabaseId.get(file.metadata.resource_id) ?? file.metadata.resource_id
+                : null,
             title: file.title ?? "Imagen de referencia",
             relation_label: file.relation_label ?? "",
             size: storedSize === "2" || storedSize === "4" ? storedSize : "1",
@@ -781,13 +812,13 @@ function parsedLinesToScopeItems(lines: ParsedScopeLine[], existing: ScopeItem[]
 
   function takeExistingItem(line: ParsedScopeLine, index: number): ScopeItem | undefined {
     const byNumber = line.number ? existingByNumber.get(line.number) : undefined;
-    if (byNumber && byNumber.kind === line.kind && !usedIds.has(byNumber.id)) {
+    if (byNumber && !usedIds.has(byNumber.id)) {
       usedIds.add(byNumber.id);
       return byNumber;
     }
 
     const byIndex = existing[index];
-    if (byIndex && byIndex.kind === line.kind && !usedIds.has(byIndex.id)) {
+    if (byIndex && !usedIds.has(byIndex.id)) {
       usedIds.add(byIndex.id);
       return byIndex;
     }
@@ -805,8 +836,10 @@ function parsedLinesToScopeItems(lines: ParsedScopeLine[], existing: ScopeItem[]
   return renumberScopeItems(
     lines.map((line, index) => {
       const existingItem = takeExistingItem(line, index);
+      const nextId = existingItem?.id ?? uid("scope");
       return {
-        id: existingItem?.id ?? uid("scope"),
+        id: nextId,
+        source_key: existingItem?.source_key ?? nextId,
         level: line.level,
         number: "",
         kind: line.kind,
@@ -900,8 +933,10 @@ function moveScopeItemDown(items: ScopeItem[], itemId: string): ScopeItem[] {
 
 function makeSnapshotFromResource(recurso: Recurso, scopeItemId: string, forcedCategory?: ResourceCategoryKey): TechnicalProposalResourceSnapshot {
   const category = forcedCategory ?? mapResourceCategory(recurso.tipo_recurso);
+  const sourceKey = uid("ptr");
   return {
-    id: uid("ptr"),
+    id: sourceKey,
+    source_key: sourceKey,
     scope_item_id: scopeItemId,
     recurso_id: recurso.id,
     codigo_recurso: recurso.codigo_recurso,
@@ -923,8 +958,10 @@ function makeSnapshotFromResource(recurso: Recurso, scopeItemId: string, forcedC
 }
 
 function makeNewFormalizationResource(scopeItemId: string, category: ResourceCategoryKey): TechnicalProposalResourceSnapshot {
+  const sourceKey = uid("ptr");
   return {
-    id: uid("ptr"),
+    id: sourceKey,
+    source_key: sourceKey,
     scope_item_id: scopeItemId,
     recurso_id: null,
     codigo_recurso: "",
@@ -2202,8 +2239,10 @@ ${clone.outerHTML}
   function addScopeItem(kind: ScopeKind, afterId?: string) {
     const selected = afterId ? draft.scope_items.find((item) => item.id === afterId) : selectedScopeItem;
     const level = resolveTechnicalProposalInsertionLevel(kind, selected);
+    const sourceKey = uid("scope");
     const nextItem: ScopeItem = {
-      id: uid("scope"),
+      id: sourceKey,
+      source_key: sourceKey,
       level,
       number: "",
       kind,
@@ -2229,7 +2268,7 @@ ${clone.outerHTML}
     const source = draft.scope_items.find((item) => item.id === itemId);
     if (!source) return;
     const copyId = uid("scope");
-    const copy: ScopeItem = { ...source, id: copyId, title: `${source.title} - copia`, collapsed: false };
+    const copy: ScopeItem = { ...source, id: copyId, source_key: copyId, title: `${source.title} - copia`, collapsed: false };
     setDraftWithTouch((prev) => {
       const targetIndex = prev.scope_items.findIndex((item) => item.id === itemId);
       const nextRaw = [...prev.scope_items];

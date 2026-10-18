@@ -4,6 +4,7 @@ import type { SaveFullTechnicalProposalPayload } from "@/lib/sgp/technicalPropos
 
 type TechnicalProposalScopeItemLike = {
   id: string;
+  source_key?: string;
   level: number;
   number: string;
   kind: "group" | "subgroup" | "activity";
@@ -17,6 +18,7 @@ type TechnicalProposalScopeItemLike = {
 
 type TechnicalProposalResourceLike = {
   id: string;
+  source_key?: string;
   scope_item_id: string;
   recurso_id: string | null;
   codigo_recurso: string;
@@ -182,7 +184,7 @@ export function buildTechnicalProposalRpcPayload(
 
   const items = orderedItems.map((item, index) => ({
     client_key: item.clientKey,
-    source_key: item.clientKey,
+    source_key: normalizeString(item.source_key) || item.clientKey,
     parent_client_key: item.parentClientKey,
     item_type: item.kind,
     item_number: item.number,
@@ -196,6 +198,7 @@ export function buildTechnicalProposalRpcPayload(
     internal_comments: item.internal_comments || null,
     metadata: {
       local_id: item.id,
+      source_key: normalizeString(item.source_key) || item.clientKey,
       original_index: item.originalIndex,
     },
   }));
@@ -204,7 +207,7 @@ export function buildTechnicalProposalRpcPayload(
     .filter((resource) => itemKeys.has(resource.scope_item_id))
     .map((resource, index) => ({
       client_item_key: resource.scope_item_id,
-      source_key: resource.id,
+      source_key: normalizeString(resource.source_key) || resource.id,
       resource_id: toNullableUuid(resource.recurso_id),
       resource_category: resource.resource_category,
       codigo_recurso: resource.codigo_recurso || null,
@@ -224,6 +227,7 @@ export function buildTechnicalProposalRpcPayload(
       sort_order: index,
       metadata: {
         local_id: resource.id,
+        source_key: normalizeString(resource.source_key) || resource.id,
         local_scope_item_id: resource.scope_item_id,
       },
     }));

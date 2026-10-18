@@ -7,6 +7,7 @@ type BudgetState = "BORRADOR" | "LISTO_PARA_ADJUDICAR" | "ADJUDICADO";
 type PtItem = {
   sourceKey: string;
   parentSourceKey: string | null;
+  kind: "group" | "subgroup" | "activity";
   title: string;
   order: number;
 };
@@ -22,8 +23,11 @@ type BudgetPart = {
   id: string;
   structureKey: string;
   parentId: string | null;
+  kind: "group" | "subgroup" | "activity";
   description: string;
   order: number;
+  observations: string;
+  syncStatus: "SYNCED" | "REQUIRES_REVIEW";
 };
 
 type BudgetResource = {
@@ -37,6 +41,7 @@ type BudgetResource = {
   observations: string;
   reviewed: boolean;
   syncStatus: "SYNCED" | "REQUIRES_REVIEW";
+  syncReason: string | null;
 };
 
 type BudgetModel = {
@@ -46,6 +51,7 @@ type BudgetModel = {
 };
 
 let sequence = 0;
+let lastOperations = { inserted: 0, updated: 0, deleted: 0, reviewed: 0 };
 
 function nextId(prefix: string): string {
   sequence += 1;
@@ -57,6 +63,8 @@ function reconcileModel(budget: BudgetModel, items: PtItem[], resources: PtResou
     throw new Error(`Solo BORRADOR: ${budget.state}`);
   }
 
+  lastOperations = { inserted: 0, updated: 0, deleted: 0, reviewed: 0 };
+
   const currentParts = new Map(budget.parts.map((part) => [part.structureKey, part]));
   const nextParts: BudgetPart[] = [];
   const partIds = new Map<string, string>();
@@ -66,7 +74,19 @@ function reconcileModel(budget: BudgetModel, items: PtItem[], resources: PtResou
     const current = currentParts.get(structureKey);
     const id = current?.id ?? nextId("part");
     const parentId = item.parentSourceKey ? partIds.get(item.parentSourceKey) ?? null : null;
-    nextParts.push({ id, structureKey, parentId, description: item.title, order: item.order });
+    const nextPart: BudgetPart = {
+      id,
+      structureKey,
+      parentId,
+      kind: item.kind,
+      description: item.title,
+      order: item.order,
+      observations: current?.observations ?? "",
+      syncStatus: "SYNCED",
+    };
+    if (!current) lastOperations.inserted += 1;
+    else if (JSON.stringify(current) !== JSON.stringify(nextPart)) lastOperations.updated += 1;
+    nextParts.push(nextPart);
     partIds.set(item.sourceKey, id);
   }
 
@@ -74,7 +94,19 @@ function reconcileModel(budget: BudgetModel, items: PtItem[], resources: PtResou
   const currentResources = new Map(budget.resources.map((resource) => [resource.sourceKey, resource]));
   const nextResources: BudgetResource[] = resources.map((resource) => {
     const current = currentResources.get(resource.sourceKey);
-    return {
+    const hasManualEconomics = Boolean(
+      current && (
+        current.reviewed ||
+        current.basePrice !== 0 ||
+        current.offerPrice !== 0 ||
+        current.observations.trim() !== ""
+      )
+    );
+    const masterChanged = Boolean(current && current.masterResourceId !== resource.masterResourceId);
+    const requiresMasterReview = Boolean(
+      current && ((masterChanged && hasManualEconomics) || current.syncReason === "RESOURCE_MASTER_CHANGED_WITH_ECONOMICS")
+    );
+    const nextResource: BudgetResource = {
       id: current?.id ?? nextId("resource"),
       sourceKey: resource.sourceKey,
       partId: partIds.get(resource.itemSourceKey) ?? "missing-part",
@@ -84,8 +116,12 @@ function reconcileModel(budget: BudgetModel, items: PtItem[], resources: PtResou
       offerPrice: current?.offerPrice ?? 0,
       observations: current?.observations ?? "",
       reviewed: current?.reviewed ?? false,
-      syncStatus: "SYNCED",
+      syncStatus: requiresMasterReview ? "REQUIRES_REVIEW" : "SYNCED",
+      syncReason: requiresMasterReview ? "RESOURCE_MASTER_CHANGED_WITH_ECONOMICS" : null,
     };
+    if (!current) lastOperations.inserted += 1;
+    else if (JSON.stringify(current) !== JSON.stringify(nextResource)) lastOperations.updated += 1;
+    return nextResource;
   });
 
   for (const resource of budget.resources) {
@@ -96,7 +132,29 @@ function reconcileModel(budget: BudgetModel, items: PtItem[], resources: PtResou
       resource.offerPrice !== 0 ||
       resource.observations.trim() !== "";
     if (hasManualEconomics) {
-      nextResources.push({ ...resource, syncStatus: "REQUIRES_REVIEW" });
+      const retained = {
+        ...resource,
+        syncStatus: "REQUIRES_REVIEW" as const,
+        syncReason: "REMOVED_FROM_PT_WITH_MANUAL_ECONOMICS",
+      };
+      if (JSON.stringify(resource) !== JSON.stringify(retained)) lastOperations.reviewed += 1;
+      nextResources.push(retained);
+    } else {
+      lastOperations.deleted += 1;
+    }
+  }
+
+  const desiredPartKeys = new Set(items.map((item) => `item:${item.sourceKey}`));
+  for (const part of [...budget.parts].reverse()) {
+    if (desiredPartKeys.has(part.structureKey)) continue;
+    const hasRetainedResource = nextResources.some((resource) => resource.partId === part.id);
+    const hasRetainedChild = nextParts.some((child) => child.parentId === part.id);
+    if (part.observations.trim() || hasRetainedResource || hasRetainedChild) {
+      const retained = { ...part, syncStatus: "REQUIRES_REVIEW" as const };
+      if (JSON.stringify(part) !== JSON.stringify(retained)) lastOperations.reviewed += 1;
+      nextParts.push(retained);
+    } else {
+      lastOperations.deleted += 1;
     }
   }
 
@@ -105,8 +163,8 @@ function reconcileModel(budget: BudgetModel, items: PtItem[], resources: PtResou
 
 function baseItems(): PtItem[] {
   return [
-    { sourceKey: "title-1", parentSourceKey: null, title: "Título 1", order: 0 },
-    { sourceKey: "part-a", parentSourceKey: "title-1", title: "Partida A", order: 1 },
+    { sourceKey: "title-1", parentSourceKey: null, kind: "group", title: "Título 1", order: 0 },
+    { sourceKey: "part-a", parentSourceKey: "title-1", kind: "activity", title: "Partida A", order: 1 },
   ];
 }
 
@@ -118,6 +176,14 @@ function baseResources(): PtResource[] {
 
 function emptyBudget(state: BudgetState = "BORRADOR"): BudgetModel {
   return { state, parts: [], resources: [] };
+}
+
+function backfillLegacySourceKey(kind: "item" | "resource", id: string): string {
+  return `legacy-${kind}:${id}`;
+}
+
+function assertImmutableSourceKey(previous: string, next: string): void {
+  if (previous !== next) throw new Error("source_key es inmutable");
 }
 
 const migrationSql = readFileSync(
@@ -147,13 +213,15 @@ describe("MIG-PTE-1 migration contract", () => {
   });
 
   it("protects manual economic fields during resource updates", () => {
-    const updateStart = migrationSql.indexOf("update public.cotizacion_presupuesto_recursos\n      set", migrationSql.indexOf("-- Recursos:"));
-    const updateEnd = migrationSql.indexOf("where id = v_budget_item_id;", updateStart);
+    const updateStart = migrationSql.indexOf("v_master_changed :=", migrationSql.indexOf("-- Recursos:"));
+    const updateEnd = migrationSql.indexOf("get diagnostics v_rows_changed = row_count;", updateStart);
     const resourceUpdate = migrationSql.slice(updateStart, updateEnd);
 
     assert.ok(updateStart > 0 && updateEnd > updateStart);
-    assert.doesNotMatch(resourceUpdate, /precio_base_unitario\s*=/i);
-    assert.doesNotMatch(resourceUpdate, /precio_ofertado_unitario\s*=/i);
+    assert.match(resourceUpdate, /precio_base_unitario\s*=\s*v_target_base_price/i);
+    assert.match(resourceUpdate, /precio_ofertado_unitario\s*=\s*v_target_offer_price/i);
+    assert.doesNotMatch(resourceUpdate, /precio_base_unitario\s*=\s*v_resource/i);
+    assert.doesNotMatch(resourceUpdate, /precio_ofertado_unitario\s*=\s*v_resource/i);
     assert.doesNotMatch(resourceUpdate, /observaciones\s*=/i);
     assert.match(resourceUpdate, /cantidad_presupuestada\s*=/i);
     assert.match(resourceUpdate, /partida_id\s*=/i);
@@ -175,7 +243,7 @@ describe("MIG-PTE-1 migration contract", () => {
     const initial = reconcileModel(emptyBudget(), baseItems(), baseResources());
     const result = reconcileModel(initial, [
       ...baseItems(),
-      { sourceKey: "part-b", parentSourceKey: "title-1", title: "Partida B", order: 2 },
+      { sourceKey: "part-b", parentSourceKey: "title-1", kind: "activity", title: "Partida B", order: 2 },
     ], baseResources());
     assert.equal(result.parts.length, 3);
     assert.equal(result.parts.find((part) => part.structureKey === "item:part-b")?.description, "Partida B");
@@ -184,7 +252,7 @@ describe("MIG-PTE-1 migration contract", () => {
   it("adds a Subtítulo", () => {
     const items = [
       baseItems()[0],
-      { sourceKey: "subtitle-1", parentSourceKey: "title-1", title: "Subtítulo 1.1", order: 1 },
+      { sourceKey: "subtitle-1", parentSourceKey: "title-1", kind: "subgroup" as const, title: "Subtítulo 1.1", order: 1 },
       { ...baseItems()[1], parentSourceKey: "subtitle-1", order: 2 },
     ];
     const result = reconcileModel(emptyBudget(), items, baseResources());
@@ -200,7 +268,7 @@ describe("MIG-PTE-1 migration contract", () => {
     const originalId = initial.parts.find((part) => part.structureKey === "item:part-a")?.id;
     const movedItems = [
       baseItems()[0],
-      { sourceKey: "subtitle-1", parentSourceKey: "title-1", title: "Subtítulo", order: 1 },
+      { sourceKey: "subtitle-1", parentSourceKey: "title-1", kind: "subgroup" as const, title: "Subtítulo", order: 1 },
       { ...baseItems()[1], parentSourceKey: "subtitle-1", order: 2 },
     ];
     const result = reconcileModel(initial, movedItems, baseResources());
@@ -289,5 +357,84 @@ describe("MIG-PTE-1 migration contract", () => {
     const second = reconcileModel(first, baseItems(), [{ ...baseResources()[0], quantity: 3 }]);
     assert.equal(second.parts[1].id, first.parts[1].id);
     assert.equal(second.resources[0].id, first.resources[0].id);
+  });
+
+  it("deletes a removed Partida without manual or dependent data", () => {
+    const initial = reconcileModel(emptyBudget(), baseItems(), []);
+    const result = reconcileModel(initial, [baseItems()[0]], []);
+    assert.equal(result.parts.some((part) => part.structureKey === "item:part-a"), false);
+  });
+
+  it("keeps a removed Partida when a retained resource contains manual economics", () => {
+    const initial = reconcileModel(emptyBudget(), baseItems(), baseResources());
+    initial.resources[0] = { ...initial.resources[0], basePrice: 25, offerPrice: 30 };
+    const result = reconcileModel(initial, [baseItems()[0]], []);
+    assert.equal(result.resources[0].syncStatus, "REQUIRES_REVIEW");
+    assert.equal(result.parts.find((part) => part.structureKey === "item:part-a")?.syncStatus, "REQUIRES_REVIEW");
+  });
+
+  it("changes recurso_id automatically when the stable instance has no manual economics", () => {
+    const initial = reconcileModel(emptyBudget(), baseItems(), baseResources());
+    const result = reconcileModel(initial, baseItems(), [
+      { ...baseResources()[0], masterResourceId: "master-2" },
+    ]);
+    assert.equal(result.resources[0].masterResourceId, "master-2");
+    assert.equal(result.resources[0].syncStatus, "SYNCED");
+    assert.equal(result.resources[0].syncReason, null);
+  });
+
+  it("preserves economics and requires review when recurso_id changes", () => {
+    const initial = reconcileModel(emptyBudget(), baseItems(), baseResources());
+    initial.resources[0] = { ...initial.resources[0], basePrice: 25, offerPrice: 30, observations: "Precio negociado" };
+    const result = reconcileModel(initial, baseItems(), [
+      { ...baseResources()[0], masterResourceId: "master-2" },
+    ]);
+    assert.equal(result.resources[0].masterResourceId, "master-2");
+    assert.equal(result.resources[0].basePrice, 25);
+    assert.equal(result.resources[0].offerPrice, 30);
+    assert.equal(result.resources[0].syncStatus, "REQUIRES_REVIEW");
+    assert.equal(result.resources[0].syncReason, "RESOURCE_MASTER_CHANGED_WITH_ECONOMICS");
+  });
+
+  it("supports an activity-to-title type change without changing source identity", () => {
+    const initial = reconcileModel(emptyBudget(), baseItems(), baseResources());
+    const originalPartId = initial.parts.find((part) => part.structureKey === "item:part-a")?.id;
+    const changedItems = baseItems().map((item) =>
+      item.sourceKey === "part-a" ? { ...item, kind: "subgroup" as const } : item,
+    );
+    const result = reconcileModel(initial, changedItems, baseResources());
+    assert.equal(result.parts.find((part) => part.structureKey === "item:part-a")?.id, originalPartId);
+    assert.match(migrationSql, /transition-resource-group:/i);
+  });
+
+  it("backfills deterministic legacy identities", () => {
+    assert.equal(backfillLegacySourceKey("item", "item-uuid"), "legacy-item:item-uuid");
+    assert.equal(backfillLegacySourceKey("resource", "resource-uuid"), "legacy-resource:resource-uuid");
+    assert.match(migrationSql, /BACKFILL_DUPLICATE_RESOURCE_TRACE/i);
+  });
+
+  it("rejects changing source_key after persistence", () => {
+    assert.doesNotThrow(() => assertImmutableSourceKey("stable-key", "stable-key"));
+    assert.throws(() => assertImmutableSourceKey("stable-key", "other-key"), /inmutable/);
+    assert.match(migrationSql, /old\.source_key is distinct from new\.source_key/i);
+  });
+
+  it("performs zero real writes on a second unchanged reconciliation", () => {
+    const first = reconcileModel(emptyBudget(), baseItems(), baseResources());
+    const second = reconcileModel(first, baseItems(), baseResources());
+    assert.deepEqual(second, first);
+    assert.deepEqual(lastOperations, { inserted: 0, updated: 0, deleted: 0, reviewed: 0 });
+    assert.match(migrationSql, /get diagnostics v_rows_changed = row_count/i);
+    assert.match(migrationSql, /is distinct from row/i);
+  });
+
+  it("hardens only the migration-owned SECURITY DEFINER RPCs with an empty search_path", () => {
+    const definerFunctions = migrationSql.match(/security definer\s+set search_path = ''/gi) ?? [];
+    assert.equal(definerFunctions.length, 3);
+    const reconcileBody = migrationSql.slice(
+      migrationSql.indexOf("create or replace function public.reconcile_budget_from_technical_proposal"),
+      migrationSql.indexOf("revoke all on function public.reconcile_budget_from_technical_proposal"),
+    );
+    assert.doesNotMatch(reconcileBody, /insert into public\.technical_proposal_events/i);
   });
 });

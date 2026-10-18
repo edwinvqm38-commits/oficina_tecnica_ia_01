@@ -57,6 +57,7 @@ export type TechnicalProposalRecord = {
 
 export type TechnicalProposalItemRecord = {
   id: string;
+  source_key: string;
   technical_proposal_id: string;
   parent_id: string | null;
   item_type: TechnicalProposalItemType;
@@ -76,6 +77,7 @@ export type TechnicalProposalItemRecord = {
 
 export type TechnicalProposalResourceRecord = {
   id: string;
+  source_key: string;
   technical_proposal_id: string;
   technical_proposal_item_id: string;
   resource_id: string | null;
@@ -175,6 +177,7 @@ export type UpdateTechnicalProposalInput = Partial<
 
 export type TechnicalProposalItemInput = {
   id?: string;
+  source_key: string;
   parent_id?: string | null;
   item_type: TechnicalProposalItemType;
   item_number: string;
@@ -191,6 +194,7 @@ export type TechnicalProposalItemInput = {
 
 export type TechnicalProposalResourceInput = {
   id?: string;
+  source_key: string;
   technical_proposal_item_id: string;
   resource_id?: string | null;
   resource_category: string;
@@ -298,6 +302,11 @@ const TECHNICAL_PROPOSAL_ITEMS_SELECT = `
   updated_at
 `;
 
+const TECHNICAL_PROPOSAL_ITEMS_SELECT_WITH_SOURCE_KEY = `
+  source_key,
+  ${TECHNICAL_PROPOSAL_ITEMS_SELECT}
+`;
+
 const TECHNICAL_PROPOSAL_RESOURCES_SELECT = `
   id,
   technical_proposal_id,
@@ -322,6 +331,11 @@ const TECHNICAL_PROPOSAL_RESOURCES_SELECT = `
   sort_order,
   created_at,
   updated_at
+`;
+
+const TECHNICAL_PROPOSAL_RESOURCES_SELECT_WITH_SOURCE_KEY = `
+  source_key,
+  ${TECHNICAL_PROPOSAL_RESOURCES_SELECT}
 `;
 
 const TECHNICAL_PROPOSAL_EVENTS_SELECT = `
@@ -353,6 +367,47 @@ function toObject(value: unknown): JsonObject {
   return {};
 }
 
+function resolvePersistedSourceKey(row: { id: string; source_key?: string; metadata?: JsonObject }): string {
+  const metadata = toObject(row.metadata);
+  return (
+    normalizeString(row.source_key) ||
+    normalizeString(metadata.source_key) ||
+    normalizeString(metadata.local_id) ||
+    normalizeString(metadata.client_key) ||
+    row.id
+  );
+}
+
+function requireInputSourceKey(sourceKey: string, metadata: JsonObject | undefined, entityLabel: string): string {
+  const normalizedMetadata = toObject(metadata);
+  const resolved =
+    normalizeString(sourceKey) ||
+    normalizeString(normalizedMetadata.source_key) ||
+    normalizeString(normalizedMetadata.local_id) ||
+    normalizeString(normalizedMetadata.client_key);
+
+  if (!resolved) {
+    throw new Error(`${entityLabel}.source_key es obligatorio y debe crearse una sola vez junto con la entidad.`);
+  }
+  return resolved;
+}
+
+function isMissingSourceKeyColumnError(error: unknown): boolean {
+  const candidate = error as { code?: string; message?: string; details?: string } | null;
+  const message = `${candidate?.message ?? ""} ${candidate?.details ?? ""}`.toLowerCase();
+  return (
+    candidate?.code === "42703" ||
+    candidate?.code === "PGRST204" ||
+    (message.includes("source_key") && (message.includes("does not exist") || message.includes("schema cache")))
+  );
+}
+
+function withoutSourceKey<T extends Record<string, unknown>>(value: T): Omit<T, "source_key"> {
+  const legacyValue = { ...value };
+  Reflect.deleteProperty(legacyValue, "source_key");
+  return legacyValue;
+}
+
 function assertSupabaseConfigured(action: string) {
   if (!hasSupabaseConfig()) {
     throw new Error(`Supabase no está configurado para ${action}.`);
@@ -377,6 +432,7 @@ function mapTechnicalProposal(row: TechnicalProposalRecord): TechnicalProposalRe
 function mapTechnicalProposalItem(row: TechnicalProposalItemRecord): TechnicalProposalItemRecord {
   return {
     ...row,
+    source_key: resolvePersistedSourceKey(row),
     metadata: toObject(row.metadata),
   };
 }
@@ -384,6 +440,7 @@ function mapTechnicalProposalItem(row: TechnicalProposalItemRecord): TechnicalPr
 function mapTechnicalProposalResource(row: TechnicalProposalResourceRecord): TechnicalProposalResourceRecord {
   return {
     ...row,
+    source_key: resolvePersistedSourceKey(row),
     metadata: toObject(row.metadata),
   };
 }
@@ -450,6 +507,7 @@ function buildTechnicalProposalPatch(patch: UpdateTechnicalProposalInput) {
 function buildItemPayload(technicalProposalId: string, item: TechnicalProposalItemInput) {
   const itemNumber = normalizeString(item.item_number);
   const title = normalizeString(item.title);
+  const sourceKey = requireInputSourceKey(item.source_key, item.metadata, "technical_proposal_item");
 
   if (!itemNumber || !title) {
     throw new Error("item_number y title son obligatorios para guardar items de Propuesta Tecnica.");
@@ -457,6 +515,7 @@ function buildItemPayload(technicalProposalId: string, item: TechnicalProposalIt
 
   return stripUndefined({
     id: item.id,
+    source_key: sourceKey,
     technical_proposal_id: technicalProposalId,
     parent_id: item.parent_id ?? null,
     item_type: item.item_type,
@@ -469,13 +528,14 @@ function buildItemPayload(technicalProposalId: string, item: TechnicalProposalIt
     estimated_time_unit: item.estimated_time_unit ?? null,
     is_complete: item.is_complete ?? false,
     internal_comments: item.internal_comments ?? null,
-    metadata: item.metadata ?? {},
+    metadata: { ...(item.metadata ?? {}), source_key: sourceKey },
   });
 }
 
 function buildResourcePayload(technicalProposalId: string, resource: TechnicalProposalResourceInput) {
   const resourceCategory = normalizeString(resource.resource_category);
   const descripcion = normalizeString(resource.descripcion);
+  const sourceKey = requireInputSourceKey(resource.source_key, resource.metadata, "technical_proposal_resource");
 
   if (!resource.technical_proposal_item_id || !resourceCategory || !descripcion) {
     throw new Error("technical_proposal_item_id, resource_category y descripcion son obligatorios para guardar recursos PT.");
@@ -483,6 +543,7 @@ function buildResourcePayload(technicalProposalId: string, resource: TechnicalPr
 
   return stripUndefined({
     id: resource.id,
+    source_key: sourceKey,
     technical_proposal_id: technicalProposalId,
     technical_proposal_item_id: resource.technical_proposal_item_id,
     resource_id: resource.resource_id ?? null,
@@ -501,7 +562,7 @@ function buildResourcePayload(technicalProposalId: string, resource: TechnicalPr
     comentario: resource.comentario ?? null,
     detalle_adicional: resource.detalle_adicional ?? null,
     origin_status: resource.origin_status ?? "nuevo_por_formalizar",
-    metadata: resource.metadata ?? {},
+    metadata: { ...(resource.metadata ?? {}), source_key: sourceKey },
     sort_order: resource.sort_order ?? 0,
   });
 }
@@ -583,10 +644,19 @@ export async function saveTechnicalProposalItems(
   if (items.length === 0) return [];
 
   const payload = items.map((item) => buildItemPayload(technicalProposalId, item));
-  const { data, error } = await supabase
+  let { data, error } = await supabase
     .from("technical_proposal_items")
     .upsert(payload, { onConflict: "technical_proposal_id,item_number" })
-    .select(TECHNICAL_PROPOSAL_ITEMS_SELECT);
+    .select(TECHNICAL_PROPOSAL_ITEMS_SELECT_WITH_SOURCE_KEY);
+
+  if (error && isMissingSourceKeyColumnError(error)) {
+    const legacyResult = await supabase
+      .from("technical_proposal_items")
+      .upsert(payload.map(withoutSourceKey), { onConflict: "technical_proposal_id,item_number" })
+      .select(TECHNICAL_PROPOSAL_ITEMS_SELECT);
+    data = legacyResult.data as typeof data;
+    error = legacyResult.error;
+  }
 
   if (error) throw error;
   return ((data ?? []) as TechnicalProposalItemRecord[]).map(mapTechnicalProposalItem);
@@ -601,10 +671,19 @@ export async function saveTechnicalProposalResources(
   if (resources.length === 0) return [];
 
   const payload = resources.map((resource) => buildResourcePayload(technicalProposalId, resource));
-  const { data, error } = await supabase
+  let { data, error } = await supabase
     .from("technical_proposal_resources")
     .upsert(payload)
-    .select(TECHNICAL_PROPOSAL_RESOURCES_SELECT);
+    .select(TECHNICAL_PROPOSAL_RESOURCES_SELECT_WITH_SOURCE_KEY);
+
+  if (error && isMissingSourceKeyColumnError(error)) {
+    const legacyResult = await supabase
+      .from("technical_proposal_resources")
+      .upsert(payload.map(withoutSourceKey))
+      .select(TECHNICAL_PROPOSAL_RESOURCES_SELECT);
+    data = legacyResult.data as typeof data;
+    error = legacyResult.error;
+  }
 
   if (error) throw error;
   return ((data ?? []) as TechnicalProposalResourceRecord[]).map(mapTechnicalProposalResource);
@@ -613,12 +692,23 @@ export async function saveTechnicalProposalResources(
 export async function listTechnicalProposalItems(technicalProposalId: string): Promise<TechnicalProposalItemRecord[]> {
   if (!hasSupabaseConfig() || !technicalProposalId) return [];
 
-  const { data, error } = await supabase
+  let { data, error } = await supabase
     .from("technical_proposal_items")
-    .select(TECHNICAL_PROPOSAL_ITEMS_SELECT)
+    .select(TECHNICAL_PROPOSAL_ITEMS_SELECT_WITH_SOURCE_KEY)
     .eq("technical_proposal_id", technicalProposalId)
     .order("sort_order", { ascending: true })
     .order("item_number", { ascending: true });
+
+  if (error && isMissingSourceKeyColumnError(error)) {
+    const legacyResult = await supabase
+      .from("technical_proposal_items")
+      .select(TECHNICAL_PROPOSAL_ITEMS_SELECT)
+      .eq("technical_proposal_id", technicalProposalId)
+      .order("sort_order", { ascending: true })
+      .order("item_number", { ascending: true });
+    data = legacyResult.data as typeof data;
+    error = legacyResult.error;
+  }
 
   if (error) throw error;
   return ((data ?? []) as TechnicalProposalItemRecord[]).map(mapTechnicalProposalItem);
@@ -627,12 +717,23 @@ export async function listTechnicalProposalItems(technicalProposalId: string): P
 export async function listTechnicalProposalResources(technicalProposalId: string): Promise<TechnicalProposalResourceRecord[]> {
   if (!hasSupabaseConfig() || !technicalProposalId) return [];
 
-  const { data, error } = await supabase
+  let { data, error } = await supabase
     .from("technical_proposal_resources")
-    .select(TECHNICAL_PROPOSAL_RESOURCES_SELECT)
+    .select(TECHNICAL_PROPOSAL_RESOURCES_SELECT_WITH_SOURCE_KEY)
     .eq("technical_proposal_id", technicalProposalId)
     .order("resource_category", { ascending: true })
     .order("sort_order", { ascending: true });
+
+  if (error && isMissingSourceKeyColumnError(error)) {
+    const legacyResult = await supabase
+      .from("technical_proposal_resources")
+      .select(TECHNICAL_PROPOSAL_RESOURCES_SELECT)
+      .eq("technical_proposal_id", technicalProposalId)
+      .order("resource_category", { ascending: true })
+      .order("sort_order", { ascending: true });
+    data = legacyResult.data as typeof data;
+    error = legacyResult.error;
+  }
 
   if (error) throw error;
   return ((data ?? []) as TechnicalProposalResourceRecord[]).map(mapTechnicalProposalResource);
